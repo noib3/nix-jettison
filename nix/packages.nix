@@ -15,7 +15,7 @@
       ...
     }:
     let
-      packageName = "nix-jettison";
+      packageName = (lib.importTOML ../crates/nix-jettison/Cargo.toml).package.name;
 
       # Generate the Cargo.nix using IFD.
       mkCargoNix =
