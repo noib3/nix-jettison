@@ -1,10 +1,49 @@
-[package]
-name = "nix-jettison"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+authors = ["Riccardo Mazzarini <me@noib3.dev>"]
+license = "MIT"
+publish = false
 
-[lib]
-crate-type = ["cdylib"]
+[workspace.dependencies]
+# Third-party dependencies.
+bindgen = "0.72"
+doxygen-bindgen = "0.1"
+pkg-config = "0.3"
 
-[dependencies]
-nix-bindings-sys = { git = "https://github.com/NotAShelf/nix-bindings" }
+# Internal dependencies.
+nix-bindings-sys = { path = "./crates/nix-bindings-sys" }
+
+[workspace.lints.clippy]
+alloc_instead_of_core = "warn"
+bool_to_int_with_if = "deny"
+cognitive_complexity = "deny"
+let_underscore_future = "allow"
+module_inception = "allow"
+multiple_crate_versions = "deny"
+needless_collect = "deny"
+same_name_method = "deny"
+std_instead_of_core = "warn"
+too_many_arguments = "deny"
+too_many_lines = "deny"
+trivially_copy_pass_by_ref = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+use_self = "warn"
+wildcard_dependencies = "deny"
+wildcard_imports = "warn"
+
+[workspace.lints.rust]
+future_incompatible = { level = "deny", priority = -1 }
+missing_docs = "deny"
+nonstandard_style = { level = "deny", priority = -1 }
+refining_impl_trait = { level = "allow", priority = -1 }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"

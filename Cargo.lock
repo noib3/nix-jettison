@@ -22,6 +22,7 @@ dependencies = [
  "clang-sys",
  "itertools",
  "log",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -128,8 +129,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "nix-bindings-sys"
-version = "2.28.5"
-source = "git+https://github.com/NotAShelf/nix-bindings#2777392aa3e4acd2ad1778bc8542e760d02463dd"
+version = "0.1.0"
 dependencies = [
  "bindgen",
  "doxygen-bindgen",
@@ -158,6 +158,16 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
+ "syn",
+]
 
 [[package]]
 name = "proc-macro2"

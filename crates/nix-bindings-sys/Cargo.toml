@@ -1,0 +1,9 @@
+[package]
+name = "nix-bindings-sys"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+bindgen = { workspace = true }
+doxygen-bindgen = { workspace = true }
+pkg-config = { workspace = true }
