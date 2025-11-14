@@ -55,12 +55,14 @@
         let
           build = mkBuild args;
           nixJettison = build.workspaceMembers.${packageName}.build.lib;
+          dylibPrefix = lib.optionalString targetPkgs.stdenv.isDarwin "lib";
+          dylibName = builtins.replaceStrings [ "-" ] [ "_" ] packageName;
           dylibExt = if targetPkgs.stdenv.isDarwin then "dylib" else "so";
         in
         pkgs.runCommand "${packageName}${lib.optionalString (!release) "-dev"}" { } ''
           mkdir -p $out
-          src=$(readlink -f ${nixJettison}/lib/libnix_jettison.${dylibExt})
-          cp $src $out/libnix_jettison.so
+          src=$(readlink -f ${nixJettison}/lib/${dylibPrefix}${dylibName}.${dylibExt})
+          cp $src $out/${dylibName}.so
         '';
     in
     {
