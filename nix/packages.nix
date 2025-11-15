@@ -43,6 +43,7 @@
             nix-bindings-sys = attrs: {
               inherit (common) nativeBuildInputs;
               buildInputs = common.mkBuildInputs targetPkgs;
+              env = common.mkEnv targetPkgs;
             };
           };
         };
