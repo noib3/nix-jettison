@@ -12,11 +12,13 @@ publish = false
 [workspace.dependencies]
 # Third-party dependencies.
 bindgen = "0.72"
+cc = "1"
 doxygen-bindgen = "0.1"
 pkg-config = "0.3"
 
 # Internal dependencies.
-nix-bindings-sys = { path = "./crates/nix-bindings-sys" }
+nix-bindings-c = { path = "./crates/nix-bindings-c" }
+nix-bindings-cpp = { path = "./crates/nix-bindings-cpp" }
 
 [workspace.lints.clippy]
 alloc_instead_of_core = "warn"

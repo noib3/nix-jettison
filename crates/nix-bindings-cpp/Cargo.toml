@@ -1,11 +1,11 @@
 [package]
-name = "nix-jettison"
+name = "nix-bindings-cpp"
 version.workspace = true
 edition.workspace = true
 
-[lib]
-crate-type = ["cdylib"]
-
 [dependencies]
 nix-bindings-c = { workspace = true }
-nix-bindings-cpp = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+pkg-config = { workspace = true }

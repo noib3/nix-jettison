@@ -1,39 +1,33 @@
 use core::ffi::{c_char, c_void};
 use core::ptr;
 
-use nix_bindings_sys::{
+use nix_bindings_c::{
     EvalState,
     Value,
     nix_alloc_primop,
-    nix_alloc_value,
-    nix_bindings_builder_free,
-    nix_bindings_builder_insert,
     nix_c_context,
     nix_c_context_create,
     nix_c_context_free,
     nix_gc_decref,
     nix_get_int,
+    nix_init_bool,
     nix_init_int,
     nix_init_primop,
-    nix_make_attrs,
-    nix_make_bindings_builder,
+    nix_init_string,
     nix_register_primop,
-    nix_value_decref,
 };
-
-const NO_ARGS: &[*const c_char; 1] = &[ptr::null_mut()];
+use nix_bindings_cpp as cpp;
 
 #[allow(unsafe_op_in_unsafe_fn)]
-unsafe extern "C" fn add(
+unsafe extern "C" fn double(
     _user_data: *mut c_void,
     ctx: *mut nix_c_context,
     _state: *mut EvalState,
     args: *mut *mut Value,
     ret: *mut Value,
 ) {
-    let a = nix_get_int(ctx, *args.offset(0));
-    let b = nix_get_int(ctx, *args.offset(1));
-    nix_init_int(ctx, ret, a + b);
+    let n = nix_get_int(ctx, *args.offset(0));
+    nix_init_int(ctx, ret, n * 2);
 }
 
 #[allow(unsafe_op_in_unsafe_fn)]
@@ -44,36 +38,49 @@ unsafe extern "C" fn jettison_lib(
     _args: *mut *mut Value,
     ret: *mut Value,
 ) {
-    // Create an attrset builder with a capacity of 1.
-    let builder = nix_make_bindings_builder(ctx, state, 1);
+    // Create an attrset builder with capacity for 4 attributes.
+    let builder = cpp::make_bindings_builder(state, 4);
 
-    let add_name = c"add".as_ptr();
+    // Integer attribute.
+    let value = cpp::alloc_value(state);
+    nix_init_int(ctx, value, 42);
+    let symbol = cpp::create_symbol(state, c"count".as_ptr());
+    cpp::bindings_builder_insert(builder, symbol, value);
+    cpp::free_symbol(symbol);
 
-    let mut add_args: [*const c_char; 3] =
-        [c"a".as_ptr(), c"b".as_ptr(), ptr::null()];
+    // Boolean attribute.
+    let value = cpp::alloc_value(state);
+    nix_init_bool(ctx, value, true);
+    let symbol = cpp::create_symbol(state, c"enabled".as_ptr());
+    cpp::bindings_builder_insert(builder, symbol, value);
+    cpp::free_symbol(symbol);
 
-    let add_primop = nix_alloc_primop(
+    // Function attribute.
+    let mut double_args: [*const c_char; 2] = [c"n".as_ptr(), ptr::null()];
+    let double_primop = nix_alloc_primop(
         ctx,
-        Some(add),
-        2,
-        add_name,
-        add_args.as_mut_ptr(),
-        c"Add two integers together".as_ptr(),
+        Some(double),
+        1,
+        c"double".as_ptr(),
+        double_args.as_mut_ptr(),
+        c"Double a number".as_ptr(),
         ptr::null_mut(),
     );
+    let value = cpp::alloc_value(state);
+    nix_init_primop(ctx, value, double_primop);
+    let symbol = cpp::create_symbol(state, c"double".as_ptr());
+    cpp::bindings_builder_insert(builder, symbol, value);
+    cpp::free_symbol(symbol);
 
-    // Convert the primop into a Value and add it to the builder.
-    let add_value = nix_alloc_value(ctx, state);
-    nix_init_primop(ctx, add_value, add_primop);
-    nix_bindings_builder_insert(ctx, builder, add_name, add_value);
+    // String attribute.
+    let value = cpp::alloc_value(state);
+    nix_init_string(ctx, value, c"Hello from Rust!".as_ptr());
+    let symbol = cpp::create_symbol(state, c"message".as_ptr());
+    cpp::bindings_builder_insert(builder, symbol, value);
+    cpp::free_symbol(symbol);
 
-    // Finalize the builder.
-    nix_make_attrs(ctx, ret, builder);
-
-    // Clean up.
-    nix_bindings_builder_free(builder);
-    nix_value_decref(ctx, add_value);
-    nix_gc_decref(ctx, add_primop as *const c_void);
+    // Finalize into ret (builder is freed inside cpp_make_attrs).
+    cpp::make_attrs(ret, builder);
 }
 
 #[unsafe(no_mangle)]
@@ -82,13 +89,15 @@ unsafe extern "C" fn jettison_lib(
 pub unsafe extern "C" fn nix_plugin_entry() {
     let ctx = nix_c_context_create();
 
+    let no_args: [*const c_char; 1] = [ptr::null()];
+
     let primop = nix_alloc_primop(
         ctx,
         Some(jettison_lib),
         0,
-        c"nix-jettison".as_ptr(),
-        NO_ARGS as *const _ as *mut _,
-        c"nix-jettison library functions".as_ptr(),
+        c"jettison".as_ptr(),
+        no_args.as_ptr() as *mut _,
+        c"nix-jettison's library functions".as_ptr(),
         ptr::null_mut(),
     );
 

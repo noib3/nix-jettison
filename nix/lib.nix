@@ -2,8 +2,8 @@
 
 {
   flake.lib =
-    if builtins ? nix-jettison then
-      builtins.nix-jettison
+    if builtins ? jettison then
+      builtins.jettison
     else
       throw ''
         The nix-jettison plugin has not been loaded.

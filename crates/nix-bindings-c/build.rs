@@ -22,14 +22,11 @@ impl ParseCallbacks for ProcessComments {
 }
 
 fn main() {
-    // We must also link the required libraries for the C API symbols (in *c.so)
     println!("cargo:rustc-link-lib=nixstorec");
     println!("cargo:rustc-link-lib=nixutilc");
     println!("cargo:rustc-link-lib=nixexprc");
     println!("cargo:rustc-link-lib=nixflakec");
 
-    // Use pkg-config to find all the Nix C API libraries
-    // The C API headers are in the -c suffixed packages
     let store_c = pkg_config::Config::new()
         .atleast_version("2.0.0")
         .probe("nix-store-c")
@@ -58,21 +55,18 @@ fn main() {
         )
         .parse_callbacks(Box::new(ProcessComments));
 
-    // Add all the Nix C API headers we want to generate bindings for
-    // Note: Headers are directly in the include directory, not in a nix/ subdirectory
     builder = builder.header_contents(
         "wrapper.h",
         r#"
-      #include <nix_api_store.h>
-      #include <nix_api_util.h>
       #include <nix_api_expr.h>
       #include <nix_api_external.h>
-      #include <nix_api_value.h>
       #include <nix_api_flake.h>
+      #include <nix_api_store.h>
+      #include <nix_api_util.h>
+      #include <nix_api_value.h>
     "#,
     );
 
-    // Add all pkg-config include paths to bindgen
     for lib in [&store_c, &util_c, &expr_c, &flake_c] {
         for include_path in &lib.include_paths {
             builder =
@@ -80,7 +74,6 @@ fn main() {
         }
     }
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     let bindings = builder.generate().expect("Unable to generate bindings");
     bindings
