@@ -29,6 +29,7 @@
       imports = [
         ./nix/lib.nix
         ./nix/packages.nix
+        ./nix/repl.nix
         ./nix/shell.nix
       ];
 
