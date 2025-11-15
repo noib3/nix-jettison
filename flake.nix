@@ -31,5 +31,11 @@
         ./nix/packages.nix
         ./nix/shell.nix
       ];
+
+      flake = {
+        darwinModules.default = import ./nix/module.nix inputs.self;
+        homeManagerModules.default = import ./nix/module.nix inputs.self;
+        nixosModules.default = import ./nix/module.nix inputs.self;
+      };
     };
 }
