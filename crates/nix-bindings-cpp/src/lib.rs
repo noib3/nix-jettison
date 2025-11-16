@@ -6,9 +6,9 @@
 
 #![no_std]
 
-use core::ffi::{c_char, c_void};
+use core::ffi::c_char;
 
-use nix_bindings_c::{EvalState, Value};
+use nix_bindings_c::{BindingsBuilder, EvalState, Value};
 
 // Attrsets.
 unsafe extern "C" {
@@ -19,22 +19,27 @@ unsafe extern "C" {
     pub fn make_bindings_builder(
         state: *mut EvalState,
         capacity: usize,
-    ) -> *mut c_void;
+    ) -> *mut BindingsBuilder;
 
     /// Insert a symbol-value pair into the bindings builder.
     pub fn bindings_builder_insert(
-        builder: *mut c_void,
-        symbol: *mut c_void,
+        builder: *mut BindingsBuilder,
+        symbol: *mut Symbol,
         value: *mut Value,
     );
 
     /// Finalize the bindings builder into an attribute set value.
     ///
     /// This frees the builder automatically.
-    pub fn make_attrs(ret: *mut Value, builder: *mut c_void);
+    pub fn make_attrs(ret: *mut Value, builder: *mut BindingsBuilder);
 }
 
 // Symbols.
+#[repr(C)]
+pub struct Symbol {
+    _unused: [u8; 0],
+}
+
 unsafe extern "C" {
     /// Create a symbol from a name.
     ///
@@ -42,10 +47,10 @@ unsafe extern "C" {
     pub fn create_symbol(
         state: *mut EvalState,
         name: *const c_char,
-    ) -> *mut c_void;
+    ) -> *mut Symbol;
 
     /// Free a symbol allocated by `create_symbol`.
-    pub fn free_symbol(symbol: *mut c_void);
+    pub fn free_symbol(symbol: *mut Symbol);
 }
 
 // Values.
@@ -54,5 +59,9 @@ unsafe extern "C" {
     ///
     /// This is what `nix_alloc_value` SHOULD do but doesn't work in primop
     /// callbacks.
+    ///
+    /// Note: Values are managed by Nix's garbage collector (Boehm GC) and do
+    /// NOT need to be explicitly freed, unlike `Symbol` objects which require
+    /// `free_symbol`.
     pub fn alloc_value(state: *mut EvalState) -> *mut Value;
 }
