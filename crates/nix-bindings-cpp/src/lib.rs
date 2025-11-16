@@ -21,10 +21,10 @@ unsafe extern "C" {
         capacity: usize,
     ) -> *mut BindingsBuilder;
 
-    /// Insert a symbol-value pair into the bindings builder.
+    /// Insert a key-value pair into the bindings builder.
     pub fn bindings_builder_insert(
         builder: *mut BindingsBuilder,
-        symbol: *mut Symbol,
+        name: *const c_char,
         value: *mut Value,
     );
 
@@ -32,25 +32,6 @@ unsafe extern "C" {
     ///
     /// This frees the builder automatically.
     pub fn make_attrs(ret: *mut Value, builder: *mut BindingsBuilder);
-}
-
-// Symbols.
-#[repr(C)]
-pub struct Symbol {
-    _unused: [u8; 0],
-}
-
-unsafe extern "C" {
-    /// Create a symbol from a name.
-    ///
-    /// The returned pointer must be freed with `free_symbol`.
-    pub fn create_symbol(
-        state: *mut EvalState,
-        name: *const c_char,
-    ) -> *mut Symbol;
-
-    /// Free a symbol allocated by `create_symbol`.
-    pub fn free_symbol(symbol: *mut Symbol);
 }
 
 // Values.
@@ -61,7 +42,6 @@ unsafe extern "C" {
     /// callbacks.
     ///
     /// Note: Values are managed by Nix's garbage collector (Boehm GC) and do
-    /// NOT need to be explicitly freed, unlike `Symbol` objects which require
-    /// `free_symbol`.
+    /// NOT need to be explicitly freed.
     pub fn alloc_value(state: *mut EvalState) -> *mut Value;
 }

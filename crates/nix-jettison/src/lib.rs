@@ -29,16 +29,12 @@ unsafe extern "C" fn jettison_lib(
     // Integer attribute.
     let value = cpp::alloc_value(state);
     sys::init_int(ctx, value, 42);
-    let symbol = cpp::create_symbol(state, c"count".as_ptr());
-    cpp::bindings_builder_insert(builder, symbol, value);
-    cpp::free_symbol(symbol);
+    cpp::bindings_builder_insert(builder, c"count".as_ptr(), value);
 
     // Boolean attribute.
     let value = cpp::alloc_value(state);
     sys::init_bool(ctx, value, true);
-    let symbol = cpp::create_symbol(state, c"enabled".as_ptr());
-    cpp::bindings_builder_insert(builder, symbol, value);
-    cpp::free_symbol(symbol);
+    cpp::bindings_builder_insert(builder, c"enabled".as_ptr(), value);
 
     // Function attribute.
     let mut double_args: [*const c_char; 2] = [c"n".as_ptr(), ptr::null()];
@@ -53,19 +49,15 @@ unsafe extern "C" fn jettison_lib(
     );
     let value = cpp::alloc_value(state);
     sys::init_primop(ctx, value, double_primop);
-    let symbol = cpp::create_symbol(state, c"double".as_ptr());
-    cpp::bindings_builder_insert(builder, symbol, value);
+    cpp::bindings_builder_insert(builder, c"double".as_ptr(), value);
     sys::gc_decref(ctx, double_primop as *const c_void);
-    cpp::free_symbol(symbol);
 
     // String attribute.
     let value = cpp::alloc_value(state);
     sys::init_string(ctx, value, c"Hello from Rust!".as_ptr());
-    let symbol = cpp::create_symbol(state, c"message".as_ptr());
-    cpp::bindings_builder_insert(builder, symbol, value);
-    cpp::free_symbol(symbol);
+    cpp::bindings_builder_insert(builder, c"message".as_ptr(), value);
 
-    // Finalize into ret (builder is freed inside cpp_make_attrs).
+    // Finalize into ret.
     cpp::make_attrs(ret, builder);
 }
 
