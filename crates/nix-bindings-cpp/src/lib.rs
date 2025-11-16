@@ -8,7 +8,7 @@
 
 use core::ffi::c_char;
 
-use nix_bindings_c::{BindingsBuilder, EvalState, Value};
+use nix_bindings_sys::{BindingsBuilder, EvalState, Value};
 
 // Attrsets.
 unsafe extern "C" {

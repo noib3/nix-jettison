@@ -7,5 +7,5 @@ edition.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-nix-bindings-c = { workspace = true }
 nix-bindings-cpp = { workspace = true }
+nix-bindings-sys = { workspace = true }

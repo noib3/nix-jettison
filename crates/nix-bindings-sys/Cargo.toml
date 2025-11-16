@@ -1,5 +1,5 @@
 [package]
-name = "nix-bindings-c"
+name = "nix-bindings-sys"
 version.workspace = true
 edition.workspace = true
 

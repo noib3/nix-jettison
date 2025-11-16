@@ -144,7 +144,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
-name = "nix-bindings-c"
+name = "nix-bindings-cpp"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "nix-bindings-sys",
+ "pkg-config",
+]
+
+[[package]]
+name = "nix-bindings-sys"
 version = "0.1.0"
 dependencies = [
  "bindgen",
@@ -153,20 +162,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nix-bindings-cpp"
-version = "0.1.0"
-dependencies = [
- "cc",
- "nix-bindings-c",
- "pkg-config",
-]
-
-[[package]]
 name = "nix-jettison"
 version = "0.1.0"
 dependencies = [
- "nix-bindings-c",
  "nix-bindings-cpp",
+ "nix-bindings-sys",
 ]
 
 [[package]]

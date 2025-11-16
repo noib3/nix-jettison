@@ -17,8 +17,8 @@ doxygen-bindgen = "0.1"
 pkg-config = "0.3"
 
 # Internal dependencies.
-nix-bindings-c = { path = "./crates/nix-bindings-c" }
 nix-bindings-cpp = { path = "./crates/nix-bindings-cpp" }
+nix-bindings-sys = { path = "./crates/nix-bindings-sys" }
 
 [workspace.lints.clippy]
 alloc_instead_of_core = "warn"

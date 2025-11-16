@@ -40,12 +40,12 @@
               cargo = rust.mkToolchain targetPkgs;
             };
           defaultCrateOverrides = targetPkgs.defaultCrateOverrides // {
-            nix-bindings-c = attrs: {
+            nix-bindings-cpp = attrs: {
               inherit (common) nativeBuildInputs;
               buildInputs = common.mkBuildInputs targetPkgs;
               env = common.mkEnv targetPkgs;
             };
-            nix-bindings-cpp = attrs: {
+            nix-bindings-sys = attrs: {
               inherit (common) nativeBuildInputs;
               buildInputs = common.mkBuildInputs targetPkgs;
               env = common.mkEnv targetPkgs;
