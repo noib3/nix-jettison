@@ -21,8 +21,9 @@
           (pkgs.rustfmt.override { asNightly = true; })
           (rust.toolchain.override {
             extensions = [
-              "clippy"
               "rust-analyzer"
+              # Needed by rust-analyzer to index 'std'.
+              "rust-src"
             ];
           })
         ];
