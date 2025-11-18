@@ -3,7 +3,7 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::{Context, EvalState, Result, Value};
+use crate::{Context, EvalState, Result, TryIntoValue, Value};
 
 const MAX_ARITY: u8 = 8;
 
@@ -49,7 +49,7 @@ pub trait PrimOpFun: 'static {
         &'a self,
         args: Self::Args,
         ctx: &mut Context,
-    ) -> impl Value + use<'a, Self>;
+    ) -> impl TryIntoValue + use<'a, Self>;
 
     #[doc(hidden)]
     fn c_fun() -> sys::PrimOpFun {
@@ -129,12 +129,14 @@ impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
         ret: *mut sys::Value,
         ctx: &mut Context,
     ) {
-        unsafe {
-            // Errors are handled by setting the `Context::inner` field, so we
-            // can ignore the result here.
-            let _ = <Self as PrimOpFun>::Args::from_raw(args, ctx)
-                .map(|args| PrimOpFun::call(self, args, ctx))
-                .write(ret, ctx);
-        }
+        let mut try_block = || unsafe {
+            let args = <Self as PrimOpFun>::Args::from_raw(args, ctx)?;
+            let val = PrimOpFun::call(self, args, ctx).try_into_value(ctx)?;
+            val.write(ret, ctx)
+        };
+
+        // Errors are handled by setting the `Context::inner` field, so we
+        // can ignore the result here.
+        let _ = try_block();
     }
 }

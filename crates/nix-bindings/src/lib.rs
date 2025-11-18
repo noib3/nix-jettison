@@ -15,4 +15,4 @@ pub use context::{Context, Entrypoint, EvalState};
 pub use entry::entry;
 pub use error::{Error, ErrorKind, Result, ToError};
 pub use primop::{PrimOp, PrimOpFun};
-pub use value::Value;
+pub use value::{TryIntoValue, Value, ValueKind};

@@ -3,10 +3,44 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::{Attrset, PrimOp, Result, ToError};
+use crate::{Attrset, Context, PrimOp, Result, ToError};
+
+/// TODO: docs.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ValueKind {
+    /// TODO: docs.
+    Attrset,
+
+    /// TODO: docs.
+    Bool,
+
+    /// TODO: docs.
+    Float,
+
+    /// TODO: docs.
+    Function,
+
+    /// TODO: docs.
+    Int,
+
+    /// TODO: docs.
+    List,
+
+    /// TODO: docs.
+    Null,
+
+    /// TODO: docs.
+    String,
+
+    /// TODO: docs.
+    Thunk,
+}
 
 /// TODO: docs.
 pub trait Value: Sealed + Sized {
+    /// Returns the kind of this value.
+    fn kind(&self) -> ValueKind;
+
     /// Writes this value into the given, pre-allocated destination.
     #[doc(hidden)]
     unsafe fn write(
@@ -16,7 +50,21 @@ pub trait Value: Sealed + Sized {
     ) -> Result<()>;
 }
 
+/// A trait for types that can be fallibly converted into [`Value`]s.
+pub trait TryIntoValue {
+    /// Attempts to convert this value into a [`Value`].
+    fn try_into_value(
+        self,
+        ctx: &mut Context,
+    ) -> Result<impl Value + use<Self>>;
+}
+
 impl Value for () {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Null
+    }
+
     #[inline]
     unsafe fn write(
         self,
@@ -30,6 +78,11 @@ impl Value for () {
 }
 
 impl Value for bool {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Bool
+    }
+
     #[inline]
     unsafe fn write(
         self,
@@ -45,6 +98,11 @@ impl Value for bool {
 macro_rules! impl_value_for_int {
     ($ty:ty) => {
         impl Value for $ty {
+            #[inline]
+            fn kind(&self) -> ValueKind {
+                ValueKind::Int
+            }
+
             #[inline]
             unsafe fn write(
                 self,
@@ -71,6 +129,11 @@ macro_rules! impl_value_for_float {
     ($ty:ty) => {
         impl Value for $ty {
             #[inline]
+            fn kind(&self) -> ValueKind {
+                ValueKind::Float
+            }
+
+            #[inline]
             unsafe fn write(
                 self,
                 dest: *mut sys::Value,
@@ -89,6 +152,11 @@ impl_value_for_float!(f64);
 
 impl Value for &CStr {
     #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
+    #[inline]
     unsafe fn write(
         self,
         dest: *mut sys::Value,
@@ -102,6 +170,11 @@ impl Value for &CStr {
 
 impl Value for CString {
     #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
+    #[inline]
     unsafe fn write(
         self,
         dest: *mut sys::Value,
@@ -113,6 +186,11 @@ impl Value for CString {
 
 impl Value for &str {
     #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
+    #[inline]
     unsafe fn write(
         self,
         dest: *mut sys::Value,
@@ -123,6 +201,11 @@ impl Value for &str {
 }
 
 impl Value for String {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
     #[inline]
     unsafe fn write(
         self,
@@ -136,6 +219,14 @@ impl Value for String {
 
 impl<T: Value> Value for Option<T> {
     #[inline]
+    fn kind(&self) -> ValueKind {
+        match self {
+            Some(value) => value.kind(),
+            None => ValueKind::Null,
+        }
+    }
+
+    #[inline]
     unsafe fn write(
         self,
         dest: *mut sys::Value,
@@ -148,32 +239,12 @@ impl<T: Value> Value for Option<T> {
     }
 }
 
-impl<T: Value> Value for Result<T> {
-    #[inline]
-    unsafe fn write(
-        self,
-        dest: *mut sys::Value,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        self.and_then(|value| unsafe { value.write(dest, ctx) })
-    }
-}
-
-impl<T: Value, E: ToError> Value for core::result::Result<T, E> {
-    #[inline]
-    unsafe fn write(
-        self,
-        dest: *mut sys::Value,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        match self {
-            Ok(value) => unsafe { value.write(dest, ctx) },
-            Err(err) => Err(ctx.make_error(err)),
-        }
-    }
-}
-
 impl<P: PrimOp> Value for P {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Function
+    }
+
     #[inline]
     unsafe fn write(
         self,
@@ -194,6 +265,11 @@ pub(crate) struct AttrsetValue<T>(pub(crate) T);
 
 impl<T: Attrset> Value for AttrsetValue<T> {
     #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
     unsafe fn write(
         self,
         _dest: *mut sys::Value,
@@ -204,9 +280,37 @@ impl<T: Attrset> Value for AttrsetValue<T> {
     }
 }
 
-use sealed::Sealed;
+impl<T: Value> TryIntoValue for T {
+    #[inline]
+    fn try_into_value(self, _: &mut Context) -> Result<impl Value + use<T>> {
+        Ok(self)
+    }
+}
 
-use crate::Context;
+impl<T: TryIntoValue> TryIntoValue for Result<T> {
+    #[inline]
+    fn try_into_value(self, ctx: &mut Context) -> Result<impl Value + use<T>> {
+        match self {
+            Ok(value) => value.try_into_value(ctx),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+impl<T: TryIntoValue, E: ToError> TryIntoValue for core::result::Result<T, E> {
+    #[inline]
+    fn try_into_value(
+        self,
+        ctx: &mut Context,
+    ) -> Result<impl Value + use<T, E>> {
+        match self {
+            Ok(value) => value.try_into_value(ctx),
+            Err(err) => Err(ctx.make_error(err)),
+        }
+    }
+}
+
+use sealed::Sealed;
 
 mod sealed {
     use super::*;
@@ -235,9 +339,6 @@ mod sealed {
     impl Sealed for String {}
 
     impl<T: Value> Sealed for Option<T> {}
-
-    impl<T: Value> Sealed for Result<T> {}
-    impl<T: Value, E: ToError> Sealed for core::result::Result<T, E> {}
 
     impl<P: PrimOp> Sealed for P {}
 

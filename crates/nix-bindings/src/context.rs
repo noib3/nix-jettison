@@ -2,7 +2,7 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::{Error, ErrorKind, ToError, PrimOp, Result};
+use crate::{Error, ErrorKind, PrimOp, Result, ToError};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
