@@ -56,14 +56,6 @@ pub trait PrimOpFun: 'static {
             args: *mut *mut sys::Value,
             ret: *mut sys::Value,
         ) {
-            let Some(ctx) = NonNull::new(ctx) else {
-                panic!("received NULL `nix_c_context` pointer in primop call");
-            };
-
-            let Some(state) = NonNull::new(state) else {
-                panic!("received NULL `EvalState` pointer in primop call");
-            };
-
             // SAFETY:
             // - user_data was created in PrimOp::alloc from a
             //   *mut Box<dyn TypeErasedPrimOpFun>;
@@ -72,6 +64,14 @@ pub trait PrimOpFun: 'static {
             // - TypeErasedPrimOpFun is bound to 'static;
             let primop: &dyn TypeErasedPrimOpFun =
                 unsafe { &**(user_data as *mut Box<dyn TypeErasedPrimOpFun>) };
+
+            let Some(ctx) = NonNull::new(ctx) else {
+                panic!("received NULL `nix_c_context` pointer in primop call");
+            };
+
+            let Some(state) = NonNull::new(state) else {
+                panic!("received NULL `EvalState` pointer in primop call");
+            };
 
             let _ = unsafe {
                 primop.call(

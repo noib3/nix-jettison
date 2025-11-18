@@ -2,7 +2,7 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::{PrimOp, Result};
+use crate::{Error, PrimOp, Result};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -34,31 +34,45 @@ impl Context<Entrypoint> {
             panic!("couldn't register primop '{:?}': {}", P::NAME, err);
         }
     }
-
-    /// TODO: docs.
-    #[inline]
-    fn with_inner<T>(
-        &mut self,
-        _f: impl FnOnce(NonNull<sys::c_context>) -> T,
-    ) -> Result<T> {
-        todo!();
-    }
-
-    /// Same as [`with_inner`](Self::with_inner), but provides the callback
-    /// with a raw pointer instead of a `NonNull`.
-    #[inline]
-    fn with_inner_raw<T>(
-        &mut self,
-        _f: impl FnOnce(*mut sys::c_context) -> T,
-    ) -> Result<T> {
-        todo!();
-    }
 }
 
 impl<State> Context<State> {
     #[inline]
     pub(crate) fn new(inner: NonNull<sys::c_context>, state: State) -> Self {
         Self { inner, state }
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub(crate) fn with_inner<T>(
+        &mut self,
+        fun: impl FnOnce(NonNull<sys::c_context>) -> T,
+    ) -> Result<T> {
+        let ret = fun(self.inner);
+        self.check_inner().map(|()| ret)
+    }
+
+    /// Same as [`with_inner`](Self::with_inner), but provides the callback
+    /// with a raw pointer instead of a `NonNull`.
+    #[inline]
+    pub(crate) fn with_inner_raw<T>(
+        &mut self,
+        fun: impl FnOnce(*mut sys::c_context) -> T,
+    ) -> Result<T> {
+        let ret = fun(self.inner.as_ptr());
+        self.check_inner().map(|()| ret)
+    }
+
+    #[inline]
+    fn check_inner(&mut self) -> Result<()> {
+        match unsafe { sys::err_code(self.inner.as_ptr()) } {
+            sys::err_NIX_OK => Ok(()),
+            sys::err_NIX_ERR_UNKNOWN => Err(Error::Unknown),
+            sys::err_NIX_ERR_OVERFLOW => Err(Error::Overflow),
+            sys::err_NIX_ERR_KEY => Err(Error::Key),
+            sys::err_NIX_ERR_NIX_ERROR => Err(Error::Nix),
+            other => unreachable!("invalid error code: {other}"),
+        }
     }
 }
 
