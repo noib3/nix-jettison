@@ -3,7 +3,7 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::{PrimOp, Result};
+use crate::{Attrset, PrimOp, Result, ToError};
 
 /// TODO: docs.
 pub trait Value: Sealed + Sized {
@@ -148,6 +148,20 @@ impl<T: Value> Value for Option<T> {
     }
 }
 
+impl<T: Value, E: ToError> Value for core::result::Result<T, E> {
+    #[inline]
+    unsafe fn write(
+        self,
+        dest: *mut sys::Value,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        match self {
+            Ok(value) => unsafe { value.write(dest, ctx) },
+            Err(err) => Err(ctx.make_error(err)),
+        }
+    }
+}
+
 impl<P: PrimOp> Value for P {
     #[inline]
     unsafe fn write(
@@ -161,6 +175,21 @@ impl<P: PrimOp> Value for P {
             ctx.with_inner_raw(|ctx| sys::gc_decref(ctx, primop_ptr.cast()))?;
             Ok(())
         }
+    }
+}
+
+/// A newtype wrapper that implements `Value` for every `Attrset`.
+pub(crate) struct AttrsetValue<T>(pub(crate) T);
+
+impl<T: Attrset> Value for AttrsetValue<T> {
+    #[inline]
+    unsafe fn write(
+        self,
+        _dest: *mut sys::Value,
+        _ctx: &mut Context,
+    ) -> Result<()> {
+        let Self(_attrset) = self;
+        todo!();
     }
 }
 
@@ -196,5 +225,9 @@ mod sealed {
 
     impl<T: Value> Sealed for Option<T> {}
 
+    impl<T: Value, E: ToError> Sealed for core::result::Result<T, E> {}
+
     impl<P: PrimOp> Sealed for P {}
+
+    impl<T> Sealed for AttrsetValue<T> {}
 }
