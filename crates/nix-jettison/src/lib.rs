@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use core::ffi::{c_char, c_void};
 use core::ptr;
 

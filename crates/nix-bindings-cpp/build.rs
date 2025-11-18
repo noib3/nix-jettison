@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 // Note: When building in Nix on macOS, you may see a warning:
 // "Warning: supplying the --target arm64-apple-macosx != arm64-apple-darwin..."
 // This is harmless - the cc crate converts the target to Apple's SDK

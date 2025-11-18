@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 fn main() {
     #[cfg(target_os = "macos")]
     {

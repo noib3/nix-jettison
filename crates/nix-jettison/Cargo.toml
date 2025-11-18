@@ -2,6 +2,9 @@
 name = "nix-jettison"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
@@ -9,3 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 nix-bindings-cpp = { workspace = true }
 nix-bindings-sys = { workspace = true }
+
+[lints]
+workspace = true

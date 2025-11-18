@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::env;
 use std::path::PathBuf;
 
@@ -57,7 +59,10 @@ fn main() {
         }
     }
 
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_path = PathBuf::from(
+        env::var("OUT_DIR").expect("OUT_DIR is set in build scripts"),
+    );
+
     let bindings = builder.generate().expect("Unable to generate bindings");
     bindings
         .write_to_file(out_path.join("bindings.rs"))
