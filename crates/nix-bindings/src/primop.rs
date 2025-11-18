@@ -49,7 +49,7 @@ pub trait PrimOpFun: 'static {
         &'a self,
         args: Self::Args,
         ctx: &mut Context,
-    ) -> Result<impl Value + use<'a, Self>>;
+    ) -> impl Value + use<'a, Self>;
 
     #[doc(hidden)]
     fn c_fun() -> sys::PrimOpFun {
@@ -131,8 +131,7 @@ impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
     ) -> Result<()> {
         unsafe {
             let args = <Self as PrimOpFun>::Args::from_raw(args, ctx)?;
-            let value = PrimOpFun::call(self, args, ctx)?;
-            value.write(ret, ctx)
+            PrimOpFun::call(self, args, ctx).write(ret, ctx)
         }
     }
 }
