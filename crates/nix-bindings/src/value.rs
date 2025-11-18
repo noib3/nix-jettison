@@ -3,7 +3,7 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::Result;
+use crate::{PrimOp, Result};
 
 /// TODO: docs.
 pub trait Value: Sealed + Sized {
@@ -134,6 +134,36 @@ impl Value for String {
     }
 }
 
+impl<T: Value> Value for Option<T> {
+    #[inline]
+    unsafe fn write(
+        self,
+        dest: *mut sys::Value,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        match self {
+            Some(value) => unsafe { value.write(dest, ctx) },
+            None => unsafe { ().write(dest, ctx) },
+        }
+    }
+}
+
+impl<P: PrimOp> Value for P {
+    #[inline]
+    unsafe fn write(
+        self,
+        dest: *mut sys::Value,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe {
+            let primop_ptr = ctx.with_inner(|ctx| self.alloc(ctx))?;
+            ctx.with_inner_raw(|ctx| sys::init_primop(ctx, dest, primop_ptr))?;
+            ctx.with_inner_raw(|ctx| sys::gc_decref(ctx, primop_ptr.cast()))?;
+            Ok(())
+        }
+    }
+}
+
 use sealed::Sealed;
 
 use crate::Context;
@@ -163,4 +193,8 @@ mod sealed {
 
     impl Sealed for &str {}
     impl Sealed for String {}
+
+    impl<T: Value> Sealed for Option<T> {}
+
+    impl<P: PrimOp> Sealed for P {}
 }
