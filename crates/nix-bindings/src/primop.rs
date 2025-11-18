@@ -45,7 +45,11 @@ pub trait PrimOpFun: 'static {
     type Args: Args;
 
     /// TODO: docs.
-    fn call(&self, args: Self::Args, ctx: &mut Context) -> Result<impl Value>;
+    fn call<'a>(
+        &'a self,
+        args: Self::Args,
+        ctx: &mut Context,
+    ) -> Result<impl Value + use<'a, Self>>;
 
     #[doc(hidden)]
     fn c_fun() -> sys::PrimOpFun {

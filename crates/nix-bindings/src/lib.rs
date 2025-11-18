@@ -11,6 +11,6 @@ mod value;
 pub use context::{Context, Entrypoint, EvalState};
 #[doc(hidden)]
 pub use entry::entry;
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, ToError, Result};
 pub use primop::{PrimOp, PrimOpFun};
 pub use value::Value;

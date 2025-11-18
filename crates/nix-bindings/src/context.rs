@@ -2,7 +2,7 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::{Error, PrimOp, Result};
+use crate::{Error, ErrorKind, ToError, PrimOp, Result};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -37,6 +37,22 @@ impl Context<Entrypoint> {
 }
 
 impl<State> Context<State> {
+    /// TODO: docs.
+    #[inline]
+    pub(crate) fn make_error(&mut self, err: impl ToError) -> Error {
+        unsafe {
+            let kind = err.kind();
+            let message = err.format_to_c_str();
+            sys::set_err_msg(
+                self.inner.as_ptr(),
+                kind.code(),
+                message.as_ptr(),
+            );
+            #[expect(deprecated)]
+            Error::new(kind, self)
+        }
+    }
+
     #[inline]
     pub(crate) fn new(inner: NonNull<sys::c_context>, state: State) -> Self {
         Self { inner, state }
@@ -65,14 +81,16 @@ impl<State> Context<State> {
 
     #[inline]
     fn check_inner(&mut self) -> Result<()> {
-        match unsafe { sys::err_code(self.inner.as_ptr()) } {
-            sys::err_NIX_OK => Ok(()),
-            sys::err_NIX_ERR_UNKNOWN => Err(Error::Unknown),
-            sys::err_NIX_ERR_OVERFLOW => Err(Error::Overflow),
-            sys::err_NIX_ERR_KEY => Err(Error::Key),
-            sys::err_NIX_ERR_NIX_ERROR => Err(Error::Nix),
+        let kind = match unsafe { sys::err_code(self.inner.as_ptr()) } {
+            sys::err_NIX_OK => return Ok(()),
+            sys::err_NIX_ERR_UNKNOWN => ErrorKind::Unknown,
+            sys::err_NIX_ERR_OVERFLOW => ErrorKind::Overflow,
+            sys::err_NIX_ERR_KEY => ErrorKind::Key,
+            sys::err_NIX_ERR_NIX_ERROR => ErrorKind::Nix,
             other => unreachable!("invalid error code: {other}"),
-        }
+        };
+        #[expect(deprecated)]
+        Err(Error::new(kind, self))
     }
 }
 

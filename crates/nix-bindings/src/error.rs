@@ -1,11 +1,33 @@
+use core::ffi::CStr;
 use core::fmt;
+use std::borrow::Cow;
+use std::ffi::CString;
+
+use nix_bindings_sys as sys;
+
+use crate::Context;
 
 /// TODO: docs.
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// TODO: docs.
+pub trait ToError {
+    /// TODO: docs.
+    fn kind(&self) -> ErrorKind;
+
+    /// TODO: docs.
+    fn format_to_c_str(&self) -> Cow<'_, CStr>;
+}
+
+/// TODO: docs.
 #[derive(Debug)]
-pub enum Error {
+pub struct Error {
+    kind: ErrorKind,
+}
+
+/// TODO: docs.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ErrorKind {
     /// An unknown error occurred.
     ///
     /// This error code is returned when an unknown error occurred during the
@@ -39,7 +61,35 @@ pub enum Error {
     Nix,
 }
 
+impl Error {
+    #[deprecated = "use Context::make_error instead"]
+    pub(crate) fn new<S>(kind: ErrorKind, _: &mut Context<S>) -> Self {
+        Self { kind }
+    }
+}
+
+impl ErrorKind {
+    #[inline]
+    pub(crate) fn code(self) -> sys::err {
+        match self {
+            Self::Unknown => sys::err_NIX_ERR_UNKNOWN,
+            Self::Overflow => sys::err_NIX_ERR_OVERFLOW,
+            Self::Key => sys::err_NIX_ERR_KEY,
+            Self::Nix => sys::err_NIX_ERR_NIX_ERROR,
+        }
+    }
+}
+
 impl fmt::Display for Error {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
+    }
+}
+
+impl core::error::Error for Error {}
+
+impl fmt::Display for ErrorKind {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match *self {
@@ -51,4 +101,15 @@ impl fmt::Display for Error {
     }
 }
 
-impl core::error::Error for Error {}
+impl ToError for std::ffi::NulError {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+}
