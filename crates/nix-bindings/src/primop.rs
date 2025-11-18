@@ -77,13 +77,13 @@ pub trait PrimOpFun: 'static {
                 panic!("received NULL `EvalState` pointer in primop call");
             };
 
-            let _ = unsafe {
+            unsafe {
                 primop.call(
                     args,
                     ret,
                     &mut Context::new(ctx, EvalState::new(state)),
                 )
-            };
+            }
         }
 
         Some(wrapper)
@@ -119,7 +119,7 @@ trait TypeErasedPrimOpFun: 'static {
         args: *mut *mut sys::Value,
         ret: *mut sys::Value,
         ctx: &mut Context,
-    ) -> Result<()>;
+    );
 }
 
 impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
@@ -128,10 +128,13 @@ impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
         args: *mut *mut sys::Value,
         ret: *mut sys::Value,
         ctx: &mut Context,
-    ) -> Result<()> {
+    ) {
         unsafe {
-            let args = <Self as PrimOpFun>::Args::from_raw(args, ctx)?;
-            PrimOpFun::call(self, args, ctx).write(ret, ctx)
+            // Errors are handled by setting the `Context::inner` field, so we
+            // can ignore the result here.
+            let _ = <Self as PrimOpFun>::Args::from_raw(args, ctx)
+                .map(|args| PrimOpFun::call(self, args, ctx))
+                .write(ret, ctx);
         }
     }
 }

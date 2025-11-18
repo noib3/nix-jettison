@@ -148,6 +148,17 @@ impl<T: Value> Value for Option<T> {
     }
 }
 
+impl<T: Value> Value for Result<T> {
+    #[inline]
+    unsafe fn write(
+        self,
+        dest: *mut sys::Value,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        self.and_then(|value| unsafe { value.write(dest, ctx) })
+    }
+}
+
 impl<T: Value, E: ToError> Value for core::result::Result<T, E> {
     #[inline]
     unsafe fn write(
@@ -225,6 +236,7 @@ mod sealed {
 
     impl<T: Value> Sealed for Option<T> {}
 
+    impl<T: Value> Sealed for Result<T> {}
     impl<T: Value, E: ToError> Sealed for core::result::Result<T, E> {}
 
     impl<P: PrimOp> Sealed for P {}
