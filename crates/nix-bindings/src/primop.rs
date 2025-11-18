@@ -5,8 +5,6 @@ use nix_bindings_sys as sys;
 
 use crate::{Context, EvalState, Result, TryIntoValue, Value};
 
-const MAX_ARITY: u8 = 8;
-
 /// TODO: docs.
 pub trait PrimOp: PrimOpFun + Sized {
     /// TODO: docs.
@@ -102,7 +100,7 @@ pub trait Args: Sized {
     // Compile-time checks of several invariants.
     #[doc(hidden)]
     const CHECKS: () = {
-        assert!(Self::ARITY <= MAX_ARITY);
+        assert!(Self::ARITY <= sys::MAX_PRIMOP_ARITY);
         assert!(Self::ARITY as usize + 1 == Self::NAMES.len());
         assert!(Self::NAMES.last().unwrap().is_null());
     };
