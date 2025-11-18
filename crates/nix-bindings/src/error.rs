@@ -113,3 +113,15 @@ impl ToError for std::ffi::NulError {
         ErrorKind::Nix
     }
 }
+
+impl ToError for (ErrorKind, &CStr) {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        Cow::Borrowed(self.1)
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        self.0
+    }
+}

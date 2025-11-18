@@ -77,6 +77,13 @@ pub trait PrimOpFun: 'static {
                 panic!("received NULL `EvalState` pointer in primop call");
             };
 
+            let Some(ret) = NonNull::new(ret) else {
+                panic!(
+                    "received NULL `Value` pointer for return value in \
+                     primop call"
+                );
+            };
+
             unsafe {
                 primop.call(
                     args,
@@ -117,7 +124,7 @@ trait TypeErasedPrimOpFun: 'static {
     unsafe fn call(
         &self,
         args: *mut *mut sys::Value,
-        ret: *mut sys::Value,
+        ret: NonNull<sys::Value>,
         ctx: &mut Context,
     );
 }
@@ -126,7 +133,7 @@ impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
     unsafe fn call(
         &self,
         args: *mut *mut sys::Value,
-        ret: *mut sys::Value,
+        ret: NonNull<sys::Value>,
         ctx: &mut Context,
     ) {
         let mut try_block = || unsafe {
