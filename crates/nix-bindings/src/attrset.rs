@@ -120,22 +120,22 @@ where
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
     fn get_idx_of_key(&self, _key: &str) -> Option<usize> {
-        unimplemented!()
+        todo!()
     }
 
     #[inline]
     fn get_key(&self, _idx: usize) -> &str {
-        unimplemented!()
+        todo!()
     }
 
     #[inline]
     fn get_key_as_cstr(&self, _idx: usize) -> &CStr {
-        unimplemented!()
+        todo!()
     }
 
     #[inline]
     fn get_value_kind(&self, _idx: usize) -> ValueKind {
-        unimplemented!()
+        todo!()
     }
 
     #[inline]
@@ -148,11 +148,19 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     unsafe fn write_value(
         &self,
         idx: usize,
-        _dest: NonNull<sys::Value>,
-        _ctx: &mut Context,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
     ) -> Result<()> {
-        debug_assert!(idx < self.len());
-        todo!();
+        struct WriteValue<'ctx> {
+            dest: NonNull<sys::Value>,
+            ctx: &'ctx mut Context,
+        }
+        impl<'a> FnOnceValue<'a, Result<()>> for WriteValue<'a> {
+            fn call(self, value: &impl Value) -> Result<()> {
+                unsafe { value.write(self.dest, self.ctx) }
+            }
+        }
+        self.values.with_value(idx, WriteValue { dest, ctx })
     }
 }
 
