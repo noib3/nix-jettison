@@ -1,9 +1,11 @@
+//! TODO: docs.
+
 use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
-use crate::{Error, ErrorKind, PrimOp, Result, ToError};
+use crate::prelude::{Arg, Error, ErrorKind, PrimOp, Result, ToError};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -64,6 +66,25 @@ impl Context<EvalState> {
                 ))),
             }
         }
+    }
+
+    /// Gets the argument at the given offset and tries to convert it to
+    /// the desired type.
+    ///
+    /// Returns an error if the pointer at the given offset is NULL or if the
+    /// conversion fails.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn get_arg<A: Arg>(
+        &mut self,
+        args: NonNull<*mut sys::Value>,
+        offset: u8,
+    ) -> Result<A> {
+        let arg_raw = unsafe { *args.as_ptr().offset(offset.into()) };
+        let arg_ptr = NonNull::new(arg_raw).ok_or_else(|| {
+            self.make_error((ErrorKind::Overflow, c"argument is NULL"))
+        })?;
+        unsafe { A::try_from_value(arg_ptr, self) }
     }
 }
 

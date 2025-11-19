@@ -1,9 +1,11 @@
+//! TODO: docs.
+
 use core::ffi::{CStr, c_char, c_void};
 use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::{Context, EvalState, Result, TryIntoValue, Value};
+use crate::prelude::{Context, EvalState, Result, TryIntoValue, Value};
 
 /// TODO: docs.
 pub trait PrimOp: PrimOpFun + Sized {
@@ -67,12 +69,8 @@ pub trait PrimOpFun: 'static {
             let primop: &dyn TypeErasedPrimOpFun =
                 unsafe { &**(user_data as *mut Box<dyn TypeErasedPrimOpFun>) };
 
-            let Some(ctx) = NonNull::new(ctx) else {
-                panic!("received NULL `nix_c_context` pointer in primop call");
-            };
-
-            let Some(state) = NonNull::new(state) else {
-                panic!("received NULL `EvalState` pointer in primop call");
+            let Some(args) = NonNull::new(args) else {
+                panic!("received NULL args pointer in primop call");
             };
 
             let Some(ret) = NonNull::new(ret) else {
@@ -80,6 +78,14 @@ pub trait PrimOpFun: 'static {
                     "received NULL `Value` pointer for return value in \
                      primop call"
                 );
+            };
+
+            let Some(ctx) = NonNull::new(ctx) else {
+                panic!("received NULL `nix_c_context` pointer in primop call");
+            };
+
+            let Some(state) = NonNull::new(state) else {
+                panic!("received NULL `EvalState` pointer in primop call");
             };
 
             unsafe {
@@ -105,15 +111,29 @@ pub trait Args: Sized {
         assert!(Self::NAMES.last().unwrap().is_null());
     };
 
-    #[doc(hidden)]
+    /// TODO: docs.
     const ARITY: u8 = Self::NAMES.len() as u8 - 1;
 
-    /// TODO: docs.
+    #[doc(hidden)]
     const NAMES: &'static [*const c_char];
 
-    /// TODO: docs.
+    #[doc(hidden)]
     unsafe fn from_raw(
-        args: *mut *mut sys::Value,
+        args: NonNull<*mut sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self>;
+}
+
+/// TODO: docs.
+pub trait Arg: Sized {
+    /// TODO: docs.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `value` is a valid pointer to a
+    /// `sys::Value`.
+    unsafe fn try_from_value(
+        value: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<Self>;
 }
@@ -121,7 +141,7 @@ pub trait Args: Sized {
 trait TypeErasedPrimOpFun: 'static {
     unsafe fn call(
         &self,
-        args: *mut *mut sys::Value,
+        args: NonNull<*mut sys::Value>,
         ret: NonNull<sys::Value>,
         ctx: &mut Context,
     );
@@ -130,7 +150,7 @@ trait TypeErasedPrimOpFun: 'static {
 impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
     unsafe fn call(
         &self,
-        args: *mut *mut sys::Value,
+        args: NonNull<*mut sys::Value>,
         ret: NonNull<sys::Value>,
         ctx: &mut Context,
     ) {

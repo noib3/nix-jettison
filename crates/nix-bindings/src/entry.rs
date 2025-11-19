@@ -1,6 +1,6 @@
 use core::ptr::NonNull;
 
-use crate::{Context, Entrypoint};
+use crate::prelude::{Context, Entrypoint};
 
 pub type EntrypointFun = for<'a> fn(&mut Context<Entrypoint>);
 

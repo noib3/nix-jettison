@@ -1,10 +1,12 @@
+//! TODO: docs.
+
 use core::ffi::CStr;
 use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
+use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
 use crate::value::AttrsetValue;
-use crate::{Context, Result, Utf8CStr, Value, ValueKind};
 
 /// TODO: docs.
 pub trait Attrset: Sized {
@@ -95,11 +97,13 @@ pub trait Values {
 
 /// TODO: docs.
 pub trait FnOnceKey<'a, T: 'a> {
+    /// TODO: docs.
     fn call(self, value: &'a impl AsRef<Utf8CStr>) -> T;
 }
 
 /// TODO: docs.
 pub trait FnOnceValue<'a, T: 'a> {
+    /// TODO: docs.
     fn call(self, value: &'a impl Value) -> T;
 }
 

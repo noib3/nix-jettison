@@ -1,3 +1,5 @@
+//! TODO: docs.
+
 use core::ffi::CStr;
 use core::fmt;
 use std::borrow::Cow;
@@ -5,7 +7,7 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::Context;
+use crate::prelude::Context;
 
 /// TODO: docs.
 pub type Result<T> = core::result::Result<T, Error>;

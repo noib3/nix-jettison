@@ -1,10 +1,19 @@
+//! TODO: docs.
+
 use core::ffi::CStr;
 use core::ptr::NonNull;
 use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::{Attrset, Context, LiteralAttrset, PrimOp, Result, ToError};
+use crate::prelude::{
+    Attrset,
+    Context,
+    LiteralAttrset,
+    PrimOp,
+    Result,
+    ToError,
+};
 
 /// TODO: docs.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
