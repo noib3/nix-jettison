@@ -45,7 +45,7 @@ pub trait Value: Sized {
     /// Writes this value into the given, pre-allocated destination.
     #[doc(hidden)]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()>;
@@ -68,7 +68,7 @@ impl Value for () {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
@@ -86,12 +86,12 @@ impl Value for bool {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
         ctx.with_inner_raw(|ctx| unsafe {
-            sys::init_bool(ctx, dest.as_ptr(), self);
+            sys::init_bool(ctx, dest.as_ptr(), *self);
         })
     }
 }
@@ -106,12 +106,12 @@ macro_rules! impl_value_for_int {
 
             #[inline]
             unsafe fn write(
-                self,
+                &self,
                 dest: NonNull<sys::Value>,
                 ctx: &mut Context,
             ) -> Result<()> {
                 ctx.with_inner_raw(|ctx| unsafe {
-                    sys::init_int(ctx, dest.as_ptr(), self.into());
+                    sys::init_int(ctx, dest.as_ptr(), (*self).into());
                 })
             }
         }
@@ -136,12 +136,12 @@ macro_rules! impl_value_for_float {
 
             #[inline]
             unsafe fn write(
-                self,
+                &self,
                 dest: NonNull<sys::Value>,
                 ctx: &mut Context,
             ) -> Result<()> {
                 ctx.with_inner_raw(|ctx| unsafe {
-                    sys::init_float(ctx, dest.as_ptr(), self.into());
+                    sys::init_float(ctx, dest.as_ptr(), (*self).into());
                 })
             }
         }
@@ -159,7 +159,7 @@ impl Value for &CStr {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
@@ -177,11 +177,11 @@ impl Value for CString {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { (&*self).write(dest, ctx) }
+        unsafe { self.as_c_str().write(dest, ctx) }
     }
 }
 
@@ -193,11 +193,12 @@ impl Value for &str {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.to_owned().write(dest, ctx) }
+        let string = CString::new(*self).map_err(|err| ctx.make_error(err))?;
+        unsafe { string.write(dest, ctx) }
     }
 }
 
@@ -209,12 +210,11 @@ impl Value for String {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        let string = CString::new(self).map_err(|err| ctx.make_error(err))?;
-        unsafe { string.write(dest, ctx) }
+        unsafe { self.as_str().write(dest, ctx) }
     }
 }
 
@@ -229,7 +229,7 @@ impl<T: Value> Value for Option<T> {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
@@ -240,7 +240,7 @@ impl<T: Value> Value for Option<T> {
     }
 }
 
-impl<P: PrimOp> Value for P {
+impl<P: PrimOp + Clone> Value for P {
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::Function
@@ -248,12 +248,14 @@ impl<P: PrimOp> Value for P {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
         unsafe {
-            let primop_ptr = ctx.with_inner(|ctx| self.alloc(ctx))?;
+            // TODO: alloc() is implemented by leaking, so calling this
+            // repeatedly will cause memory leaks. Fix this.
+            let primop_ptr = ctx.with_inner(|ctx| self.clone().alloc(ctx))?;
             ctx.with_inner_raw(|ctx| {
                 sys::init_primop(ctx, dest.as_ptr(), primop_ptr)
             })?;
@@ -274,7 +276,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
@@ -305,7 +307,7 @@ where
 
     #[inline]
     unsafe fn write(
-        self,
+        &self,
         dest: NonNull<nix_bindings_sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
