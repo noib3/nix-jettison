@@ -5,7 +5,9 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::prelude::{Context, EvalState, Result, TryIntoValue, Value};
+use crate::context::{Context, EvalState};
+use crate::error::{Result, TypeMismatchError};
+use crate::value::{TryIntoValue, Value, ValueKind};
 
 /// TODO: docs.
 pub trait PrimOp: PrimOpFun + Sized {
@@ -21,7 +23,7 @@ pub trait PrimOp: PrimOpFun + Sized {
         #[allow(path_statements)]
         Self::Args::CHECKS;
 
-        let type_erased: Box<dyn TypeErasedPrimOpFun> = Box::new(self);
+        let type_erased: Box<dyn DynCompatPrimOpFun> = Box::new(self);
 
         unsafe {
             sys::alloc_primop(
@@ -66,8 +68,8 @@ pub trait PrimOpFun: 'static {
             // - the raw pointer is guaranteed to still point to valid memory
             //   because Box::from_raw is never called;
             // - TypeErasedPrimOpFun is bound to 'static;
-            let primop: &dyn TypeErasedPrimOpFun =
-                unsafe { &**(user_data as *mut Box<dyn TypeErasedPrimOpFun>) };
+            let primop: &dyn DynCompatPrimOpFun =
+                unsafe { &**(user_data as *mut Box<dyn DynCompatPrimOpFun>) };
 
             let Some(args) = NonNull::new(args) else {
                 panic!("received NULL args pointer in primop call");
@@ -138,7 +140,31 @@ pub trait Arg: Sized {
     ) -> Result<Self>;
 }
 
-trait TypeErasedPrimOpFun: 'static {
+impl Arg for i64 {
+    #[inline]
+    unsafe fn try_from_value(
+        value: NonNull<nix_bindings_sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        unsafe {
+            ctx.value_force(value)?;
+
+            match ctx.get_kind(value)? {
+                ValueKind::Int => {
+                    ctx.with_inner_raw(|ctx| sys::get_int(ctx, value.as_ptr()))
+                },
+                other => Err(ctx.make_error(TypeMismatchError {
+                    expected: ValueKind::Int,
+                    found: other,
+                })),
+            }
+        }
+    }
+}
+
+/// A dyn-compatible version of [`PrimOpFun`] that allows us to type-erase
+/// [`PrimOp`]s in [`PrimOp::alloc`].
+trait DynCompatPrimOpFun: 'static {
     unsafe fn call(
         &self,
         args: NonNull<*mut sys::Value>,
@@ -147,7 +173,7 @@ trait TypeErasedPrimOpFun: 'static {
     );
 }
 
-impl<P: PrimOpFun> TypeErasedPrimOpFun for P {
+impl<P: PrimOpFun> DynCompatPrimOpFun for P {
     unsafe fn call(
         &self,
         args: NonNull<*mut sys::Value>,

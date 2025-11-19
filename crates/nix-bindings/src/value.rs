@@ -25,6 +25,9 @@ pub enum ValueKind {
     Bool,
 
     /// TODO: docs.
+    External,
+
+    /// TODO: docs.
     Float,
 
     /// TODO: docs.
@@ -38,6 +41,9 @@ pub enum ValueKind {
 
     /// TODO: docs.
     Null,
+
+    /// TODO: docs.
+    Path,
 
     /// TODO: docs.
     String,
