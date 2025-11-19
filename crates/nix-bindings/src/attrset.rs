@@ -192,3 +192,118 @@ impl<T: Attrset> Attrset for &T {
         unsafe { (*self).write_value(idx, dest, ctx) }
     }
 }
+
+#[inline(never)]
+fn panic_tuple_index_oob(idx: usize, len: usize) -> ! {
+    panic!("{len}-tuple received out of bounds index: {idx}")
+}
+
+#[rustfmt::skip]
+mod keys_values_impls {
+    use super::*;
+
+    macro_rules! count {
+        () => { 0 };
+        ($x:tt $($xs:tt)*) => { 1 + count!($($xs)*) };
+    }
+
+    macro_rules! impl_keys {
+        ($($K:ident),*) => {
+            impl_keys!(@pair [] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31] [$($K)*]);
+        };
+
+        (@pair [$($pairs:tt)*] [$next_idx:tt $($rest_idx:tt)*] [$next_K:ident $($rest_K:ident)*]) => {
+            impl_keys!(@pair [$($pairs)* ($next_idx $next_K)] [$($rest_idx)*] [$($rest_K)*]);
+        };
+
+        (@pair [$(($idx:tt $K:ident))*] $_:tt []) => {
+            impl<$($K),*> Keys for ($($K,)*)
+            where
+                $($K: AsRef<Utf8CStr>),*
+            {
+                const LEN: usize = count!($($K)*);
+
+                #[track_caller]
+                #[inline]
+                fn with_key<'a, T: 'a>(
+                    &'a self,
+                    key_idx: usize,
+                    _fun: impl FnOnceKey<'a, T>,
+                ) -> T {
+                    match key_idx {
+                        $($idx => _fun.call(&self.$idx),)*
+                        other => panic_tuple_index_oob(other, <Self as Keys>::LEN),
+                    }
+                }
+            }
+        };
+    }
+
+    macro_rules! impl_values {
+        ($($K:ident),*) => {
+            impl_values!(@pair [] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31] [$($K)*]);
+        };
+
+        (@pair [$($pairs:tt)*] [$next_idx:tt $($rest_idx:tt)*] [$next_K:ident $($rest_K:ident)*]) => {
+            impl_values!(@pair [$($pairs)* ($next_idx $next_K)] [$($rest_idx)*] [$($rest_K)*]);
+        };
+
+        (@pair [$(($idx:tt $K:ident))*] $_:tt []) => {
+            impl<$($K),*> Values for ($($K,)*)
+            where
+                $($K: Value),*
+            {
+                const LEN: usize = count!($($K)*);
+
+                #[track_caller]
+                #[inline]
+                fn with_value<'a, T: 'a>(
+                    &'a self,
+                    value_idx: usize,
+                    _fun: impl FnOnceValue<'a, T>,
+                ) -> T {
+                    match value_idx {
+                        $($idx => _fun.call(&self.$idx),)*
+                        other => panic_tuple_index_oob(other, <Self as Values>::LEN),
+                    }
+                }
+            }
+        };
+    }
+
+    impl_keys!();
+    impl_keys!(K);
+    impl_keys!(K1, K2);
+    impl_keys!(K1, K2, K3);
+    impl_keys!(K1, K2, K3, K4);
+    impl_keys!(K1, K2, K3, K4, K5);
+    impl_keys!(K1, K2, K3, K4, K5, K6);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13, K14);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13, K14, K15);
+    impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13, K14, K15, K16);
+
+    impl_values!();
+    impl_values!(V);
+    impl_values!(V1, V2);
+    impl_values!(V1, V2, V3);
+    impl_values!(V1, V2, V3, V4);
+    impl_values!(V1, V2, V3, V4, V5);
+    impl_values!(V1, V2, V3, V4, V5, V6);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15);
+    impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16);
+}
