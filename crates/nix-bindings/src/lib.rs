@@ -10,7 +10,7 @@ mod primop;
 mod utf8_cstr;
 mod value;
 
-pub use attrset::Attrset;
+pub use attrset::{Attrset, LiteralAttrset};
 pub use context::{Context, Entrypoint, EvalState};
 #[doc(hidden)]
 pub use entry::entry;

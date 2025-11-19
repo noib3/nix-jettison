@@ -4,7 +4,7 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::{Attrset, Context, PrimOp, Result, ToError};
+use crate::{Attrset, Context, LiteralAttrset, PrimOp, Result, ToError};
 
 /// TODO: docs.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -38,7 +38,7 @@ pub enum ValueKind {
 }
 
 /// TODO: docs.
-pub trait Value: Sealed + Sized {
+pub trait Value: Sized {
     /// Returns the kind of this value.
     fn kind(&self) -> ValueKind;
 
@@ -294,6 +294,25 @@ impl<T: Attrset> Value for AttrsetValue<T> {
     }
 }
 
+impl<Keys, Values> Value for LiteralAttrset<Keys, Values>
+where
+    Self: Attrset,
+{
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        self,
+        dest: NonNull<nix_bindings_sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.into_value().write(dest, ctx) }
+    }
+}
+
 impl<T: Value> TryIntoValue for T {
     #[inline]
     fn try_into_value(self, _: &mut Context) -> Result<impl Value + use<T>> {
@@ -322,39 +341,4 @@ impl<T: TryIntoValue, E: ToError> TryIntoValue for core::result::Result<T, E> {
             Err(err) => Err(ctx.make_error(err)),
         }
     }
-}
-
-use sealed::Sealed;
-
-mod sealed {
-    use super::*;
-
-    pub trait Sealed {}
-
-    impl Sealed for () {}
-
-    impl Sealed for bool {}
-
-    impl Sealed for u8 {}
-    impl Sealed for u16 {}
-    impl Sealed for u32 {}
-    impl Sealed for i8 {}
-    impl Sealed for i16 {}
-    impl Sealed for i32 {}
-    impl Sealed for i64 {}
-
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
-
-    impl Sealed for &CStr {}
-    impl Sealed for CString {}
-
-    impl Sealed for &str {}
-    impl Sealed for String {}
-
-    impl<T: Value> Sealed for Option<T> {}
-
-    impl<P: PrimOp> Sealed for P {}
-
-    impl<T> Sealed for AttrsetValue<T> {}
 }
