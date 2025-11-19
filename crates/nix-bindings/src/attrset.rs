@@ -12,7 +12,10 @@ pub trait Attrset: Sized {
     /// such key exists.
     ///
     /// If an index is returned, it is guaranteed to be less than `self.len()`.
-    fn get_idx_of_key(&self, key: &str) -> Option<usize>;
+    #[inline]
+    fn get_idx_of_key(&self, key: &str) -> Option<usize> {
+        (0..self.len()).find(|idx| self.get_key(*idx) == key)
+    }
 
     /// Returns the key of the attribute at the given index.
     ///
@@ -24,7 +27,7 @@ pub trait Attrset: Sized {
 
     /// Same as [`get_key_by_idx`](Attrset::get_key_by_idx), but returns the
     /// key as a `&CStr`.
-    fn get_key_as_cstr(&self, idx: usize) -> &CStr;
+    fn get_key_as_c_str(&self, idx: usize) -> &CStr;
 
     /// Returns the [`ValueKind`] of the attribute at the given index.
     ///
@@ -119,23 +122,36 @@ where
 
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
-    fn get_idx_of_key(&self, _key: &str) -> Option<usize> {
-        todo!()
+    fn get_key(&self, idx: usize) -> &str {
+        struct GetKey;
+        impl<'a> FnOnceKey<'a, &'a str> for GetKey {
+            fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a str {
+                value.as_ref().as_str()
+            }
+        }
+        self.keys.with_key(idx, GetKey)
     }
 
     #[inline]
-    fn get_key(&self, _idx: usize) -> &str {
-        todo!()
+    fn get_key_as_c_str(&self, idx: usize) -> &CStr {
+        struct GetKeyAsCStr;
+        impl<'a> FnOnceKey<'a, &'a CStr> for GetKeyAsCStr {
+            fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a CStr {
+                value.as_ref().as_c_str()
+            }
+        }
+        self.keys.with_key(idx, GetKeyAsCStr)
     }
 
     #[inline]
-    fn get_key_as_cstr(&self, _idx: usize) -> &CStr {
-        todo!()
-    }
-
-    #[inline]
-    fn get_value_kind(&self, _idx: usize) -> ValueKind {
-        todo!()
+    fn get_value_kind(&self, idx: usize) -> ValueKind {
+        struct GetValueKind;
+        impl FnOnceValue<'_, ValueKind> for GetValueKind {
+            fn call(self, value: &impl Value) -> ValueKind {
+                value.kind()
+            }
+        }
+        self.values.with_value(idx, GetValueKind)
     }
 
     #[inline]
@@ -155,7 +171,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
             dest: NonNull<sys::Value>,
             ctx: &'ctx mut Context,
         }
-        impl<'a> FnOnceValue<'a, Result<()>> for WriteValue<'a> {
+        impl FnOnceValue<'_, Result<()>> for WriteValue<'_> {
             fn call(self, value: &impl Value) -> Result<()> {
                 unsafe { value.write(self.dest, self.ctx) }
             }
@@ -176,8 +192,8 @@ impl<T: Attrset> Attrset for &T {
     }
 
     #[inline]
-    fn get_key_as_cstr(&self, idx: usize) -> &CStr {
-        (*self).get_key_as_cstr(idx)
+    fn get_key_as_c_str(&self, idx: usize) -> &CStr {
+        (*self).get_key_as_c_str(idx)
     }
 
     #[inline]

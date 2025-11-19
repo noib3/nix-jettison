@@ -6,6 +6,19 @@ use core::str::Utf8Error;
 pub struct Utf8CStr(CStr);
 
 impl Utf8CStr {
+    /// Returns the UTF-8 string slice contained in this [`Utf8CStr`].
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        // SAFETY: the inner CStr is guaranteed to contain valid UTF-8.
+        unsafe { str::from_utf8_unchecked(self.as_c_str().to_bytes()) }
+    }
+
+    /// Returns the underlying [`CStr`].
+    #[inline]
+    pub fn as_c_str(&self) -> &CStr {
+        &self.0
+    }
+
     /// Creates a new [`Utf8CStr`] from the given [`CStr`], without checking
     /// whether it contains valid UTF-8.
     #[inline]

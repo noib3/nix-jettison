@@ -286,7 +286,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
             let len = attrset.len();
             let mut builder = ctx.make_bindings_builder(len)?;
             for idx in 0..len {
-                let key = attrset.get_key_as_cstr(idx);
+                let key = attrset.get_key_as_c_str(idx);
                 builder.insert(key, |dest, ctx| {
                     attrset.write_value(idx, dest, ctx)
                 })?;
