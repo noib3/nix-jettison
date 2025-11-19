@@ -146,18 +146,16 @@ impl Arg for i64 {
         value: NonNull<nix_bindings_sys::Value>,
         ctx: &mut Context,
     ) -> Result<Self> {
-        unsafe {
-            ctx.value_force(value)?;
+        ctx.value_force(value)?;
 
-            match ctx.get_kind(value)? {
-                ValueKind::Int => {
-                    ctx.with_inner_raw(|ctx| sys::get_int(ctx, value.as_ptr()))
-                },
-                other => Err(ctx.make_error(TypeMismatchError {
-                    expected: ValueKind::Int,
-                    found: other,
-                })),
-            }
+        match ctx.get_kind(value)? {
+            ValueKind::Int => ctx.with_inner_raw(|ctx| unsafe {
+                sys::get_int(ctx, value.as_ptr())
+            }),
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Int,
+                found: other,
+            })),
         }
     }
 }

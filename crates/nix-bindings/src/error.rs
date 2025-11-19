@@ -7,7 +7,7 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::prelude::Context;
+use crate::prelude::{Context, ValueKind};
 
 /// TODO: docs.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -63,6 +63,17 @@ pub enum ErrorKind {
     Nix,
 }
 
+/// The type of error that can occur when trying to convert a generic value
+/// to a specific type.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TypeMismatchError {
+    /// The expected value kind.
+    pub expected: ValueKind,
+
+    /// The found value kind.
+    pub found: ValueKind,
+}
+
 impl Error {
     #[deprecated = "use Context::make_error instead"]
     pub(crate) fn new<S>(kind: ErrorKind, _: &mut Context<S>) -> Self {
@@ -100,6 +111,32 @@ impl fmt::Display for ErrorKind {
             Self::Key => "a key/index access error occurred",
             Self::Nix => "a generic Nix error occurred",
         })
+    }
+}
+
+impl fmt::Display for TypeMismatchError {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "type mismatch: expected {:?}, found {:?}",
+            self.expected, self.found
+        )
+    }
+}
+
+impl core::error::Error for TypeMismatchError {}
+
+impl ToError for TypeMismatchError {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: the Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()).into() }
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
     }
 }
 
