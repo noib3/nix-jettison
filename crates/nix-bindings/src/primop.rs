@@ -6,7 +6,7 @@ use core::ptr::NonNull;
 use nix_bindings_sys as sys;
 
 use crate::context::{Context, EvalState};
-use crate::error::{Result, TypeMismatchError};
+use crate::error::{Result, TryFromI64Error, TypeMismatchError};
 use crate::value::{TryIntoValue, Value, ValueKind};
 
 /// TODO: docs.
@@ -159,6 +159,37 @@ impl Arg for i64 {
         }
     }
 }
+
+macro_rules! impl_arg_for_int {
+    ($ty:ty) => {
+        impl Arg for $ty {
+            #[inline]
+            unsafe fn try_from_value(
+                value: NonNull<nix_bindings_sys::Value>,
+                ctx: &mut Context,
+            ) -> Result<Self> {
+                let int = unsafe { i64::try_from_value(value, ctx)? };
+
+                int.try_into().map_err(|_| {
+                    ctx.make_error(TryFromI64Error::<$ty>::new(int))
+                })
+            }
+        }
+    };
+}
+
+impl_arg_for_int!(i8);
+impl_arg_for_int!(i16);
+impl_arg_for_int!(i32);
+impl_arg_for_int!(i128);
+impl_arg_for_int!(isize);
+
+impl_arg_for_int!(u8);
+impl_arg_for_int!(u16);
+impl_arg_for_int!(u32);
+impl_arg_for_int!(u64);
+impl_arg_for_int!(u128);
+impl_arg_for_int!(usize);
 
 /// A dyn-compatible version of [`PrimOpFun`] that allows us to type-erase
 /// [`PrimOp`]s in [`PrimOp::alloc`].

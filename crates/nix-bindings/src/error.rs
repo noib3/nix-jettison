@@ -2,6 +2,7 @@
 
 use core::ffi::CStr;
 use core::fmt;
+use core::marker::PhantomData;
 use std::borrow::Cow;
 use std::ffi::CString;
 
@@ -74,10 +75,24 @@ pub struct TypeMismatchError {
     pub found: ValueKind,
 }
 
+/// The type of error that can occur when trying to convert an `i64` into a
+/// different integer type.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct TryFromI64Error<Int> {
+    n: i64,
+    int: PhantomData<Int>,
+}
+
 impl Error {
     #[deprecated = "use Context::make_error instead"]
     pub(crate) fn new<S>(kind: ErrorKind, _: &mut Context<S>) -> Self {
         Self { kind }
+    }
+}
+
+impl<Int> TryFromI64Error<Int> {
+    pub(crate) fn new(n: i64) -> Self {
+        Self { n, int: PhantomData }
     }
 }
 
@@ -127,6 +142,31 @@ impl fmt::Display for TypeMismatchError {
 
 impl core::error::Error for TypeMismatchError {}
 
+impl<Int> fmt::Debug for TryFromI64Error<Int> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TryFromI64Error")
+            .field("n", &self.n)
+            .field("int", &core::any::type_name::<Int>())
+            .finish()
+    }
+}
+
+impl<Int> fmt::Display for TryFromI64Error<Int> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "integer conversion failed: cannot convert {}i64 into target \
+             type {}",
+            self.n,
+            core::any::type_name::<Int>()
+        )
+    }
+}
+
+impl<Int> core::error::Error for TryFromI64Error<Int> {}
+
 impl ToError for TypeMismatchError {
     #[inline]
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
@@ -144,6 +184,19 @@ impl ToError for std::ffi::NulError {
     #[inline]
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
         // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+}
+
+impl<Int> ToError for TryFromI64Error<Int> {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: the Display impl doesn't contain any NUL bytes.
         unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
     }
 
