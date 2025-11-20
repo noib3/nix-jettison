@@ -1,10 +1,11 @@
 //! TODO: docs.
 
-use core::ffi::{CStr, c_char, c_void};
+use core::ffi::{c_char, c_void};
 use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
+use crate::Utf8CStr;
 use crate::context::{Context, EvalState};
 use crate::error::{Result, TryFromI64Error, TypeMismatchError};
 use crate::value::{TryIntoValue, Value, ValueKind};
@@ -12,10 +13,10 @@ use crate::value::{TryIntoValue, Value, ValueKind};
 /// TODO: docs.
 pub trait PrimOp: PrimOpFun + Sized {
     /// TODO: docs.
-    const NAME: &'static CStr;
+    const NAME: &'static Utf8CStr;
 
     /// TODO: docs.
-    const DOCS: &'static CStr;
+    const DOCS: &'static Utf8CStr;
 
     #[doc(hidden)]
     #[inline]
@@ -30,9 +31,9 @@ pub trait PrimOp: PrimOpFun + Sized {
                 ctx.as_ptr(),
                 Self::c_fun(),
                 Self::Args::ARITY.into(),
-                Self::NAME.as_ptr(),
+                Self::NAME.as_c_str().as_ptr(),
                 Self::Args::NAMES.as_ptr().cast_mut(),
-                Self::DOCS.as_ptr(),
+                Self::DOCS.as_c_str().as_ptr(),
                 // This is a leak, but it's ok because it only happens once in
                 // the lifetime of the plugin.
                 Box::into_raw(Box::new(type_erased)).cast(),
