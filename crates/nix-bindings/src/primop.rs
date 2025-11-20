@@ -209,8 +209,10 @@ impl<L: Namespace, R: AsRef<CStr> + Copy> Namespace for ConcatNamespace<L, R> {
         let Self(left, right) = self;
         let mut vec = left.display().into_owned().into_bytes();
         vec.push(b'.');
-        vec.extend_from_slice(right.as_ref().to_bytes_with_nul());
-        // SAFETY: the vector has a single trailing NUL byte.
+        vec.extend_from_slice(right.as_ref().to_bytes());
+        // SAFETY: neither CString::into_bytes() nor CStr::to_bytes() include
+        // the terminating NUL byte, so the resulting vector is guaranteed to
+        // not contain any interior NUL bytes.
         Cow::Owned(unsafe { CString::from_vec_unchecked(vec) })
     }
 

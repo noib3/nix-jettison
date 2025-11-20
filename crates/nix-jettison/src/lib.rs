@@ -26,9 +26,7 @@ struct Double;
 impl PrimOp for Double {
     const NAME: &'static nix_bindings::Utf8CStr =
         // SAFETY: valid UTF-8.
-        unsafe {
-            nix_bindings::Utf8CStr::new_unchecked(c"jettison.double")
-        };
+        unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") };
 
     const DOCS: &'static nix_bindings::Utf8CStr =
         // SAFETY: valid UTF-8.
@@ -59,6 +57,12 @@ impl PrimOpFun for Jettison {
     type Args = ();
 
     fn call(&self, _args: (), _: &mut Context) -> impl Value + use<> {
+        let nested = LiteralAttrset::new(
+            // SAFETY: valid UTF-8.
+            (unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") },),
+            (Double,),
+        );
+
         LiteralAttrset::new(
             (
                 // SAFETY: valid UTF-8.
@@ -66,11 +70,11 @@ impl PrimOpFun for Jettison {
                 // SAFETY: valid UTF-8.
                 unsafe { nix_bindings::Utf8CStr::new_unchecked(c"enabled") },
                 // SAFETY: valid UTF-8.
-                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") },
+                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"nested") },
                 // SAFETY: valid UTF-8.
                 unsafe { nix_bindings::Utf8CStr::new_unchecked(c"message") },
             ),
-            (42, true, Double, "Hello from Rust!"),
+            (42, true, nested, "Hello from Rust!"),
         )
     }
 }
