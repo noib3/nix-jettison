@@ -87,7 +87,7 @@ impl Value for () {
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        ctx.with_inner_raw(|ctx| unsafe {
+        ctx.with_raw(|ctx| unsafe {
             sys::init_null(ctx, dest.as_ptr());
         })
     }
@@ -105,7 +105,7 @@ impl Value for bool {
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        ctx.with_inner_raw(|ctx| unsafe {
+        ctx.with_raw(|ctx| unsafe {
             sys::init_bool(ctx, dest.as_ptr(), *self);
         })
     }
@@ -125,7 +125,7 @@ macro_rules! impl_value_for_int {
                 dest: NonNull<sys::Value>,
                 ctx: &mut Context,
             ) -> Result<()> {
-                ctx.with_inner_raw(|ctx| unsafe {
+                ctx.with_raw(|ctx| unsafe {
                     sys::init_int(ctx, dest.as_ptr(), (*self).into());
                 })
             }
@@ -155,7 +155,7 @@ macro_rules! impl_value_for_float {
                 dest: NonNull<sys::Value>,
                 ctx: &mut Context,
             ) -> Result<()> {
-                ctx.with_inner_raw(|ctx| unsafe {
+                ctx.with_raw(|ctx| unsafe {
                     sys::init_float(ctx, dest.as_ptr(), (*self).into());
                 })
             }
@@ -178,7 +178,7 @@ impl Value for &CStr {
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        ctx.with_inner_raw(|ctx| unsafe {
+        ctx.with_raw(|ctx| unsafe {
             sys::init_string(ctx, dest.as_ptr(), self.as_ptr());
         })
     }
@@ -267,16 +267,7 @@ impl<P: PrimOp + Clone> Value for P {
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe {
-            // TODO: alloc() is implemented by leaking, so calling this
-            // repeatedly will cause memory leaks. Fix this.
-            let primop_ptr = ctx.with_inner(|ctx| self.clone().alloc(ctx))?;
-            ctx.with_inner_raw(|ctx| {
-                sys::init_primop(ctx, dest.as_ptr(), primop_ptr)
-            })?;
-            ctx.with_inner_raw(|ctx| sys::gc_decref(ctx, primop_ptr.cast()))?;
-            Ok(())
-        }
+        ctx.write_primop(self.clone(), dest)
     }
 }
 

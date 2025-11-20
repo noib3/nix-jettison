@@ -2,15 +2,17 @@
 
 use core::ffi::CStr;
 use core::ptr::NonNull;
+use std::borrow::Cow;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::prelude::{Arg, Error, ErrorKind, PrimOp, Result, ToError};
+use crate::primop::Namespace;
 use crate::value::ValueKind;
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
-    inner: NonNull<sys::c_context>,
+    inner: ContextInner,
     state: State,
 }
 
@@ -20,6 +22,7 @@ pub struct Entrypoint {}
 /// TODO: docs.
 pub struct EvalState {
     inner: NonNull<sys::EvalState>,
+    namespace: Cow<'static, CStr>,
 }
 
 pub(crate) struct BindingsBuilder<'ctx> {
@@ -27,20 +30,27 @@ pub(crate) struct BindingsBuilder<'ctx> {
     context: &'ctx mut Context,
 }
 
+pub(crate) struct ContextInner {
+    ptr: NonNull<sys::c_context>,
+}
+
 impl Context<Entrypoint> {
     /// Adds the given primop to the `builtins` attribute set.
     #[track_caller]
     #[inline]
     pub fn register_primop<P: PrimOp>(&mut self, primop: P) {
-        let try_block = || unsafe {
-            let primop_ptr = self.with_inner(|ctx| primop.alloc(ctx))?;
-            self.with_inner_raw(|ctx| sys::register_primop(ctx, primop_ptr))?;
-            self.with_inner_raw(|ctx| sys::gc_decref(ctx, primop_ptr.cast()))?;
-            Result::Ok(())
-        };
+        let res = self.inner.with_primop_ptr(
+            primop,
+            P::NAME,
+            |inner, primop_ptr| {
+                inner.with_raw(|raw_ctx| unsafe {
+                    sys::register_primop(raw_ctx, primop_ptr.as_ptr())
+                })
+            },
+        );
 
-        if let Err(err) = try_block() {
-            panic!("couldn't register primop '{:?}': {}", P::NAME, err);
+        if let Err(err) = res {
+            panic!("couldn't register primop '{:?}': {err}", P::NAME);
         }
     }
 }
@@ -53,7 +63,7 @@ impl Context<EvalState> {
         value: NonNull<sys::Value>,
     ) -> Result<ValueKind> {
         Ok(
-            match self.with_inner_raw(|ctx| unsafe {
+            match self.inner.with_raw(|ctx| unsafe {
                 sys::get_type(ctx, value.as_ptr())
             })? {
                 sys::ValueType_NIX_TYPE_ATTRS => ValueKind::Attrset,
@@ -104,13 +114,34 @@ impl Context<EvalState> {
         &mut self,
         value: NonNull<sys::Value>,
     ) -> Result<()> {
-        unsafe {
-            let state = self.state.inner.as_ptr();
-            self.with_inner_raw(|ctx| {
+        let state = self.state.inner.as_ptr();
+        self.inner
+            .with_raw(|ctx| unsafe {
                 sys::value_force(ctx, state, value.as_ptr())
             })
             .map(|_| ())
-        }
+    }
+
+    /// Initializes the destination value with the given primop.
+    #[inline]
+    pub(crate) fn write_primop(
+        &mut self,
+        primop: impl PrimOp,
+        dest: NonNull<sys::Value>,
+    ) -> Result<()> {
+        let namespace = &self.state.namespace;
+
+        self.inner
+            .with_primop_ptr(primop, namespace, |ctx, primop_ptr| {
+                ctx.with_raw(|raw_ctx| unsafe {
+                    sys::init_primop(
+                        raw_ctx,
+                        dest.as_ptr(),
+                        primop_ptr.as_ptr(),
+                    );
+                })
+            })
+            .flatten()
     }
 
     /// Gets the argument at the given offset and tries to convert it to
@@ -141,64 +172,31 @@ impl<State> Context<State> {
     /// TODO: docs.
     #[inline]
     pub(crate) fn make_error(&mut self, err: impl ToError) -> Error {
-        unsafe {
-            let kind = err.kind();
-            let message = err.format_to_c_str();
-            sys::set_err_msg(
-                self.inner.as_ptr(),
-                kind.code(),
-                message.as_ptr(),
-            );
-            #[expect(deprecated)]
-            Error::new(kind, self)
-        }
+        self.inner.make_error(err)
     }
 
     #[inline]
-    pub(crate) fn new(inner: NonNull<sys::c_context>, state: State) -> Self {
-        Self { inner, state }
+    pub(crate) fn new(ctx_ptr: NonNull<sys::c_context>, state: State) -> Self {
+        Self { inner: ContextInner::new(ctx_ptr), state }
     }
 
     /// TODO: docs.
     #[inline]
-    pub(crate) fn with_inner<T>(
-        &mut self,
-        fun: impl FnOnce(NonNull<sys::c_context>) -> T,
-    ) -> Result<T> {
-        let ret = fun(self.inner);
-        self.check_inner().map(|()| ret)
-    }
-
-    /// Same as [`with_inner`](Self::with_inner), but provides the callback
-    /// with a raw pointer instead of a `NonNull`.
-    #[inline]
-    pub(crate) fn with_inner_raw<T>(
+    pub(crate) fn with_raw<T>(
         &mut self,
         fun: impl FnOnce(*mut sys::c_context) -> T,
     ) -> Result<T> {
-        let ret = fun(self.inner.as_ptr());
-        self.check_inner().map(|()| ret)
-    }
-
-    #[inline]
-    fn check_inner(&mut self) -> Result<()> {
-        let kind = match unsafe { sys::err_code(self.inner.as_ptr()) } {
-            sys::err_NIX_OK => return Ok(()),
-            sys::err_NIX_ERR_UNKNOWN => ErrorKind::Unknown,
-            sys::err_NIX_ERR_OVERFLOW => ErrorKind::Overflow,
-            sys::err_NIX_ERR_KEY => ErrorKind::Key,
-            sys::err_NIX_ERR_NIX_ERROR => ErrorKind::Nix,
-            other => unreachable!("invalid error code: {other}"),
-        };
-        #[expect(deprecated)]
-        Err(Error::new(kind, self))
+        self.inner.with_raw(fun)
     }
 }
 
 impl EvalState {
     #[inline]
-    pub(crate) fn new(inner: NonNull<sys::EvalState>) -> Self {
-        Self { inner }
+    pub(crate) fn new(
+        inner: NonNull<sys::EvalState>,
+        namespace: Cow<'static, CStr>,
+    ) -> Self {
+        Self { inner, namespace }
     }
 }
 
@@ -237,5 +235,87 @@ impl<'ctx> BindingsBuilder<'ctx> {
             cpp::make_attrs(dest.as_ptr(), self.inner.as_ptr());
             Ok(())
         }
+    }
+}
+
+impl ContextInner {
+    /// TODO: docs.
+    #[inline]
+    pub(crate) fn make_error(&mut self, err: impl ToError) -> Error {
+        unsafe {
+            let kind = err.kind();
+            let message = err.format_to_c_str();
+            sys::set_err_msg(self.ptr.as_ptr(), kind.code(), message.as_ptr());
+            #[expect(deprecated)]
+            Error::new(kind, self)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn new(inner: NonNull<sys::c_context>) -> Self {
+        Self { ptr: inner }
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub(crate) fn with_ptr<T>(
+        &mut self,
+        fun: impl FnOnce(NonNull<sys::c_context>) -> T,
+    ) -> Result<T> {
+        let ret = fun(self.ptr);
+        self.check_err().map(|()| ret)
+    }
+
+    /// Same as [`with_raw`](Self::with_raw), but provides the callback with a
+    /// raw pointer instead of a `NonNull`.
+    #[inline]
+    pub(crate) fn with_raw<T>(
+        &mut self,
+        fun: impl FnOnce(*mut sys::c_context) -> T,
+    ) -> Result<T> {
+        let ret = fun(self.ptr.as_ptr());
+        self.check_err().map(|()| ret)
+    }
+
+    #[inline]
+    fn check_err(&mut self) -> Result<()> {
+        let kind = match unsafe { sys::err_code(self.ptr.as_ptr()) } {
+            sys::err_NIX_OK => return Ok(()),
+            sys::err_NIX_ERR_UNKNOWN => ErrorKind::Unknown,
+            sys::err_NIX_ERR_OVERFLOW => ErrorKind::Overflow,
+            sys::err_NIX_ERR_KEY => ErrorKind::Key,
+            sys::err_NIX_ERR_NIX_ERROR => ErrorKind::Nix,
+            other => unreachable!("invalid error code: {other}"),
+        };
+        #[expect(deprecated)]
+        Err(Error::new(kind, self))
+    }
+
+    #[inline]
+    fn with_primop_ptr<P: PrimOp, T>(
+        &mut self,
+        primop: P,
+        namespace: impl Namespace,
+        fun: impl FnOnce(&mut Self, NonNull<sys::PrimOp>) -> T,
+    ) -> Result<T> {
+        // TODO: alloc() is implemented by leaking, so calling this repeatedly
+        // will cause memory leaks. Fix this.
+        let primop_raw =
+            self.with_ptr(|ctx| unsafe { primop.alloc(namespace, ctx) })?;
+
+        let primop_ptr = NonNull::new(primop_raw).ok_or_else(|| {
+            self.make_error((
+                ErrorKind::Overflow,
+                c"failed to allocate PrimOp for {primop:?}",
+            ))
+        })?;
+
+        let ret = fun(self, primop_ptr);
+
+        self.with_raw(|ctx| unsafe {
+            sys::gc_decref(ctx, primop_ptr.as_ptr().cast())
+        })?;
+
+        Result::Ok(ret)
     }
 }

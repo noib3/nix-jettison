@@ -2,6 +2,7 @@
 
 use core::ffi::{CStr, c_char, c_void};
 use core::ptr::NonNull;
+use std::borrow::Cow;
 use std::ffi::CString;
 
 use nix_bindings_sys as sys;
@@ -21,23 +22,30 @@ pub trait PrimOp: PrimOpFun + Sized {
 
     #[doc(hidden)]
     #[inline]
-    unsafe fn alloc(self, ctx: NonNull<sys::c_context>) -> *mut sys::PrimOp {
+    unsafe fn alloc(
+        self,
+        namespace: impl Namespace,
+        ctx: NonNull<sys::c_context>,
+    ) -> *mut sys::PrimOp {
         #[allow(path_statements)]
         Self::Args::CHECKS;
 
-        let type_erased: Box<dyn DynCompatPrimOpFun> = Box::new(self);
+        let user_data = UserData {
+            primop: Box::new(self),
+            namespace: namespace.display(),
+        };
 
         unsafe {
             sys::alloc_primop(
                 ctx.as_ptr(),
                 Self::c_fun(),
                 Self::Args::ARITY.into(),
-                Self::NAME.as_c_str().as_ptr(),
+                user_data.namespace.as_ptr(),
                 Self::Args::NAMES.as_ptr().cast_mut(),
                 Self::DOCS.as_c_str().as_ptr(),
                 // This is a leak, but it's ok because it only happens once in
                 // the lifetime of the plugin.
-                Box::into_raw(Box::new(type_erased)).cast(),
+                Box::into_raw(Box::new(user_data)).cast(),
             )
         }
     }
@@ -65,13 +73,11 @@ pub trait PrimOpFun: 'static {
             ret: *mut sys::Value,
         ) {
             // SAFETY:
-            // - user_data was created in PrimOp::alloc from a
-            //   *mut Box<dyn TypeErasedPrimOpFun>;
+            // - user_data was created in PrimOp::alloc from a UserData;
             // - the raw pointer is guaranteed to still point to valid memory
             //   because Box::from_raw is never called;
-            // - TypeErasedPrimOpFun is bound to 'static;
-            let primop: &dyn DynCompatPrimOpFun =
-                unsafe { &**(user_data as *mut Box<dyn DynCompatPrimOpFun>) };
+            // - UserData is 'static;
+            let user_data = unsafe { &*(user_data as *mut UserData) };
 
             let Some(args) = NonNull::new(args) else {
                 panic!("received NULL args pointer in primop call");
@@ -92,12 +98,10 @@ pub trait PrimOpFun: 'static {
                 panic!("received NULL `EvalState` pointer in primop call");
             };
 
+            let state = EvalState::new(state, user_data.namespace.clone());
+
             unsafe {
-                primop.call(
-                    args,
-                    ret,
-                    &mut Context::new(ctx, EvalState::new(state)),
-                )
+                user_data.primop.call(args, ret, &mut Context::new(ctx, state))
             }
         }
 
@@ -111,7 +115,7 @@ pub trait Namespace: Sized {
     fn push(self, name: &Utf8CStr) -> impl Namespace;
 
     #[doc(hidden)]
-    fn display(self) -> impl Into<CString> + AsRef<CStr>;
+    fn display(self) -> Cow<'static, CStr>;
 }
 
 /// TODO: docs.
@@ -151,38 +155,57 @@ pub trait Arg: Sized {
     ) -> Result<Self>;
 }
 
-impl<'a> Namespace for &'a Utf8CStr {
+/// A [`Namespace`] implementation that concatenates two namespaces by adding
+/// a `.` between them.
+struct ConcatNamespace<Left, Right>(Left, Right);
+
+/// The user data given as the last argument to [`sys::alloc_primop`].
+struct UserData {
+    /// The type-erased primop.
+    primop: Box<dyn DynCompatPrimOpFun>,
+
+    /// The namespace given to `PrimOp::alloc`.
+    namespace: Cow<'static, CStr>,
+}
+
+impl<L: Namespace, R: AsRef<CStr>> Namespace for ConcatNamespace<L, R> {
     #[inline]
-    fn display(self) -> &'a CStr {
-        self.as_c_str()
+    fn display(self) -> Cow<'static, CStr> {
+        let Self(left, right) = self;
+        let mut vec = left.display().into_owned().into_bytes();
+        vec.push(b'.');
+        vec.extend_from_slice(right.as_ref().to_bytes_with_nul());
+        // SAFETY: the vector has a single trailing NUL byte.
+        Cow::Owned(unsafe { CString::from_vec_unchecked(vec) })
     }
 
     #[inline]
     fn push(self, name: &Utf8CStr) -> impl Namespace {
-        struct Concat<L, R> {
-            left: L,
-            right: R,
-        }
+        ConcatNamespace(self, name)
+    }
+}
 
-        impl<L: Namespace, R: Namespace> Namespace for Concat<L, R> {
-            #[inline]
-            fn display(self) -> CString {
-                let left = self.left.display();
-                let right = self.right.display();
-                let mut vec = left.into().into_bytes();
-                vec.push(b'.');
-                vec.extend_from_slice(right.as_ref().to_bytes_with_nul());
-                // SAFETY: the vector has a single trailing NUL byte.
-                unsafe { CString::from_vec_unchecked(vec) }
-            }
+impl Namespace for &'static Utf8CStr {
+    #[inline]
+    fn display(self) -> Cow<'static, CStr> {
+        Cow::Borrowed(self.as_c_str())
+    }
 
-            #[inline]
-            fn push(self, name: &Utf8CStr) -> impl Namespace {
-                Concat { left: self, right: name }
-            }
-        }
+    #[inline]
+    fn push(self, name: &Utf8CStr) -> impl Namespace {
+        ConcatNamespace(self, name)
+    }
+}
 
-        Concat { left: self, right: name }
+impl Namespace for &Cow<'static, CStr> {
+    #[inline]
+    fn display(self) -> Cow<'static, CStr> {
+        self.clone()
+    }
+
+    #[inline]
+    fn push(self, name: &Utf8CStr) -> impl Namespace {
+        ConcatNamespace(self, name)
     }
 }
 
@@ -208,9 +231,8 @@ impl Arg for i64 {
         ctx.value_force(value)?;
 
         match ctx.get_kind(value)? {
-            ValueKind::Int => ctx.with_inner_raw(|ctx| unsafe {
-                sys::get_int(ctx, value.as_ptr())
-            }),
+            ValueKind::Int => ctx
+                .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_ptr()) }),
             other => Err(ctx.make_error(TypeMismatchError {
                 expected: ValueKind::Int,
                 found: other,

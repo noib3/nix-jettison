@@ -8,7 +8,8 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
-use crate::prelude::{Context, ValueKind};
+use crate::context::ContextInner;
+use crate::value::ValueKind;
 
 /// TODO: docs.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -86,7 +87,7 @@ pub struct TryFromI64Error<Int> {
 impl Error {
     #[deprecated = "use Context::make_error instead"]
     #[inline]
-    pub(crate) fn new<S>(kind: ErrorKind, _: &mut Context<S>) -> Self {
+    pub(crate) fn new(kind: ErrorKind, _: &mut ContextInner) -> Self {
         Self { kind }
     }
 }

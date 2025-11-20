@@ -61,3 +61,10 @@ impl AsRef<Self> for Utf8CStr {
         self
     }
 }
+
+impl AsRef<CStr> for Utf8CStr {
+    #[inline]
+    fn as_ref(&self) -> &CStr {
+        self.as_c_str()
+    }
+}
