@@ -1,7 +1,8 @@
 //! TODO: docs.
 
-use core::ffi::{c_char, c_void};
+use core::ffi::{CStr, c_char, c_void};
 use core::ptr::NonNull;
+use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
@@ -105,6 +106,15 @@ pub trait PrimOpFun: 'static {
 }
 
 /// TODO: docs.
+pub trait Namespace: Sized {
+    #[doc(hidden)]
+    fn push(self, name: &Utf8CStr) -> impl Namespace;
+
+    #[doc(hidden)]
+    fn display(self) -> impl Into<CString> + AsRef<CStr>;
+}
+
+/// TODO: docs.
 pub trait Args: Sized {
     // Compile-time checks of several invariants.
     #[doc(hidden)]
@@ -139,6 +149,41 @@ pub trait Arg: Sized {
         value: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<Self>;
+}
+
+impl<'a> Namespace for &'a Utf8CStr {
+    #[inline]
+    fn display(self) -> &'a CStr {
+        self.as_c_str()
+    }
+
+    #[inline]
+    fn push(self, name: &Utf8CStr) -> impl Namespace {
+        struct Concat<L, R> {
+            left: L,
+            right: R,
+        }
+
+        impl<L: Namespace, R: Namespace> Namespace for Concat<L, R> {
+            #[inline]
+            fn display(self) -> CString {
+                let left = self.left.display();
+                let right = self.right.display();
+                let mut vec = left.into().into_bytes();
+                vec.push(b'.');
+                vec.extend_from_slice(right.as_ref().to_bytes_with_nul());
+                // SAFETY: the vector has a single trailing NUL byte.
+                unsafe { CString::from_vec_unchecked(vec) }
+            }
+
+            #[inline]
+            fn push(self, name: &Utf8CStr) -> impl Namespace {
+                Concat { left: self, right: name }
+            }
+        }
+
+        Concat { left: self, right: name }
+    }
 }
 
 impl Args for () {
