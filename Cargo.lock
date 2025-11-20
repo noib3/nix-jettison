@@ -164,6 +164,11 @@ dependencies = [
 [[package]]
 name = "nix-bindings-macros"
 version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "nix-bindings-sys"

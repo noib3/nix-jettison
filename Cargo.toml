@@ -15,6 +15,9 @@ bindgen = "0.72"
 cc = "1"
 doxygen-bindgen = "0.1"
 pkg-config = "0.3"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = "2.0"
 
 # Internal dependencies.
 nix-bindings = { path = "./crates/nix-bindings" }
