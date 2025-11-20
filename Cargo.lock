@@ -183,8 +183,7 @@ dependencies = [
 name = "nix-jettison"
 version = "0.1.0"
 dependencies = [
- "nix-bindings-cpp",
- "nix-bindings-sys",
+ "nix-bindings",
 ]
 
 [[package]]

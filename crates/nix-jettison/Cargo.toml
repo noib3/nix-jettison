@@ -10,8 +10,7 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-nix-bindings-cpp = { workspace = true }
-nix-bindings-sys = { workspace = true }
+nix-bindings = { workspace = true }
 
 [lints]
 workspace = true

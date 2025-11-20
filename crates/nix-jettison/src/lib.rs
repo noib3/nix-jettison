@@ -1,87 +1,89 @@
 #![allow(missing_docs)]
 
-use core::ffi::{c_char, c_void};
-use core::ptr;
+use nix_bindings::prelude::*;
 
-use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
+/// nix-jettison's library functions.
+struct Jettison;
 
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe extern "C" fn double(
-    _user_data: *mut c_void,
-    ctx: *mut sys::c_context,
-    _state: *mut sys::EvalState,
-    args: *mut *mut sys::Value,
-    ret: *mut sys::Value,
-) {
-    let n = sys::get_int(ctx, *args.offset(0));
-    sys::init_int(ctx, ret, n * 2);
+impl PrimOp for Jettison {
+    const NAME: &'static nix_bindings::Utf8CStr =
+        // SAFETY: valid UTF-8.
+        unsafe { nix_bindings::Utf8CStr::new_unchecked(c"jettison") };
+
+    const DOCS: &'static nix_bindings::Utf8CStr =
+        // SAFETY: valid UTF-8.
+        unsafe {
+            nix_bindings::Utf8CStr::new_unchecked(
+                c"nix-jettison's library functions.",
+            )
+        };
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe extern "C" fn jettison_lib(
-    _user_data: *mut c_void,
-    ctx: *mut sys::c_context,
-    state: *mut sys::EvalState,
-    _args: *mut *mut sys::Value,
-    ret: *mut sys::Value,
-) {
-    // Create an attrset builder with capacity for 4 attributes.
-    let builder = cpp::make_bindings_builder(state, 4);
+/// Doubles a number.
+#[derive(Clone)]
+struct Double;
 
-    // Integer attribute.
-    let value = cpp::alloc_value(state);
-    sys::init_int(ctx, value, 42);
-    cpp::bindings_builder_insert(builder, c"count".as_ptr(), value);
+impl PrimOp for Double {
+    const NAME: &'static nix_bindings::Utf8CStr =
+        // SAFETY: valid UTF-8.
+        unsafe {
+            nix_bindings::Utf8CStr::new_unchecked(c"jettison.double")
+        };
 
-    // Boolean attribute.
-    let value = cpp::alloc_value(state);
-    sys::init_bool(ctx, value, true);
-    cpp::bindings_builder_insert(builder, c"enabled".as_ptr(), value);
-
-    // Function attribute.
-    let mut double_args: [*const c_char; 2] = [c"n".as_ptr(), ptr::null()];
-    let double_primop = sys::alloc_primop(
-        ctx,
-        Some(double),
-        1,
-        c"double".as_ptr(),
-        double_args.as_mut_ptr(),
-        c"Double a number".as_ptr(),
-        ptr::null_mut(),
-    );
-    let value = cpp::alloc_value(state);
-    sys::init_primop(ctx, value, double_primop);
-    cpp::bindings_builder_insert(builder, c"double".as_ptr(), value);
-    sys::gc_decref(ctx, double_primop as *const c_void);
-
-    // String attribute.
-    let value = cpp::alloc_value(state);
-    sys::init_string(ctx, value, c"Hello from Rust!".as_ptr());
-    cpp::bindings_builder_insert(builder, c"message".as_ptr(), value);
-
-    // Finalize into ret.
-    cpp::make_attrs(ret, builder);
+    const DOCS: &'static nix_bindings::Utf8CStr =
+        // SAFETY: valid UTF-8.
+        unsafe {
+            nix_bindings::Utf8CStr::new_unchecked(c"Doubles a number.")
+        };
 }
 
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-#[allow(unsafe_op_in_unsafe_fn)]
-pub unsafe extern "C" fn nix_plugin_entry() {
-    let ctx = sys::c_context_create();
+struct DoubleArgs {
+    n: u8,
+}
 
-    let no_args: [*const c_char; 1] = [ptr::null()];
+impl Args for DoubleArgs {
+    const NAMES: &'static [*const core::ffi::c_char] =
+        &[c"n".as_ptr(), core::ptr::null()];
 
-    let primop = sys::alloc_primop(
-        ctx,
-        Some(jettison_lib),
-        0,
-        c"jettison".as_ptr(),
-        no_args.as_ptr() as *mut _,
-        c"nix-jettison's library functions".as_ptr(),
-        ptr::null_mut(),
-    );
-    sys::register_primop(ctx, primop);
-    sys::gc_decref(ctx, primop as *const c_void);
+    unsafe fn from_raw(
+        args: core::ptr::NonNull<*mut nix_bindings::sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        // SAFETY: up to caller
+        let n = unsafe { ctx.get_arg::<u8>(args, 0)? };
+        Ok(Self { n })
+    }
+}
 
-    sys::c_context_free(ctx);
+impl PrimOpFun for Jettison {
+    type Args = ();
+
+    fn call(&self, _args: (), _: &mut Context) -> impl Value + use<> {
+        LiteralAttrset::new(
+            (
+                // SAFETY: valid UTF-8.
+                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"count") },
+                // SAFETY: valid UTF-8.
+                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"enabled") },
+                // SAFETY: valid UTF-8.
+                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") },
+                // SAFETY: valid UTF-8.
+                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"message") },
+            ),
+            (42, true, Double, "Hello from Rust!"),
+        )
+    }
+}
+
+impl PrimOpFun for Double {
+    type Args = DoubleArgs;
+
+    fn call(&self, args: DoubleArgs, _: &mut Context) -> u8 {
+        args.n * 2
+    }
+}
+
+#[nix_bindings::entry]
+fn jettison(ctx: &mut Context<Entrypoint>) {
+    ctx.register_primop(Jettison)
 }
