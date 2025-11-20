@@ -140,6 +140,19 @@ pub trait Arg: Sized {
     ) -> Result<Self>;
 }
 
+impl Args for () {
+    const NAMES: &'static [*const c_char] = &[core::ptr::null()];
+
+    #[inline]
+    unsafe fn from_raw(
+        args: NonNull<*mut nix_bindings_sys::Value>,
+        _: &mut Context,
+    ) -> Result<Self> {
+        debug_assert! { unsafe { *args.offset(0).as_ptr() }.is_null() };
+        Ok(())
+    }
+}
+
 impl Arg for i64 {
     #[inline]
     unsafe fn try_from_value(
