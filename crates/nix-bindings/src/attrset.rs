@@ -6,6 +6,7 @@ use core::ptr::NonNull;
 use nix_bindings_sys as sys;
 
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
+use crate::primop::Namespace;
 use crate::value::AttrsetValue;
 
 /// TODO: docs.
@@ -61,10 +62,12 @@ pub trait Attrset: Sized {
     ///
     /// The caller must ensure that `dest` points to a valid, uninitialized
     /// `sys::Value` instance.
+    #[allow(clippy::too_many_arguments)]
     unsafe fn write_value(
         &self,
         idx: usize,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()>;
 }
@@ -169,18 +172,26 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
         &self,
         idx: usize,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        struct WriteValue<'ctx> {
+        struct WriteValue<'ctx, N> {
             dest: NonNull<sys::Value>,
+            namespace: N,
             ctx: &'ctx mut Context,
         }
-        impl FnOnceValue<'_, Result<()>> for WriteValue<'_> {
+        impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
             fn call(self, value: &impl Value) -> Result<()> {
-                unsafe { value.write(self.dest, self.ctx) }
+                unsafe {
+                    value.write_with_namespace(
+                        self.dest,
+                        self.namespace,
+                        self.ctx,
+                    )
+                }
             }
         }
-        self.values.with_value(idx, WriteValue { dest, ctx })
+        self.values.with_value(idx, WriteValue { dest, namespace, ctx })
     }
 }
 
@@ -215,9 +226,10 @@ impl<T: Attrset> Attrset for &T {
         &self,
         idx: usize,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { (*self).write_value(idx, dest, ctx) }
+        unsafe { (*self).write_value(idx, dest, namespace, ctx) }
     }
 }
 

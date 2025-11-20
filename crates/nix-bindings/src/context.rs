@@ -2,7 +2,6 @@
 
 use core::ffi::CStr;
 use core::ptr::NonNull;
-use std::borrow::Cow;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
@@ -22,7 +21,6 @@ pub struct Entrypoint {}
 /// TODO: docs.
 pub struct EvalState {
     inner: NonNull<sys::EvalState>,
-    namespace: Cow<'static, CStr>,
 }
 
 pub(crate) struct BindingsBuilder<'ctx> {
@@ -127,10 +125,9 @@ impl Context<EvalState> {
     pub(crate) fn write_primop(
         &mut self,
         primop: impl PrimOp,
+        namespace: impl Namespace,
         dest: NonNull<sys::Value>,
     ) -> Result<()> {
-        let namespace = &self.state.namespace;
-
         self.inner
             .with_primop_ptr(primop, namespace, |ctx, primop_ptr| {
                 ctx.with_raw(|raw_ctx| unsafe {
@@ -192,11 +189,8 @@ impl<State> Context<State> {
 
 impl EvalState {
     #[inline]
-    pub(crate) fn new(
-        inner: NonNull<sys::EvalState>,
-        namespace: Cow<'static, CStr>,
-    ) -> Self {
-        Self { inner, namespace }
+    pub(crate) fn new(inner: NonNull<sys::EvalState>) -> Self {
+        Self { inner }
     }
 }
 

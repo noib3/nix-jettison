@@ -14,6 +14,7 @@ use crate::prelude::{
     Result,
     ToError,
 };
+use crate::primop::{Namespace, PoppableNamespace};
 
 /// TODO: docs.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -64,6 +65,19 @@ pub trait Value: Sized {
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()>;
+
+    /// TODO: docs.
+    #[doc(hidden)]
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
+        dest: NonNull<sys::Value>,
+        #[expect(unused_variables)] namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        debug_assert_ne!(self.kind(), ValueKind::Attrset);
+        unsafe { self.write(dest, ctx) }
+    }
 }
 
 /// A trait for types that can be fallibly converted into [`Value`]s.
@@ -245,11 +259,23 @@ impl<T: Value> Value for Option<T> {
     #[inline]
     unsafe fn write(
         &self,
+        _: NonNull<sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        unreachable!()
+    }
+
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         match self {
-            Some(value) => unsafe { value.write(dest, ctx) },
+            Some(value) => unsafe {
+                value.write_with_namespace(dest, namespace, ctx)
+            },
             None => unsafe { ().write(dest, ctx) },
         }
     }
@@ -258,16 +284,27 @@ impl<T: Value> Value for Option<T> {
 impl<P: PrimOp + Clone> Value for P {
     #[inline]
     fn kind(&self) -> ValueKind {
+        // FIXME: this is not always correct.
         ValueKind::Function
     }
 
     #[inline]
     unsafe fn write(
         &self,
+        _: NonNull<sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        unreachable!()
+    }
+
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        ctx.write_primop(self.clone(), dest)
+        ctx.write_primop(self.clone(), namespace, dest)
     }
 }
 
@@ -280,10 +317,19 @@ impl<T: Attrset> Value for AttrsetValue<T> {
         ValueKind::Attrset
     }
 
-    #[inline]
     unsafe fn write(
         &self,
+        _: NonNull<sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        unreachable!()
+    }
+
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
         dest: NonNull<sys::Value>,
+        mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         let Self(attrset) = self;
@@ -293,9 +339,11 @@ impl<T: Attrset> Value for AttrsetValue<T> {
             let mut builder = ctx.make_bindings_builder(len)?;
             for idx in 0..len {
                 let key = attrset.get_key_as_c_str(idx);
+                let new_namespace = namespace.push(key);
                 builder.insert(key, |dest, ctx| {
-                    attrset.write_value(idx, dest, ctx)
+                    attrset.write_value(idx, dest, new_namespace, ctx)
                 })?;
+                namespace = new_namespace.pop();
             }
             builder.build(dest)
         }
@@ -311,13 +359,22 @@ where
         ValueKind::Attrset
     }
 
-    #[inline]
     unsafe fn write(
         &self,
-        dest: NonNull<nix_bindings_sys::Value>,
+        _: NonNull<sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        unreachable!()
+    }
+
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.into_value().write(dest, ctx) }
+        unsafe { self.into_value().write_with_namespace(dest, namespace, ctx) }
     }
 }
 
