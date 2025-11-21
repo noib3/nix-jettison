@@ -8,7 +8,7 @@
 
 use core::ffi::c_char;
 
-use nix_bindings_sys::{BindingsBuilder, EvalState, Value};
+use nix_bindings_sys::{BindingsBuilder, EvalState, ListBuilder, Value};
 
 // Attrsets.
 unsafe extern "C" {
@@ -31,6 +31,29 @@ unsafe extern "C" {
     ///
     /// This frees the builder automatically.
     pub fn make_attrs(ret: *mut Value, builder: *mut BindingsBuilder);
+}
+
+// Lists.
+unsafe extern "C" {
+    /// Create a list builder with the specified size.
+    ///
+    /// This is what `nix_make_list_builder` SHOULD do, but it segfaults.
+    pub fn make_list_builder(
+        state: *mut EvalState,
+        size: usize,
+    ) -> *mut ListBuilder;
+
+    /// Insert a value at the given index in the list builder.
+    pub fn list_builder_insert(
+        builder: *mut ListBuilder,
+        index: usize,
+        value: *mut Value,
+    );
+
+    /// Finalize the list builder into a list value.
+    ///
+    /// This frees the builder automatically.
+    pub fn make_list(ret: *mut Value, builder: *mut ListBuilder);
 }
 
 // Values.

@@ -23,9 +23,15 @@ pub struct EvalState {
     inner: NonNull<sys::EvalState>,
 }
 
-pub(crate) struct BindingsBuilder<'ctx> {
+pub(crate) struct AttrsetBuilder<'ctx> {
     inner: NonNull<sys::BindingsBuilder>,
     context: &'ctx mut Context,
+}
+
+pub(crate) struct ListBuilder<'ctx> {
+    inner: NonNull<sys::ListBuilder>,
+    context: &'ctx mut Context,
+    index: usize,
 }
 
 pub(crate) struct ContextInner {
@@ -79,12 +85,12 @@ impl Context<EvalState> {
         )
     }
 
-    /// Creates a new [`BindingsBuilder`] with the given capacity.
+    /// Creates a new [`AttrsetBuilder`] with the given capacity.
     #[inline]
-    pub(crate) fn make_bindings_builder(
+    pub(crate) fn make_attrset_builder(
         &mut self,
         capacity: usize,
-    ) -> Result<BindingsBuilder<'_>> {
+    ) -> Result<AttrsetBuilder<'_>> {
         unsafe {
             let builder_ptr = cpp::make_bindings_builder(
                 self.state.inner.as_ptr(),
@@ -92,11 +98,34 @@ impl Context<EvalState> {
             );
             match NonNull::new(builder_ptr) {
                 Some(builder_ptr) => {
-                    Ok(BindingsBuilder { inner: builder_ptr, context: self })
+                    Ok(AttrsetBuilder { inner: builder_ptr, context: self })
                 },
                 None => Err(self.make_error((
                     ErrorKind::Overflow,
-                    c"failed to create BindingsBuilder",
+                    c"failed to create AttrsetBuilder",
+                ))),
+            }
+        }
+    }
+
+    /// Creates a new [`ListBuilder`] with the given capacity.
+    #[inline]
+    pub(crate) fn make_list_builder(
+        &mut self,
+        capacity: usize,
+    ) -> Result<ListBuilder<'_>> {
+        unsafe {
+            let builder_ptr = cpp::make_list_builder(
+                self.state.inner.as_ptr(),
+                capacity,
+            );
+            match NonNull::new(builder_ptr) {
+                Some(builder_ptr) => {
+                    Ok(ListBuilder { inner: builder_ptr, context: self, index: 0 })
+                },
+                None => Err(self.make_error((
+                    ErrorKind::Overflow,
+                    c"failed to create ListBuilder",
                 ))),
             }
         }
@@ -190,7 +219,7 @@ impl EvalState {
     }
 }
 
-impl<'ctx> BindingsBuilder<'ctx> {
+impl<'ctx> AttrsetBuilder<'ctx> {
     #[inline]
     pub(crate) fn insert(
         &mut self,
@@ -203,7 +232,7 @@ impl<'ctx> BindingsBuilder<'ctx> {
             let dest_ptr = NonNull::new(dest_raw).ok_or_else(|| {
                 self.context.make_error((
                     ErrorKind::Overflow,
-                    c"failed to allocate Value for BindingsBuilder insert",
+                    c"failed to allocate Value for AttrsetBuilder insert",
                 ))
             })?;
 
@@ -223,6 +252,40 @@ impl<'ctx> BindingsBuilder<'ctx> {
     pub(crate) fn build(self, dest: NonNull<sys::Value>) -> Result<()> {
         unsafe {
             cpp::make_attrs(dest.as_ptr(), self.inner.as_ptr());
+            Ok(())
+        }
+    }
+}
+
+impl<'ctx> ListBuilder<'ctx> {
+    #[inline]
+    pub(crate) fn insert(
+        &mut self,
+        write_value: impl FnOnce(NonNull<sys::Value>, &mut Context) -> Result<()>,
+    ) -> Result<()> {
+        unsafe {
+            let dest_raw = cpp::alloc_value(self.context.state.inner.as_ptr());
+
+            let dest_ptr = NonNull::new(dest_raw).ok_or_else(|| {
+                self.context.make_error((
+                    ErrorKind::Overflow,
+                    c"failed to allocate Value for ListBuilder insert",
+                ))
+            })?;
+
+            write_value(dest_ptr, self.context)?;
+
+            cpp::list_builder_insert(self.inner.as_ptr(), self.index, dest_ptr.as_ptr());
+            self.index += 1;
+
+            Ok(())
+        }
+    }
+
+    #[inline]
+    pub(crate) fn build(self, dest: NonNull<sys::Value>) -> Result<()> {
+        unsafe {
+            cpp::make_list(dest.as_ptr(), self.inner.as_ptr());
             Ok(())
         }
     }

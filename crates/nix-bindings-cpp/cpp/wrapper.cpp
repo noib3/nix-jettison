@@ -30,3 +30,19 @@ extern "C" Value* alloc_value(EvalState* state) {
 extern "C" void force_value(EvalState* state, Value* value) {
     state->forceValue(*value, nix::noPos);
 }
+
+// Lists.
+
+extern "C" nix::ListBuilder* make_list_builder(EvalState* state, size_t size) {
+    auto* builder = new nix::ListBuilder(state->buildList(size));
+    return builder;
+}
+
+extern "C" void list_builder_insert(nix::ListBuilder* builder, size_t index, Value* value) {
+    (*builder)[index] = value;
+}
+
+extern "C" void make_list(Value* v, nix::ListBuilder* builder) {
+    v->mkList(*builder);
+    delete builder;
+}

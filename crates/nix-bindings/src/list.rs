@@ -1,11 +1,13 @@
 //! TODO: docs.
 
+use alloc::ffi::CString;
+use alloc::string::ToString;
 use core::ops::Deref;
 use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::namespace::Namespace;
+use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Value, ValueKind};
 use crate::value::{FnOnceValue, Values};
 
@@ -230,11 +232,26 @@ impl<T: List> Value for ListValue<T> {
     #[inline]
     unsafe fn write_with_namespace(
         &self,
-        _dest: NonNull<sys::Value>,
-        _namespace: impl Namespace,
-        _ctx: &mut Context,
+        dest: NonNull<sys::Value>,
+        mut namespace: impl Namespace,
+        ctx: &mut Context,
     ) -> Result<()> {
-        let Self(_list) = self;
-        todo!();
+        let Self(list) = self;
+
+        unsafe {
+            let len = list.len();
+            let mut builder = ctx.make_list_builder(len)?;
+            for idx in 0..len {
+                // FIXME: avoid this allocation.
+                let idx_cstr =
+                    CString::new(idx.to_string()).expect("no NUL byte");
+                let new_namespace = namespace.push(&idx_cstr);
+                builder.insert(|dest, ctx| {
+                    list.write_value(idx, dest, new_namespace, ctx)
+                })?;
+                namespace = new_namespace.pop();
+            }
+            builder.build(dest)
+        }
     }
 }

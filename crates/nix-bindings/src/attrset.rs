@@ -280,7 +280,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
 
         unsafe {
             let len = attrset.len();
-            let mut builder = ctx.make_bindings_builder(len)?;
+            let mut builder = ctx.make_attrset_builder(len)?;
             for idx in 0..len {
                 let key = attrset.get_key_as_c_str(idx);
                 let new_namespace = namespace.push(key);
