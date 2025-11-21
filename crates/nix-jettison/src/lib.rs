@@ -3,31 +3,12 @@
 use nix_bindings::prelude::*;
 
 /// nix-jettison's library functions.
+#[derive(nix_bindings::PrimOp)]
 struct Jettison;
 
-impl PrimOp for Jettison {
-    const DOCS: &'static core::ffi::CStr =
-        c"nix-jettison's library functions.";
-
-    const NAME: &'static nix_bindings::Utf8CStr =
-        // SAFETY: valid UTF-8.
-        unsafe { nix_bindings::Utf8CStr::new_unchecked(c"jettison") };
-
-    const NEW: &'static Self = &Self;
-}
-
 /// Doubles a number.
+#[derive(nix_bindings::PrimOp)]
 struct Double;
-
-impl PrimOp for Double {
-    const NAME: &'static nix_bindings::Utf8CStr =
-        // SAFETY: valid UTF-8.
-        unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") };
-
-    const DOCS: &'static core::ffi::CStr = c"Doubles a number.";
-
-    const NEW: &'static Self = &Self;
-}
 
 struct DoubleArgs {
     n: i32,

@@ -1,6 +1,7 @@
 //! TODO: docs.
 
 mod entry;
+mod primop;
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
@@ -11,4 +12,11 @@ pub fn entry(attr: TokenStream, item: TokenStream) -> TokenStream {
     entry::entry(attr, item)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// TODO: docs
+#[proc_macro_derive(PrimOp)]
+pub fn primop(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    primop::primop(input).unwrap_or_else(syn::Error::into_compile_error).into()
 }
