@@ -1,6 +1,9 @@
 //! TODO: docs.
 
 #![allow(clippy::undocumented_unsafe_blocks)]
+#![no_std]
+
+extern crate alloc;
 
 pub mod attrset;
 pub mod context;

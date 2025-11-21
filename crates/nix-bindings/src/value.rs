@@ -1,8 +1,8 @@
 //! TODO: docs.
 
+use alloc::ffi::CString;
 use core::ffi::CStr;
 use core::ptr::NonNull;
-use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
@@ -231,7 +231,7 @@ impl Value for &str {
     }
 }
 
-impl Value for String {
+impl Value for alloc::string::String {
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::String

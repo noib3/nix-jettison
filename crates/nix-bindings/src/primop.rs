@@ -1,8 +1,9 @@
 //! TODO: docs.
 
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
 use core::ffi::{CStr, c_char, c_void};
 use core::ptr::NonNull;
-use std::borrow::Cow;
 
 use nix_bindings_sys as sys;
 

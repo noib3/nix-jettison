@@ -1,10 +1,11 @@
 //! TODO: docs.
 
+use alloc::borrow::Cow;
+use alloc::ffi::CString;
+use alloc::string::ToString;
 use core::ffi::CStr;
 use core::fmt;
 use core::marker::PhantomData;
-use std::borrow::Cow;
-use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
@@ -183,7 +184,7 @@ impl ToError for TypeMismatchError {
     }
 }
 
-impl ToError for std::ffi::NulError {
+impl ToError for alloc::ffi::NulError {
     #[inline]
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
         // SAFETY: NulError's Display impl doesn't contain any NUL bytes.

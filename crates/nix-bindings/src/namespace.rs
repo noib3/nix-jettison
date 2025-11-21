@@ -1,6 +1,6 @@
+use alloc::borrow::Cow;
+use alloc::ffi::CString;
 use core::ffi::CStr;
-use std::borrow::Cow;
-use std::ffi::CString;
 
 use crate::Utf8CStr;
 
