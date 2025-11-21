@@ -18,7 +18,7 @@ pub trait PrimOp: PrimOpFun + Sized {
     const NAME: &'static Utf8CStr;
 
     /// TODO: docs.
-    const DOCS: &'static Utf8CStr;
+    const DOCS: &'static CStr;
 
     #[doc(hidden)]
     #[inline]
@@ -42,7 +42,7 @@ pub trait PrimOp: PrimOpFun + Sized {
                 Self::Args::ARITY.into(),
                 user_data.namespace.as_ptr(),
                 Self::Args::NAMES.as_ptr().cast_mut(),
-                Self::DOCS.as_c_str().as_ptr(),
+                Self::DOCS.as_ptr(),
                 // This is a leak, but it's ok because it only happens once in
                 // the lifetime of the plugin.
                 Box::into_raw(Box::new(user_data)).cast(),

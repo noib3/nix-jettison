@@ -10,13 +10,8 @@ impl PrimOp for Jettison {
         // SAFETY: valid UTF-8.
         unsafe { nix_bindings::Utf8CStr::new_unchecked(c"jettison") };
 
-    const DOCS: &'static nix_bindings::Utf8CStr =
-        // SAFETY: valid UTF-8.
-        unsafe {
-            nix_bindings::Utf8CStr::new_unchecked(
-                c"nix-jettison's library functions.",
-            )
-        };
+    const DOCS: &'static core::ffi::CStr =
+        c"nix-jettison's library functions.";
 }
 
 /// Doubles a number.
@@ -28,11 +23,7 @@ impl PrimOp for Double {
         // SAFETY: valid UTF-8.
         unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") };
 
-    const DOCS: &'static nix_bindings::Utf8CStr =
-        // SAFETY: valid UTF-8.
-        unsafe {
-            nix_bindings::Utf8CStr::new_unchecked(c"Doubles a number.")
-        };
+    const DOCS: &'static core::ffi::CStr = c"Doubles a number.";
 }
 
 struct DoubleArgs {
@@ -57,11 +48,8 @@ impl PrimOpFun for Jettison {
     type Args = ();
 
     fn call(&self, _args: (), _: &mut Context) -> impl Value + use<> {
-        let nested = LiteralAttrset::new(
-            // SAFETY: valid UTF-8.
-            (unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") },),
-            (Double,),
-        );
+        let nested =
+            LiteralAttrset::new(({ <Double as PrimOp>::NAME },), (Double,));
 
         LiteralAttrset::new(
             (
