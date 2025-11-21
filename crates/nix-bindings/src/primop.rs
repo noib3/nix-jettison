@@ -30,20 +30,19 @@ pub trait PrimOp: PrimOpImpl + Sized + 'static {
         namespace: Cow<'static, CStr>,
         ctx: NonNull<sys::c_context>,
     ) -> *mut sys::PrimOp {
-        let this = Self::NEW;
+        let primop = Self::NEW;
 
         unsafe {
             sys::alloc_primop(
                 ctx.as_ptr(),
-                this.c_fun(),
-                this.arity().into(),
+                primop.c_fun(),
+                primop.arity().into(),
                 namespace.as_ptr(),
-                this.arg_names().as_ptr().cast_mut(),
+                primop.arg_names().as_ptr().cast_mut(),
                 Self::DOCS.as_ptr(),
                 // This is a leak, but it's ok because it only happens once in
                 // the lifetime of the plugin.
-                Box::into_raw(Box::new(UserData { primop: this, namespace }))
-                    .cast(),
+                Box::into_raw(Box::new(UserData { primop, namespace })).cast(),
             )
         }
     }
