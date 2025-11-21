@@ -23,7 +23,7 @@ impl Constant for Jettison {
             nested: attrset! {
                 { <Double as PrimOp>::NAME }: Double,
             },
-            message: c"Hello from Rust!",
+            message: "Hello from Rust!",
         }
     }
 }
