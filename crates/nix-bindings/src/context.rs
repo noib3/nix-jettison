@@ -36,9 +36,8 @@ impl Context<Entrypoint> {
     /// Adds the given primop to the `builtins` attribute set.
     #[track_caller]
     #[inline]
-    pub fn register_primop<P: PrimOp>(&mut self, primop: P) {
-        let res = self.inner.with_primop_ptr(
-            primop,
+    pub fn register_primop<P: PrimOp>(&mut self) {
+        let res = self.inner.with_primop_ptr::<P, _>(
             P::NAME,
             |inner, primop_ptr| {
                 inner.with_raw(|raw_ctx| unsafe {
@@ -120,14 +119,13 @@ impl Context<EvalState> {
 
     /// Initializes the destination value with the given primop.
     #[inline]
-    pub(crate) fn write_primop(
+    pub(crate) fn write_primop<P: PrimOp>(
         &mut self,
-        primop: impl PrimOp,
         namespace: impl Namespace,
         dest: NonNull<sys::Value>,
     ) -> Result<()> {
         self.inner
-            .with_primop_ptr(primop, namespace, |ctx, primop_ptr| {
+            .with_primop_ptr::<P, _>(namespace, |ctx, primop_ptr| {
                 ctx.with_raw(|raw_ctx| unsafe {
                     sys::init_primop(
                         raw_ctx,
@@ -286,14 +284,13 @@ impl ContextInner {
     #[inline]
     fn with_primop_ptr<P: PrimOp, T>(
         &mut self,
-        primop: P,
         namespace: impl Namespace,
         fun: impl FnOnce(&mut Self, NonNull<sys::PrimOp>) -> T,
     ) -> Result<T> {
         // TODO: alloc() is implemented by leaking, so calling this repeatedly
         // will cause memory leaks. Fix this.
-        let primop_raw =
-            self.with_ptr(|ctx| unsafe { primop.alloc(namespace, ctx) })?;
+        let primop_raw = self
+            .with_ptr(|ctx| unsafe { P::alloc(namespace.display(), ctx) })?;
 
         let primop_ptr = NonNull::new(primop_raw).ok_or_else(|| {
             self.make_error((

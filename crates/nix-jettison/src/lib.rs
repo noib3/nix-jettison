@@ -13,10 +13,10 @@ impl PrimOp for Jettison {
         // SAFETY: valid UTF-8.
         unsafe { nix_bindings::Utf8CStr::new_unchecked(c"jettison") };
 
+    const NEW: &'static Self = &Self;
 }
 
 /// Doubles a number.
-#[derive(Clone)]
 struct Double;
 
 impl PrimOp for Double {
@@ -25,6 +25,8 @@ impl PrimOp for Double {
         unsafe { nix_bindings::Utf8CStr::new_unchecked(c"double") };
 
     const DOCS: &'static core::ffi::CStr = c"Doubles a number.";
+
+    const NEW: &'static Self = &Self;
 }
 
 struct DoubleArgs {
@@ -61,20 +63,20 @@ impl Constant for Jettison {
                 // SAFETY: valid UTF-8.
                 unsafe { nix_bindings::Utf8CStr::new_unchecked(c"message") },
             ),
-            (42, true, nested, "Hello from Rust!"),
+            (42, true, nested, c"Hello from Rust!"),
         )
     }
 }
 
-impl PrimOpFun for Double {
+impl Function for Double {
     type Args = DoubleArgs;
 
-    fn call(&self, args: DoubleArgs, _: &mut Context) -> u8 {
+    fn call(args: DoubleArgs, _: &mut Context) -> i32 {
         args.n * 2
     }
 }
 
 #[nix_bindings::entry]
 fn jettison(ctx: &mut Context<Entrypoint>) {
-    ctx.register_primop(Jettison)
+    ctx.register_primop::<Jettison>()
 }
