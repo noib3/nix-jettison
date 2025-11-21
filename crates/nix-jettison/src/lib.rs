@@ -17,22 +17,14 @@ struct DoubleArgs {
 
 impl Constant for Jettison {
     fn value() -> impl Value {
-        let nested =
-            LiteralAttrset::new(({ <Double as PrimOp>::NAME },), (Double,));
-
-        LiteralAttrset::new(
-            (
-                // SAFETY: valid UTF-8.
-                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"count") },
-                // SAFETY: valid UTF-8.
-                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"enabled") },
-                // SAFETY: valid UTF-8.
-                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"nested") },
-                // SAFETY: valid UTF-8.
-                unsafe { nix_bindings::Utf8CStr::new_unchecked(c"message") },
-            ),
-            (42, true, nested, c"Hello from Rust!"),
-        )
+        attrset! {
+            count: 42,
+            enabled: true,
+            nested: attrset! {
+                { <Double as PrimOp>::NAME }: Double,
+            },
+            message: c"Hello from Rust!",
+        }
     }
 }
 

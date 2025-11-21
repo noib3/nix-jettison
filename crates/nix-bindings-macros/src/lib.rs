@@ -1,6 +1,7 @@
 //! TODO: docs.
 
 mod args;
+mod attrset;
 mod entry;
 mod primop;
 use proc_macro::TokenStream;
@@ -27,4 +28,12 @@ pub fn entry(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn primop(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
     primop::primop(input).unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// TODO: docs
+#[proc_macro]
+pub fn attrset(input: TokenStream) -> TokenStream {
+    attrset::attrset(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
