@@ -1,4 +1,6 @@
-use proc_macro2::TokenStream;
+use std::ffi::CString;
+
+use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields};
@@ -12,18 +14,10 @@ pub(crate) fn primop(input: DeriveInput) -> syn::Result<TokenStream> {
 
     Ok(quote! {
         impl ::nix_bindings::primop::PrimOp for #struct_name {
-            const DOCS: &'static ::core::ffi::CStr = unsafe {
-                ::core::ffi::CStr::from_bytes_with_nul_unchecked(
-                    concat!(#docs, "\0").as_bytes()
-                )
-            };
+            const DOCS: &'static ::core::ffi::CStr = #docs;
 
             const NAME: &'static ::nix_bindings::Utf8CStr = unsafe {
-                ::nix_bindings::Utf8CStr::new_unchecked(
-                    ::core::ffi::CStr::from_bytes_with_nul_unchecked(
-                        concat!(#camel_case_name, "\0").as_bytes()
-                    )
-                )
+                ::nix_bindings::Utf8CStr::new_unchecked(#camel_case_name)
             };
 
             const NEW: &'static Self = &#constructor;
@@ -33,19 +27,19 @@ pub(crate) fn primop(input: DeriveInput) -> syn::Result<TokenStream> {
 
 #[inline]
 fn camel_case_name(input: &DeriveInput) -> syn::Result<impl ToTokens> {
-    let mut struct_name = input.ident.to_string();
+    let mut struct_name = input.ident.to_string().into_bytes();
 
-    if struct_name.starts_with(|ch: char| ch.is_ascii_uppercase()) {
-        // SAFETY: we just checked that the first byte is ASCII.
-        let first_byte = unsafe { &mut struct_name.as_bytes_mut()[0] };
+    if let Some(first_byte) = struct_name.get_mut(0)
+        && first_byte.is_ascii_uppercase()
+    {
         *first_byte = first_byte.to_ascii_lowercase();
-        Ok(struct_name)
-    } else {
-        Err(syn::Error::new(
-            input.ident.span(),
-            "PrimOp struct name must UpperCamelCase",
-        ))
     }
+
+    let struct_name = CString::new(struct_name).map_err(|_| {
+        syn::Error::new(input.ident.span(), "struct name contains NUL byte")
+    })?;
+
+    Ok(Literal::c_string(&struct_name))
 }
 
 #[inline]
@@ -117,6 +111,9 @@ fn docs(input: &DeriveInput) -> syn::Result<impl ToTokens> {
             "PrimOp derive requires a doc comment on the struct",
         ))
     } else {
-        Ok(docs)
+        // SAFETY: we checked for NUL bytes while iterating over the
+        // attributes.
+        let docs = unsafe { CString::from_vec_unchecked(docs.into_bytes()) };
+        Ok(Literal::c_string(&docs))
     }
 }

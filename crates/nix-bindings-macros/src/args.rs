@@ -63,7 +63,7 @@ fn named_fields(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
             len if len > nix_bindings_sys::MAX_PRIMOP_ARITY as usize => {
                 Err(syn::Error::new(
                     input.span(),
-                    format!(
+                    format_args!(
                         "In Nix, functions can have at most {} arguments, \
                          but this struct has {len} fields",
                         nix_bindings_sys::MAX_PRIMOP_ARITY
@@ -87,10 +87,10 @@ fn args_list(fields: &FieldsNamed) -> syn::Result<impl ToTokens> {
         .map(|field| {
             let ident = field.ident.as_ref().expect("fields are named");
             let name = ident.to_string();
-            let name = CString::new(name).map_err(|e| {
+            let name = CString::new(name).map_err(|err| {
                 syn::Error::new(
                     ident.span(),
-                    format!("invalid field name: {}", e),
+                    format_args!("invalid field name: {err}"),
                 )
             })?;
             let c_str = Literal::c_string(&name);
