@@ -3,7 +3,6 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::ptr::NonNull;
 use std::borrow::Cow;
-use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
@@ -13,58 +12,67 @@ use crate::error::{Result, TryFromI64Error, TypeMismatchError};
 use crate::value::{TryIntoValue, Value, ValueKind};
 
 /// TODO: docs.
-pub trait PrimOp: PrimOpFun + Sized {
+pub trait PrimOp: PrimOpImpl + Sized + 'static {
+    /// TODO: docs.
+    const DOCS: &'static CStr;
+
     /// TODO: docs.
     const NAME: &'static Utf8CStr;
 
     /// TODO: docs.
-    const DOCS: &'static CStr;
+    #[doc(hidden)]
+    const NEW: &'static Self;
 
     #[doc(hidden)]
     #[inline]
     unsafe fn alloc(
-        self,
-        namespace: impl Namespace,
+        namespace: Cow<'static, CStr>,
         ctx: NonNull<sys::c_context>,
     ) -> *mut sys::PrimOp {
-        #[allow(path_statements)]
-        Self::Args::CHECKS;
-
-        let user_data = UserData {
-            primop: Box::new(self),
-            namespace: namespace.display(),
-        };
+        let this = Self::NEW;
 
         unsafe {
             sys::alloc_primop(
                 ctx.as_ptr(),
-                Self::c_fun(),
-                Self::Args::ARITY.into(),
-                user_data.namespace.as_ptr(),
-                Self::Args::NAMES.as_ptr().cast_mut(),
+                this.c_fun(),
+                this.arity().into(),
+                namespace.as_ptr(),
+                this.arg_names().as_ptr().cast_mut(),
                 Self::DOCS.as_ptr(),
                 // This is a leak, but it's ok because it only happens once in
                 // the lifetime of the plugin.
-                Box::into_raw(Box::new(user_data)).cast(),
+                Box::into_raw(Box::new(UserData { primop: this, namespace }))
+                    .cast(),
             )
         }
     }
 }
 
 /// TODO: docs.
-pub trait PrimOpFun: 'static {
-    /// TODO: docs.
-    type Args: Args;
-
-    /// TODO: docs.
-    fn call<'a>(
-        &'a self,
-        args: Self::Args,
-        ctx: &mut Context,
-    ) -> impl TryIntoValue + use<'a, Self>;
+pub trait PrimOpImpl {
+    #[doc(hidden)]
+    fn arg_names(&self) -> &'static [*const c_char];
 
     #[doc(hidden)]
-    fn c_fun() -> sys::PrimOpFun {
+    fn arity(&self) -> u8;
+
+    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::ptr_arg,
+        reason = "&Cow<'static, CStr> implements Namespace, &CStr doesn't"
+    )]
+    #[doc(hidden)]
+    unsafe fn call(
+        &self,
+        args: NonNull<*mut sys::Value>,
+        ret: NonNull<sys::Value>,
+        namespace: &Cow<'static, CStr>,
+        ctx: &mut Context,
+    );
+
+    #[doc(hidden)]
+    #[inline]
+    fn c_fun(&self) -> sys::PrimOpFun {
         unsafe extern "C" fn wrapper(
             user_data: *mut c_void,
             ctx: *mut sys::c_context,
@@ -104,7 +112,7 @@ pub trait PrimOpFun: 'static {
                     ret,
                     &user_data.namespace,
                     &mut Context::new(ctx, EvalState::new(state)),
-                )
+                );
             }
         }
 
@@ -113,19 +121,21 @@ pub trait PrimOpFun: 'static {
 }
 
 /// TODO: docs.
-pub trait Namespace: Copy {
-    #[doc(hidden)]
-    fn push(self, name: &CStr) -> impl PoppableNamespace<Self>;
-
-    #[doc(hidden)]
-    fn display(self) -> Cow<'static, CStr>;
+pub trait Constant {
+    /// TODO: docs.
+    fn value() -> impl Value;
 }
 
-/// The type of namespace returned by [`Namespace::push`].
-pub trait PoppableNamespace<Orig: Namespace>: Namespace {
-    /// Removes the last name added by [`Namespace::push`], returning the
-    /// original namespace.
-    fn pop(self) -> Orig;
+/// TODO: docs.
+pub trait Function {
+    /// TODO: docs.
+    type Args: Args;
+
+    /// TODO: docs.
+    fn call(
+        args: Self::Args,
+        ctx: &mut Context,
+    ) -> impl TryIntoValue + use<Self>;
 }
 
 /// TODO: docs.
@@ -165,75 +175,62 @@ pub trait Arg: Sized {
     ) -> Result<Self>;
 }
 
-/// A [`Namespace`] implementation that concatenates two namespaces by adding
-/// a `.` between them.
-#[derive(Copy, Clone)]
-struct ConcatNamespace<Left, Right>(Left, Right);
-
 /// The user data given as the last argument to [`sys::alloc_primop`].
 struct UserData {
     /// The type-erased primop.
-    primop: Box<dyn DynCompatPrimOpFun>,
+    primop: &'static dyn PrimOpImpl,
 
     /// The namespace given to `PrimOp::alloc`.
     namespace: Cow<'static, CStr>,
 }
 
-impl Namespace for &'static Utf8CStr {
-    #[inline]
-    fn display(self) -> Cow<'static, CStr> {
-        Cow::Borrowed(self.as_c_str())
-    }
+impl<C: Constant> Function for C {
+    type Args = NoArgs;
 
     #[inline]
-    fn push(self, name: &CStr) -> impl PoppableNamespace<Self> {
-        ConcatNamespace(self, name)
+    fn call(_: NoArgs, _: &mut Context) -> impl Value + use<C> {
+        C::value()
     }
 }
 
-impl Namespace for &Cow<'static, CStr> {
-    #[inline]
-    fn display(self) -> Cow<'static, CStr> {
-        self.clone()
+impl<F: Function> PrimOpImpl for F {
+    #[inline(always)]
+    fn arg_names(&self) -> &'static [*const c_char] {
+        F::Args::NAMES
+    }
+
+    #[inline(always)]
+    fn arity(&self) -> u8 {
+        F::Args::ARITY
     }
 
     #[inline]
-    fn push(self, name: &CStr) -> impl PoppableNamespace<Self> {
-        ConcatNamespace(self, name)
-    }
-}
+    unsafe fn call(
+        &self,
+        args: NonNull<*mut nix_bindings_sys::Value>,
+        ret: NonNull<nix_bindings_sys::Value>,
+        namespace: &Cow<'static, CStr>,
+        ctx: &mut Context,
+    ) {
+        #[allow(path_statements)]
+        F::Args::CHECKS;
 
-impl<L: Namespace, R: AsRef<CStr> + Copy> Namespace for ConcatNamespace<L, R> {
-    #[inline]
-    fn display(self) -> Cow<'static, CStr> {
-        let Self(left, right) = self;
-        let mut vec = left.display().into_owned().into_bytes();
-        vec.push(b'.');
-        vec.extend_from_slice(right.as_ref().to_bytes());
-        // SAFETY: neither CString::into_bytes() nor CStr::to_bytes() include
-        // the terminating NUL byte, so the resulting vector is guaranteed to
-        // not contain any interior NUL bytes.
-        Cow::Owned(unsafe { CString::from_vec_unchecked(vec) })
-    }
+        let mut try_block = || unsafe {
+            let args = <Self as Function>::Args::from_raw(args, ctx)?;
+            let val = Self::call(args, ctx).try_into_value(ctx)?;
+            val.write_with_namespace(ret, namespace, ctx)
+        };
 
-    #[inline]
-    fn push(self, name: &CStr) -> impl PoppableNamespace<Self> {
-        ConcatNamespace(self, name)
-    }
-}
-
-impl<L: Namespace, R> PoppableNamespace<L> for ConcatNamespace<L, R>
-where
-    Self: Namespace,
-{
-    #[inline]
-    fn pop(self) -> L {
-        let Self(left, _) = self;
-        left
+        // Errors are handled by setting the `Context::inner` field, so we
+        // can ignore the result here.
+        let _ = try_block();
     }
 }
 
-impl Args for () {
+#[doc(hidden)]
+pub struct NoArgs;
+
+impl Args for NoArgs {
     const NAMES: &'static [*const c_char] = &[core::ptr::null()];
 
     #[inline]
@@ -242,7 +239,7 @@ impl Args for () {
         _: &mut Context,
     ) -> Result<Self> {
         debug_assert! { unsafe { *args.offset(0).as_ptr() }.is_null() };
-        Ok(())
+        Ok(Self)
     }
 }
 
@@ -295,40 +292,3 @@ impl_arg_for_int!(u32);
 impl_arg_for_int!(u64);
 impl_arg_for_int!(u128);
 impl_arg_for_int!(usize);
-
-/// A dyn-compatible version of [`PrimOpFun`] that allows us to type-erase
-/// [`PrimOp`]s in [`PrimOp::alloc`].
-trait DynCompatPrimOpFun: 'static {
-    #[allow(clippy::too_many_arguments)]
-    #[allow(
-        clippy::ptr_arg,
-        reason = "&Cow<'static, CStr> implements Namespace, &CStr doesn't"
-    )]
-    unsafe fn call(
-        &self,
-        args: NonNull<*mut sys::Value>,
-        ret: NonNull<sys::Value>,
-        namespace: &Cow<'static, CStr>,
-        ctx: &mut Context,
-    );
-}
-
-impl<P: PrimOpFun> DynCompatPrimOpFun for P {
-    unsafe fn call(
-        &self,
-        args: NonNull<*mut sys::Value>,
-        ret: NonNull<sys::Value>,
-        namespace: &Cow<'static, CStr>,
-        ctx: &mut Context,
-    ) {
-        let mut try_block = || unsafe {
-            let args = <Self as PrimOpFun>::Args::from_raw(args, ctx)?;
-            let val = PrimOpFun::call(self, args, ctx).try_into_value(ctx)?;
-            val.write_with_namespace(ret, namespace, ctx)
-        };
-
-        // Errors are handled by setting the `Context::inner` field, so we
-        // can ignore the result here.
-        let _ = try_block();
-    }
-}

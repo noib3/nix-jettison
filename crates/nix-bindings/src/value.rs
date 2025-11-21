@@ -6,6 +6,7 @@ use std::ffi::CString;
 
 use nix_bindings_sys as sys;
 
+use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{
     Attrset,
     Context,
@@ -14,7 +15,6 @@ use crate::prelude::{
     Result,
     ToError,
 };
-use crate::primop::{Namespace, PoppableNamespace};
 
 /// TODO: docs.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -281,7 +281,7 @@ impl<T: Value> Value for Option<T> {
     }
 }
 
-impl<P: PrimOp + Clone> Value for P {
+impl<P: PrimOp> Value for P {
     #[inline]
     fn kind(&self) -> ValueKind {
         // FIXME: this is not always correct.
@@ -304,7 +304,7 @@ impl<P: PrimOp + Clone> Value for P {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        ctx.write_primop(self.clone(), namespace, dest)
+        ctx.write_primop::<P>(namespace, dest)
     }
 }
 

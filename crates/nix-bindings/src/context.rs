@@ -5,8 +5,8 @@ use core::ptr::NonNull;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
+use crate::namespace::Namespace;
 use crate::prelude::{Arg, Error, ErrorKind, PrimOp, Result, ToError};
-use crate::primop::Namespace;
 use crate::value::ValueKind;
 
 /// TODO: docs.

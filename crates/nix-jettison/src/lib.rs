@@ -6,12 +6,13 @@ use nix_bindings::prelude::*;
 struct Jettison;
 
 impl PrimOp for Jettison {
+    const DOCS: &'static core::ffi::CStr =
+        c"nix-jettison's library functions.";
+
     const NAME: &'static nix_bindings::Utf8CStr =
         // SAFETY: valid UTF-8.
         unsafe { nix_bindings::Utf8CStr::new_unchecked(c"jettison") };
 
-    const DOCS: &'static core::ffi::CStr =
-        c"nix-jettison's library functions.";
 }
 
 /// Doubles a number.
@@ -27,7 +28,7 @@ impl PrimOp for Double {
 }
 
 struct DoubleArgs {
-    n: u8,
+    n: i32,
 }
 
 impl Args for DoubleArgs {
@@ -39,15 +40,13 @@ impl Args for DoubleArgs {
         ctx: &mut Context,
     ) -> Result<Self> {
         // SAFETY: up to caller
-        let n = unsafe { ctx.get_arg::<u8>(args, 0)? };
+        let n = unsafe { ctx.get_arg::<i32>(args, 0)? };
         Ok(Self { n })
     }
 }
 
-impl PrimOpFun for Jettison {
-    type Args = ();
-
-    fn call(&self, _args: (), _: &mut Context) -> impl Value + use<> {
+impl Constant for Jettison {
+    fn value() -> impl Value {
         let nested =
             LiteralAttrset::new(({ <Double as PrimOp>::NAME },), (Double,));
 

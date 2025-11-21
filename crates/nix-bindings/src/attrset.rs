@@ -5,8 +5,8 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
+use crate::namespace::Namespace;
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
-use crate::primop::Namespace;
 use crate::value::AttrsetValue;
 
 /// TODO: docs.

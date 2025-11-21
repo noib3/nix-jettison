@@ -6,6 +6,7 @@ pub mod attrset;
 pub mod context;
 mod entry;
 pub mod error;
+mod namespace;
 pub mod primop;
 mod utf8_cstr;
 pub mod value;
