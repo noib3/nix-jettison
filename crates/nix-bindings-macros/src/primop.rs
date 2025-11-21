@@ -31,6 +31,7 @@ pub(crate) fn primop(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
+#[inline]
 fn camel_case_name(input: &DeriveInput) -> syn::Result<impl ToTokens> {
     let mut struct_name = input.ident.to_string();
 
@@ -47,6 +48,7 @@ fn camel_case_name(input: &DeriveInput) -> syn::Result<impl ToTokens> {
     }
 }
 
+#[inline]
 fn constructor(input: &DeriveInput) -> syn::Result<impl ToTokens> {
     let r#struct = match &input.data {
         Data::Struct(str) => str,
@@ -83,8 +85,10 @@ fn constructor(input: &DeriveInput) -> syn::Result<impl ToTokens> {
     }
 }
 
+#[inline]
 fn docs(input: &DeriveInput) -> syn::Result<impl ToTokens> {
     let mut docs = String::new();
+    let mut is_first_line = true;
 
     for attr in &input.attrs {
         if attr.path().is_ident("doc")
@@ -99,16 +103,17 @@ fn docs(input: &DeriveInput) -> syn::Result<impl ToTokens> {
                     "PrimOp doc comment cannot contain NUL byte",
                 ));
             }
-            if !docs.is_empty() {
+            if !is_first_line {
                 docs.push('\n');
             }
             docs.push_str(doc_line.strip_prefix(' ').unwrap_or(&doc_line));
+            is_first_line = false;
         }
     }
 
     if docs.is_empty() {
         Err(syn::Error::new(
-            input.ident.span(),
+            input.span(),
             "PrimOp derive requires a doc comment on the struct",
         ))
     } else {
