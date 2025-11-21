@@ -26,3 +26,7 @@ extern "C" void make_attrs(Value* v, nix::BindingsBuilder* builder) {
 extern "C" Value* alloc_value(EvalState* state) {
     return state->allocValue();
 }
+
+extern "C" void force_value(EvalState* state, Value* value) {
+    state->forceValue(*value, nix::noPos);
+}

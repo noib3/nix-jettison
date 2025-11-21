@@ -112,12 +112,10 @@ impl Context<EvalState> {
         &mut self,
         value: NonNull<sys::Value>,
     ) -> Result<()> {
-        let state = self.state.inner.as_ptr();
-        self.inner
-            .with_raw(|ctx| unsafe {
-                sys::value_force(ctx, state, value.as_ptr())
-            })
-            .map(|_| ())
+        unsafe {
+            cpp::force_value(self.state.inner.as_ptr(), value.as_ptr());
+        }
+        Ok(())
     }
 
     /// Initializes the destination value with the given primop.

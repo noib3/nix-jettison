@@ -14,8 +14,7 @@ use nix_bindings_sys::{BindingsBuilder, EvalState, Value};
 unsafe extern "C" {
     /// Create a bindings builder with the specified capacity.
     ///
-    /// This is what `nix_make_bindings_builder` SHOULD do but doesn't work in
-    /// primop callbacks.
+    /// This is what `nix_make_bindings_builder` SHOULD do, but it segfaults.
     pub fn make_bindings_builder(
         state: *mut EvalState,
         capacity: usize,
@@ -38,10 +37,14 @@ unsafe extern "C" {
 unsafe extern "C" {
     /// Allocate a value using the C++ API.
     ///
-    /// This is what `nix_alloc_value` SHOULD do but doesn't work in primop
-    /// callbacks.
+    /// This is what `nix_alloc_value` SHOULD do, but it segfaults.
     ///
     /// Note: Values are managed by Nix's garbage collector (Boehm GC) and do
     /// NOT need to be explicitly freed.
     pub fn alloc_value(state: *mut EvalState) -> *mut Value;
+
+    /// Force evaluation of a value using the C++ API.
+    ///
+    /// This is what `nix_value_force` SHOULD do, but it segfaults.
+    pub fn force_value(state: *mut EvalState, value: *mut Value);
 }
