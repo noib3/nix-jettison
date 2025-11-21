@@ -11,6 +11,39 @@ use crate::value::{FnOnceValue, Values};
 
 /// TODO: docs.
 pub trait List: Sized {
+    /// Returns a [`List`] implementation that borrows from `self`.
+    #[inline]
+    fn borrow(&self) -> impl List {
+        struct BorrowedList<'a, T> {
+            inner: &'a T,
+        }
+
+        impl<T: List> List for BorrowedList<'_, T> {
+            #[inline]
+            fn get_value_kind(&self, idx: usize) -> ValueKind {
+                self.inner.get_value_kind(idx)
+            }
+
+            #[inline]
+            fn len(&self) -> usize {
+                self.inner.len()
+            }
+
+            #[inline]
+            unsafe fn write_value(
+                &self,
+                idx: usize,
+                dest: NonNull<sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                unsafe { self.inner.write_value(idx, dest, namespace, ctx) }
+            }
+        }
+
+        BorrowedList { inner: self }
+    }
+
     /// Returns the [`ValueKind`] of the value at the given index.
     ///
     /// # Panics
@@ -145,19 +178,27 @@ where
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.into_value().write_with_namespace(dest, namespace, ctx) }
+        unsafe {
+            self.borrow()
+                .into_value()
+                .write_with_namespace(dest, namespace, ctx)
+        }
     }
 }
 
-impl<T: List> List for &T {
+impl<T, V> List for T
+where
+    T: Deref<Target = [V]>,
+    V: Value,
+{
     #[inline]
     fn get_value_kind(&self, idx: usize) -> ValueKind {
-        (*self).get_value_kind(idx)
+        self.deref()[idx].kind()
     }
 
     #[inline]
     fn len(&self) -> usize {
-        (*self).len()
+        self.deref().len()
     }
 
     #[inline]
@@ -168,7 +209,7 @@ impl<T: List> List for &T {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { (*self).write_value(idx, dest, namespace, ctx) }
+        unsafe { self.deref()[idx].write_with_namespace(dest, namespace, ctx) }
     }
 }
 
