@@ -6,15 +6,8 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
-use crate::namespace::{Namespace, PoppableNamespace};
-use crate::prelude::{
-    Attrset,
-    Context,
-    LiteralAttrset,
-    PrimOp,
-    Result,
-    ToError,
-};
+use crate::namespace::Namespace;
+use crate::prelude::{Context, PrimOp, Result, ToError};
 
 /// TODO: docs.
 pub trait Value: Sized {
@@ -326,76 +319,6 @@ impl<P: PrimOp> Value for P {
         ctx: &mut Context,
     ) -> Result<()> {
         ctx.write_primop::<P>(namespace, dest)
-    }
-}
-
-/// A newtype wrapper that implements `Value` for every `Attrset`.
-pub(crate) struct AttrsetValue<T>(pub(crate) T);
-
-impl<T: Attrset> Value for AttrsetValue<T> {
-    #[inline]
-    fn kind(&self) -> ValueKind {
-        ValueKind::Attrset
-    }
-
-    unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unreachable!()
-    }
-
-    #[inline]
-    unsafe fn write_with_namespace(
-        &self,
-        dest: NonNull<sys::Value>,
-        mut namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        let Self(attrset) = self;
-
-        unsafe {
-            let len = attrset.len();
-            let mut builder = ctx.make_bindings_builder(len)?;
-            for idx in 0..len {
-                let key = attrset.get_key_as_c_str(idx);
-                let new_namespace = namespace.push(key);
-                builder.insert(key, |dest, ctx| {
-                    attrset.write_value(idx, dest, new_namespace, ctx)
-                })?;
-                namespace = new_namespace.pop();
-            }
-            builder.build(dest)
-        }
-    }
-}
-
-impl<Keys, Values> Value for LiteralAttrset<Keys, Values>
-where
-    Self: Attrset,
-{
-    #[inline]
-    fn kind(&self) -> ValueKind {
-        ValueKind::Attrset
-    }
-
-    unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unreachable!()
-    }
-
-    #[inline]
-    unsafe fn write_with_namespace(
-        &self,
-        dest: NonNull<sys::Value>,
-        namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        unsafe { self.into_value().write_with_namespace(dest, namespace, ctx) }
     }
 }
 
