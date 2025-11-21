@@ -7,6 +7,8 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{Token, braced};
 
+use crate::list::Value;
+
 #[inline]
 pub(crate) fn attrset(input: TokenStream) -> syn::Result<TokenStream> {
     let Attrset { keys, values } = syn::parse2(input)?;
@@ -26,11 +28,6 @@ struct Attrset {
 
 enum Key {
     Literal(proc_macro2::Literal),
-    Expr(syn::Expr),
-}
-
-enum Value {
-    StringLiteral(proc_macro2::Literal),
     Expr(syn::Expr),
 }
 
@@ -83,32 +80,6 @@ impl Parse for Key {
     }
 }
 
-impl Parse for Value {
-    #[inline]
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let expr: syn::Expr = input.parse()?;
-
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(lit_str), ..
-        }) = &expr
-        else {
-            return Ok(Self::Expr(expr));
-        };
-
-        // If the value is a Rust string literal, convert it to a C string
-        // literal to avoid having to allocate at runtime.
-        let string_content = lit_str.value();
-        let c_string = CString::new(string_content).map_err(|_| {
-            syn::Error::new(
-                lit_str.span(),
-                "string literal cannot contain NUL byte",
-            )
-        })?;
-
-        Ok(Self::StringLiteral(Literal::c_string(&c_string)))
-    }
-}
-
 impl ToTokens for Key {
     #[inline]
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -118,16 +89,6 @@ impl ToTokens for Key {
                 unsafe { ::nix_bindings::Utf8CStr::new_unchecked(#lit) }
             }),
             Self::Expr(expr) => tokens.extend(quote! { { #expr } }),
-        }
-    }
-}
-
-impl ToTokens for Value {
-    #[inline]
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::StringLiteral(lit) => lit.to_tokens(tokens),
-            Self::Expr(expr) => expr.to_tokens(tokens),
         }
     }
 }

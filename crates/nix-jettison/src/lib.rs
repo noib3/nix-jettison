@@ -24,6 +24,7 @@ impl Constant for Jettison {
                 { <Double as PrimOp>::NAME }: Double,
             },
             message: "Hello from Rust!",
+            list: list![1, 2, "Hello again!", (), 5],
         }
     }
 }

@@ -5,6 +5,7 @@ use alloc::string::ToString;
 use core::ops::Deref;
 use core::ptr::NonNull;
 
+pub use nix_bindings_macros::list;
 use nix_bindings_sys as sys;
 
 use crate::namespace::{Namespace, PoppableNamespace};
