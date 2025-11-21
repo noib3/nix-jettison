@@ -10,22 +10,9 @@ struct Jettison;
 #[derive(nix_bindings::PrimOp)]
 struct Double;
 
+#[derive(nix_bindings::Args)]
 struct DoubleArgs {
     n: i32,
-}
-
-impl Args for DoubleArgs {
-    const NAMES: &'static [*const core::ffi::c_char] =
-        &[c"n".as_ptr(), core::ptr::null()];
-
-    unsafe fn from_raw(
-        args: core::ptr::NonNull<*mut nix_bindings::sys::Value>,
-        ctx: &mut Context,
-    ) -> Result<Self> {
-        // SAFETY: up to caller
-        let n = unsafe { ctx.get_arg::<i32>(args, 0)? };
-        Ok(Self { n })
-    }
 }
 
 impl Constant for Jettison {

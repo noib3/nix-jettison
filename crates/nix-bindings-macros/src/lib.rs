@@ -1,9 +1,17 @@
 //! TODO: docs.
 
+mod args;
 mod entry;
 mod primop;
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
+
+/// TODO: docs
+#[proc_macro_derive(Args)]
+pub fn args(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    args::args(input).unwrap_or_else(syn::Error::into_compile_error).into()
+}
 
 /// Marks the entrypoint function of a Nix plugin.
 #[proc_macro_attribute]
