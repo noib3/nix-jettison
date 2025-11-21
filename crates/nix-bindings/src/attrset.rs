@@ -12,6 +12,49 @@ use crate::value::{FnOnceValue, Values};
 
 /// TODO: docs.
 pub trait Attrset: Sized {
+    /// Returns an [`Attrset`] implementation that borrows from `self`.
+    #[inline]
+    fn borrow(&self) -> impl Attrset {
+        struct BorrowedAttrset<'a, T> {
+            inner: &'a T,
+        }
+
+        impl<T: Attrset> Attrset for BorrowedAttrset<'_, T> {
+            #[inline]
+            fn get_key(&self, idx: usize) -> &str {
+                self.inner.get_key(idx)
+            }
+
+            #[inline]
+            fn get_key_as_c_str(&self, idx: usize) -> &CStr {
+                self.inner.get_key_as_c_str(idx)
+            }
+
+            #[inline]
+            fn get_value_kind(&self, idx: usize) -> ValueKind {
+                self.inner.get_value_kind(idx)
+            }
+
+            #[inline]
+            fn len(&self) -> usize {
+                self.inner.len()
+            }
+
+            #[inline]
+            unsafe fn write_value(
+                &self,
+                idx: usize,
+                dest: NonNull<sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                unsafe { self.inner.write_value(idx, dest, namespace, ctx) }
+            }
+        }
+
+        BorrowedAttrset { inner: self }
+    }
+
     /// Returns the index of the attribute with the given key, or `None` if no
     /// such key exists.
     ///
@@ -201,45 +244,11 @@ where
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.into_value().write_with_namespace(dest, namespace, ctx) }
-    }
-}
-
-impl<T: Attrset> Attrset for &T {
-    #[inline]
-    fn get_idx_of_key(&self, key: &str) -> Option<usize> {
-        (*self).get_idx_of_key(key)
-    }
-
-    #[inline]
-    fn get_key(&self, idx: usize) -> &str {
-        (*self).get_key(idx)
-    }
-
-    #[inline]
-    fn get_key_as_c_str(&self, idx: usize) -> &CStr {
-        (*self).get_key_as_c_str(idx)
-    }
-
-    #[inline]
-    fn get_value_kind(&self, idx: usize) -> ValueKind {
-        (*self).get_value_kind(idx)
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        (*self).len()
-    }
-
-    #[inline]
-    unsafe fn write_value(
-        &self,
-        idx: usize,
-        dest: NonNull<sys::Value>,
-        namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        unsafe { (*self).write_value(idx, dest, namespace, ctx) }
+        unsafe {
+            self.borrow()
+                .into_value()
+                .write_with_namespace(dest, namespace, ctx)
+        }
     }
 }
 
