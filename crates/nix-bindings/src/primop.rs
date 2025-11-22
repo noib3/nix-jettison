@@ -161,20 +161,6 @@ pub trait Args: Sized {
     ) -> Result<Self>;
 }
 
-/// TODO: docs.
-pub trait Arg: Sized {
-    /// TODO: docs.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `value` is a valid pointer to a
-    /// `sys::Value`.
-    unsafe fn try_from_value(
-        value: NonNull<sys::Value>,
-        ctx: &mut Context,
-    ) -> Result<Self>;
-}
-
 /// The user data given as the last argument to [`sys::alloc_primop`].
 struct UserData {
     /// The type-erased primop.

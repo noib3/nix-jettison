@@ -6,9 +6,10 @@ use core::ptr::NonNull;
 pub use nix_bindings_macros::attrset;
 use nix_bindings_sys as sys;
 
+use crate::error::TypeMismatchError;
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
-use crate::value::{FnOnceValue, Values};
+use crate::value::{FnOnceValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait Attrset: Sized {
@@ -136,7 +137,9 @@ pub trait FnOnceKey<'a, T: 'a> {
 }
 
 /// TODO: docs.
-pub struct AnyAttrset {}
+pub struct AnyAttrset {
+    inner: NonNull<sys::Value>,
+}
 
 /// The attribute set type produced by the [`attrset!`] macro.
 pub struct LiteralAttrset<Keys, Values> {
@@ -185,6 +188,24 @@ impl Attrset for AnyAttrset {
         _ctx: &mut Context,
     ) -> Result<()> {
         todo!()
+    }
+}
+
+impl TryFromValue for AnyAttrset {
+    #[inline]
+    unsafe fn try_from_value(
+        value: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        ctx.force(value)?;
+
+        match ctx.get_kind(value)? {
+            ValueKind::Attrset => Ok(Self { inner: value }),
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Attrset,
+                found: other,
+            })),
+        }
     }
 }
 

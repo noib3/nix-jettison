@@ -5,8 +5,9 @@ use core::ptr::NonNull;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
+use crate::error::{Error, ErrorKind, Result, ToError};
 use crate::namespace::Namespace;
-use crate::prelude::{Error, ErrorKind, PrimOp, Result, ToError};
+use crate::primop::PrimOp;
 use crate::value::{TryFromValue, ValueKind};
 
 /// TODO: docs.
@@ -59,6 +60,18 @@ impl Context<Entrypoint> {
 }
 
 impl Context<EvalState> {
+    /// Forces the evaluation of the given value.
+    ///
+    /// The value's kind is guaranteed to not be [`ValueKind::Thunk`] after
+    /// a successful call to this method.
+    #[inline]
+    pub(crate) fn force(&mut self, value: NonNull<sys::Value>) -> Result<()> {
+        unsafe {
+            cpp::force_value(self.state.inner.as_ptr(), value.as_ptr());
+        }
+        Ok(())
+    }
+
     /// Returns the kind of the given value.
     #[inline]
     pub(crate) fn get_kind(
@@ -129,21 +142,6 @@ impl Context<EvalState> {
                 ))),
             }
         }
-    }
-
-    /// Forces the evaluation of the given value.
-    ///
-    /// The value's kind is guaranteed to not be [`ValueKind::Thunk`] after
-    /// a successful call to this method.
-    #[inline]
-    pub(crate) fn value_force(
-        &mut self,
-        value: NonNull<sys::Value>,
-    ) -> Result<()> {
-        unsafe {
-            cpp::force_value(self.state.inner.as_ptr(), value.as_ptr());
-        }
-        Ok(())
     }
 
     /// Initializes the destination value with the given primop.

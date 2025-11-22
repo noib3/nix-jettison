@@ -387,7 +387,7 @@ impl TryFromValue for i64 {
         value: NonNull<nix_bindings_sys::Value>,
         ctx: &mut Context,
     ) -> Result<Self> {
-        ctx.value_force(value)?;
+        ctx.force(value)?;
 
         match ctx.get_kind(value)? {
             ValueKind::Int => ctx
