@@ -1,39 +1,19 @@
 #![allow(missing_docs)]
 
+mod build_package;
+
+use build_package::BuildPackage;
 use nix_bindings::prelude::*;
 
 /// nix-jettison's library functions.
 #[derive(nix_bindings::PrimOp)]
 struct Jettison;
 
-/// Doubles a number.
-#[derive(nix_bindings::PrimOp)]
-struct Double;
-
-#[derive(nix_bindings::Args)]
-struct DoubleArgs {
-    n: i32,
-}
-
 impl Constant for Jettison {
     fn value() -> impl Value {
         attrset! {
-            count: 42,
-            enabled: true,
-            nested: attrset! {
-                { <Double as PrimOp>::NAME }: Double,
-            },
-            message: "Hello from Rust!",
-            list: list![1, 2, "Hello again!", (), 5],
+            { <BuildPackage as PrimOp>::NAME }: BuildPackage,
         }
-    }
-}
-
-impl Function for Double {
-    type Args = DoubleArgs;
-
-    fn call(args: DoubleArgs, _: &mut Context) -> i32 {
-        args.n * 2
     }
 }
 
