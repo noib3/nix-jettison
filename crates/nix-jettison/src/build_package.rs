@@ -19,10 +19,14 @@ struct BuildPackageArgs {
 impl TryFromValue for BuildPackageArgs {
     #[inline]
     unsafe fn try_from_value(
-        _value: core::ptr::NonNull<nix_bindings::sys::Value>,
-        _ctx: &mut Context,
+        value: core::ptr::NonNull<nix_bindings::sys::Value>,
+        ctx: &mut Context,
     ) -> Result<Self> {
-        todo!();
+        // SAFETY: up to the caller.
+        let attrset = unsafe { AnyAttrset::try_from_value(value, ctx)? };
+        let pkgs = attrset.get(c"pkgs", ctx)?;
+        let src = todo!();
+        Ok(BuildPackageArgs { pkgs, src })
     }
 }
 

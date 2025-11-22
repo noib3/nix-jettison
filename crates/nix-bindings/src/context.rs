@@ -191,7 +191,8 @@ impl Context<EvalState> {
 impl<State> Context<State> {
     /// TODO: docs.
     #[inline]
-    pub(crate) fn make_error(&mut self, err: impl ToError) -> Error {
+    #[doc(hidden)]
+    pub fn make_error(&mut self, err: impl ToError) -> Error {
         self.inner.make_error(err)
     }
 

@@ -1,12 +1,15 @@
 //! TODO: docs.
 
 use core::ffi::{CStr, c_uint};
+use core::fmt;
 use core::ptr::NonNull;
+use std::borrow::Cow;
+use std::ffi::CString;
 
 pub use nix_bindings_macros::attrset;
 use nix_bindings_sys as sys;
 
-use crate::error::TypeMismatchError;
+use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
 use crate::value::{FnOnceValue, TryFromValue, Values};
@@ -54,6 +57,31 @@ pub trait Attrset: Sized {
         }
 
         BorrowedAttrset { inner: self }
+    }
+
+    /// TODO: docs.
+    #[inline]
+    fn get<T: TryFromValue>(
+        &self,
+        key: &CStr,
+        ctx: &mut Context,
+    ) -> Result<T> {
+        self.get_opt(key, ctx)?.ok_or_else(|| {
+            ctx.make_error(MissingAttributeError {
+                attrset: self.borrow(),
+                attr: key,
+            })
+        })
+    }
+
+    /// TODO: docs.
+    #[inline]
+    fn get_opt<T: TryFromValue>(
+        &self,
+        _key: &CStr,
+        _ctx: &mut Context,
+    ) -> Result<Option<T>> {
+        todo!();
     }
 
     /// Returns the index of the attribute with the given key, or `None` if no
@@ -145,6 +173,17 @@ pub struct AnyAttrset {
 pub struct LiteralAttrset<Keys, Values> {
     keys: Keys,
     values: Values,
+}
+
+/// The type of error returned when an expected attribute is missing from
+/// an [`Attrset`].
+#[derive(Debug)]
+pub struct MissingAttributeError<'a, Attrset> {
+    /// The attribute set from which the attribute was expected.
+    pub attrset: Attrset,
+
+    /// The name of the missing attribute.
+    pub attr: &'a CStr,
 }
 
 impl<Keys, Values> LiteralAttrset<Keys, Values>
@@ -306,6 +345,26 @@ where
                 .into_value()
                 .write_with_namespace(dest, namespace, ctx)
         }
+    }
+}
+
+impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "attribute '`{:?}`' missing", self.attr)
+    }
+}
+
+impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: the Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()).into() }
     }
 }
 
