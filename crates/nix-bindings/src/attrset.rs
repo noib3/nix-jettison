@@ -1,6 +1,6 @@
 //! TODO: docs.
 
-use core::ffi::CStr;
+use core::ffi::{CStr, c_uint};
 use core::ptr::NonNull;
 
 pub use nix_bindings_macros::attrset;
@@ -21,29 +21,29 @@ pub trait Attrset: Sized {
 
         impl<T: Attrset> Attrset for BorrowedAttrset<'_, T> {
             #[inline]
-            fn get_key(&self, idx: usize) -> &str {
+            fn get_key(&self, idx: c_uint) -> &str {
                 self.inner.get_key(idx)
             }
 
             #[inline]
-            fn get_key_as_c_str(&self, idx: usize) -> &CStr {
+            fn get_key_as_c_str(&self, idx: c_uint) -> &CStr {
                 self.inner.get_key_as_c_str(idx)
             }
 
             #[inline]
-            fn get_value_kind(&self, idx: usize) -> ValueKind {
+            fn get_value_kind(&self, idx: c_uint) -> ValueKind {
                 self.inner.get_value_kind(idx)
             }
 
             #[inline]
-            fn len(&self) -> usize {
+            fn len(&self) -> c_uint {
                 self.inner.len()
             }
 
             #[inline]
             unsafe fn write_value(
                 &self,
-                idx: usize,
+                idx: c_uint,
                 dest: NonNull<sys::Value>,
                 namespace: impl Namespace,
                 ctx: &mut Context,
@@ -60,7 +60,7 @@ pub trait Attrset: Sized {
     ///
     /// If an index is returned, it is guaranteed to be less than `self.len()`.
     #[inline]
-    fn get_idx_of_key(&self, key: &str) -> Option<usize> {
+    fn get_idx_of_key(&self, key: &str) -> Option<c_uint> {
         (0..self.len()).find(|idx| self.get_key(*idx) == key)
     }
 
@@ -70,11 +70,11 @@ pub trait Attrset: Sized {
     ///
     /// Panics if the index is out of bounds (i.e. greater than or equal to
     /// `self.len()`).
-    fn get_key(&self, idx: usize) -> &str;
+    fn get_key(&self, idx: c_uint) -> &str;
 
     /// Same as [`get_key_by_idx`](Attrset::get_key_by_idx), but returns the
     /// key as a `&CStr`.
-    fn get_key_as_c_str(&self, idx: usize) -> &CStr;
+    fn get_key_as_c_str(&self, idx: c_uint) -> &CStr;
 
     /// Returns the [`ValueKind`] of the attribute at the given index.
     ///
@@ -82,10 +82,10 @@ pub trait Attrset: Sized {
     ///
     /// Panics if the index is out of bounds (i.e. greater than or equal to
     /// `self.len()`).
-    fn get_value_kind(&self, idx: usize) -> ValueKind;
+    fn get_value_kind(&self, idx: c_uint) -> ValueKind;
 
     /// Returns the number of attributes in this attribute set.
-    fn len(&self) -> usize;
+    fn len(&self) -> c_uint;
 
     /// TODO: docs.
     #[inline]
@@ -109,7 +109,7 @@ pub trait Attrset: Sized {
     #[allow(clippy::too_many_arguments)]
     unsafe fn write_value(
         &self,
-        idx: usize,
+        idx: c_uint,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
@@ -119,12 +119,12 @@ pub trait Attrset: Sized {
 /// TODO: docs.
 pub trait Keys {
     /// TODO: docs.
-    const LEN: usize;
+    const LEN: c_uint;
 
     /// TODO: docs.
     fn with_key<'a, T: 'a>(
         &'a self,
-        key_idx: usize,
+        key_idx: c_uint,
         fun: impl FnOnceKey<'a, T>,
     ) -> T;
 }
@@ -134,6 +134,9 @@ pub trait FnOnceKey<'a, T: 'a> {
     /// TODO: docs.
     fn call(self, value: &'a impl AsRef<Utf8CStr>) -> T;
 }
+
+/// TODO: docs.
+pub struct AnyAttrset {}
 
 /// The attribute set type produced by the [`attrset!`] macro.
 pub struct LiteralAttrset<Keys, Values> {
@@ -152,9 +155,42 @@ where
     }
 }
 
+impl Attrset for AnyAttrset {
+    #[inline]
+    fn get_key(&self, _idx: c_uint) -> &str {
+        todo!()
+    }
+
+    #[inline]
+    fn get_key_as_c_str(&self, _idx: c_uint) -> &CStr {
+        todo!()
+    }
+
+    #[inline]
+    fn get_value_kind(&self, _idx: c_uint) -> ValueKind {
+        todo!()
+    }
+
+    #[inline]
+    fn len(&self) -> c_uint {
+        todo!()
+    }
+
+    #[inline]
+    unsafe fn write_value(
+        &self,
+        _idx: c_uint,
+        _dest: NonNull<nix_bindings_sys::Value>,
+        _namespace: impl Namespace,
+        _ctx: &mut Context,
+    ) -> Result<()> {
+        todo!()
+    }
+}
+
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
-    fn get_key(&self, idx: usize) -> &str {
+    fn get_key(&self, idx: c_uint) -> &str {
         struct GetKey;
         impl<'a> FnOnceKey<'a, &'a str> for GetKey {
             fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a str {
@@ -165,7 +201,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 
     #[inline]
-    fn get_key_as_c_str(&self, idx: usize) -> &CStr {
+    fn get_key_as_c_str(&self, idx: c_uint) -> &CStr {
         struct GetKeyAsCStr;
         impl<'a> FnOnceKey<'a, &'a CStr> for GetKeyAsCStr {
             fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a CStr {
@@ -176,7 +212,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 
     #[inline]
-    fn get_value_kind(&self, idx: usize) -> ValueKind {
+    fn get_value_kind(&self, idx: c_uint) -> ValueKind {
         struct GetValueKind;
         impl FnOnceValue<'_, ValueKind> for GetValueKind {
             fn call(self, value: &impl Value) -> ValueKind {
@@ -187,7 +223,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 
     #[inline]
-    fn len(&self) -> usize {
+    fn len(&self) -> c_uint {
         debug_assert_eq!(K::LEN, V::LEN);
         K::LEN
     }
@@ -195,7 +231,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
     unsafe fn write_value(
         &self,
-        idx: usize,
+        idx: c_uint,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
@@ -280,7 +316,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
 
         unsafe {
             let len = attrset.len();
-            let mut builder = ctx.make_attrset_builder(len)?;
+            let mut builder = ctx.make_attrset_builder(len as usize)?;
             for idx in 0..len {
                 let key = attrset.get_key_as_c_str(idx);
                 let new_namespace = namespace.push(key);
@@ -317,13 +353,13 @@ mod keys_values_impls {
             where
                 $($K: AsRef<Utf8CStr>),*
             {
-                const LEN: usize = count!($($K)*);
+                const LEN: c_uint = count!($($K)*);
 
                 #[track_caller]
                 #[inline]
                 fn with_key<'a, T: 'a>(
                     &'a self,
-                    key_idx: usize,
+                    key_idx: c_uint,
                     _fun: impl FnOnceKey<'a, T>,
                 ) -> T {
                     match key_idx {
@@ -354,7 +390,7 @@ mod keys_values_impls {
     impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13, K14, K15, K16);
 
     #[inline(never)]
-    fn panic_tuple_index_oob(idx: usize, len: usize) -> ! {
+    fn panic_tuple_index_oob(idx: c_uint, len: c_uint) -> ! {
         panic!("{len}-tuple received out of bounds index: {idx}")
     }
 }

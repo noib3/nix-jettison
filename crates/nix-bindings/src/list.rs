@@ -2,6 +2,7 @@
 
 use alloc::ffi::CString;
 use alloc::string::ToString;
+use core::ffi::c_uint;
 use core::ops::Deref;
 use core::ptr::NonNull;
 
@@ -23,19 +24,19 @@ pub trait List: Sized {
 
         impl<T: List> List for BorrowedList<'_, T> {
             #[inline]
-            fn get_value_kind(&self, idx: usize) -> ValueKind {
+            fn get_value_kind(&self, idx: c_uint) -> ValueKind {
                 self.inner.get_value_kind(idx)
             }
 
             #[inline]
-            fn len(&self) -> usize {
+            fn len(&self) -> c_uint {
                 self.inner.len()
             }
 
             #[inline]
             unsafe fn write_value(
                 &self,
-                idx: usize,
+                idx: c_uint,
                 dest: NonNull<sys::Value>,
                 namespace: impl Namespace,
                 ctx: &mut Context,
@@ -53,10 +54,10 @@ pub trait List: Sized {
     ///
     /// Panics if the index is out of bounds (i.e. greater than or equal to
     /// `self.len()`).
-    fn get_value_kind(&self, idx: usize) -> ValueKind;
+    fn get_value_kind(&self, idx: c_uint) -> ValueKind;
 
     /// Returns the number of elements in this list.
-    fn len(&self) -> usize;
+    fn len(&self) -> c_uint;
 
     /// TODO: docs.
     #[inline]
@@ -80,7 +81,7 @@ pub trait List: Sized {
     #[allow(clippy::too_many_arguments)]
     unsafe fn write_value(
         &self,
-        idx: usize,
+        idx: c_uint,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
@@ -105,7 +106,7 @@ impl<Values> LiteralList<Values> {
 
 impl<V: Values> List for LiteralList<V> {
     #[inline]
-    fn get_value_kind(&self, idx: usize) -> ValueKind {
+    fn get_value_kind(&self, idx: c_uint) -> ValueKind {
         struct GetValueKind;
         impl FnOnceValue<'_, ValueKind> for GetValueKind {
             fn call(self, value: &impl Value) -> ValueKind {
@@ -116,14 +117,14 @@ impl<V: Values> List for LiteralList<V> {
     }
 
     #[inline]
-    fn len(&self) -> usize {
+    fn len(&self) -> c_uint {
         V::LEN
     }
 
     #[inline]
     unsafe fn write_value(
         &self,
-        idx: usize,
+        idx: c_uint,
         dest: NonNull<nix_bindings_sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
@@ -195,24 +196,27 @@ where
     V: Value,
 {
     #[inline]
-    fn get_value_kind(&self, idx: usize) -> ValueKind {
-        self.deref()[idx].kind()
+    fn get_value_kind(&self, idx: c_uint) -> ValueKind {
+        self.deref()[idx as usize].kind()
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        self.deref().len()
+    fn len(&self) -> c_uint {
+        self.deref().len() as c_uint
     }
 
     #[inline]
     unsafe fn write_value(
         &self,
-        idx: usize,
+        idx: c_uint,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.deref()[idx].write_with_namespace(dest, namespace, ctx) }
+        unsafe {
+            self.deref()[idx as usize]
+                .write_with_namespace(dest, namespace, ctx)
+        }
     }
 }
 
@@ -241,7 +245,7 @@ impl<T: List> Value for ListValue<T> {
 
         unsafe {
             let len = list.len();
-            let mut builder = ctx.make_list_builder(len)?;
+            let mut builder = ctx.make_list_builder(len as usize)?;
             for idx in 0..len {
                 // FIXME: avoid this allocation.
                 let idx_cstr =

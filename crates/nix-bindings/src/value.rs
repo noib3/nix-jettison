@@ -1,16 +1,17 @@
 //! TODO: docs.
 
 use alloc::ffi::CString;
-use core::ffi::CStr;
+use core::ffi::{CStr, c_uint};
 use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
+use crate::error::{Result, ToError, TryFromI64Error, TypeMismatchError};
 use crate::namespace::Namespace;
-use crate::prelude::{Context, PrimOp, Result, ToError};
+use crate::prelude::{Context, PrimOp};
 
 /// TODO: docs.
-pub trait Value: Sized {
+pub trait Value {
     /// Returns the kind of this value.
     fn kind(&self) -> ValueKind;
 
@@ -36,6 +37,21 @@ pub trait Value: Sized {
     }
 }
 
+/// A trait for types that can be fallibly converted from a [`sys::Value`]
+/// pointer.
+pub trait TryFromValue: Sized {
+    /// TODO: docs.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `value` is a valid pointer to a
+    /// `sys::Value`.
+    unsafe fn try_from_value(
+        value: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self>;
+}
+
 /// A trait for types that can be fallibly converted into [`Value`]s.
 pub trait TryIntoValue {
     /// Attempts to convert this value into a [`Value`].
@@ -48,12 +64,12 @@ pub trait TryIntoValue {
 /// TODO: docs.
 pub trait Values {
     /// TODO: docs.
-    const LEN: usize;
+    const LEN: c_uint;
 
     /// TODO: docs.
     fn with_value<'a, T: 'a>(
         &'a self,
-        value_idx: usize,
+        value_idx: c_uint,
         fun: impl FnOnceValue<'a, T>,
     ) -> T;
 }
@@ -322,6 +338,99 @@ impl<P: PrimOp> Value for P {
     }
 }
 
+#[cfg(feature = "std")]
+impl Value for std::path::Path {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Path
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        let bytes = self.as_os_str().as_encoded_bytes();
+        let cstr = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
+        ctx.with_raw_and_state(|ctx, state| unsafe {
+            sys::init_path_string(
+                ctx,
+                state.as_ptr(),
+                dest.as_ptr(),
+                cstr.as_ptr(),
+            );
+        })
+    }
+}
+
+#[cfg(feature = "std")]
+impl Value for std::path::PathBuf {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Path
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.as_path().write(dest, ctx) }
+    }
+}
+
+impl TryFromValue for i64 {
+    #[inline]
+    unsafe fn try_from_value(
+        value: NonNull<nix_bindings_sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        ctx.value_force(value)?;
+
+        match ctx.get_kind(value)? {
+            ValueKind::Int => ctx
+                .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_ptr()) }),
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Int,
+                found: other,
+            })),
+        }
+    }
+}
+
+macro_rules! impl_try_from_value_for_int {
+    ($ty:ty) => {
+        impl TryFromValue for $ty {
+            #[inline]
+            unsafe fn try_from_value(
+                value: NonNull<nix_bindings_sys::Value>,
+                ctx: &mut Context,
+            ) -> Result<Self> {
+                let int = unsafe { i64::try_from_value(value, ctx)? };
+
+                int.try_into().map_err(|_| {
+                    ctx.make_error(TryFromI64Error::<$ty>::new(int))
+                })
+            }
+        }
+    };
+}
+
+impl_try_from_value_for_int!(i8);
+impl_try_from_value_for_int!(i16);
+impl_try_from_value_for_int!(i32);
+impl_try_from_value_for_int!(i128);
+impl_try_from_value_for_int!(isize);
+
+impl_try_from_value_for_int!(u8);
+impl_try_from_value_for_int!(u16);
+impl_try_from_value_for_int!(u32);
+impl_try_from_value_for_int!(u64);
+impl_try_from_value_for_int!(u128);
+impl_try_from_value_for_int!(usize);
+
 impl<T: Value> TryIntoValue for T {
     #[inline]
     fn try_into_value(self, _: &mut Context) -> Result<impl Value + use<T>> {
@@ -375,13 +484,13 @@ mod values_impls {
             where
                 $($K: Value),*
             {
-                const LEN: usize = count!($($K)*);
+                const LEN: c_uint = count!($($K)*);
 
                 #[track_caller]
                 #[inline]
                 fn with_value<'a, T: 'a>(
                     &'a self,
-                    value_idx: usize,
+                    value_idx: c_uint,
                     _fun: impl FnOnceValue<'a, T>,
                 ) -> T {
                     match value_idx {
@@ -412,7 +521,7 @@ mod values_impls {
     impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16);
 
     #[inline(never)]
-    fn panic_tuple_index_oob(idx: usize, len: usize) -> ! {
+    fn panic_tuple_index_oob(idx: c_uint, len: c_uint) -> ! {
         panic!("{len}-tuple received out of bounds index: {idx}")
     }
 }

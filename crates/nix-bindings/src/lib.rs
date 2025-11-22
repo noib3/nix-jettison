@@ -1,7 +1,7 @@
 //! TODO: docs.
 
 #![allow(clippy::undocumented_unsafe_blocks)]
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 

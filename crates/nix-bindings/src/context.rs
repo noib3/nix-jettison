@@ -6,8 +6,8 @@ use core::ptr::NonNull;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::namespace::Namespace;
-use crate::prelude::{Arg, Error, ErrorKind, PrimOp, Result, ToError};
-use crate::value::ValueKind;
+use crate::prelude::{Error, ErrorKind, PrimOp, Result, ToError};
+use crate::value::{TryFromValue, ValueKind};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -115,14 +115,14 @@ impl Context<EvalState> {
         capacity: usize,
     ) -> Result<ListBuilder<'_>> {
         unsafe {
-            let builder_ptr = cpp::make_list_builder(
-                self.state.inner.as_ptr(),
-                capacity,
-            );
+            let builder_ptr =
+                cpp::make_list_builder(self.state.inner.as_ptr(), capacity);
             match NonNull::new(builder_ptr) {
-                Some(builder_ptr) => {
-                    Ok(ListBuilder { inner: builder_ptr, context: self, index: 0 })
-                },
+                Some(builder_ptr) => Ok(ListBuilder {
+                    inner: builder_ptr,
+                    context: self,
+                    index: 0,
+                }),
                 None => Err(self.make_error((
                     ErrorKind::Overflow,
                     c"failed to create ListBuilder",
@@ -177,16 +177,16 @@ impl Context<EvalState> {
     /// `Context`'s public API.
     #[doc(hidden)]
     #[inline]
-    pub unsafe fn get_arg<A: Arg>(
+    pub unsafe fn get_arg<T: TryFromValue>(
         &mut self,
         args: NonNull<*mut sys::Value>,
         offset: u8,
-    ) -> Result<A> {
+    ) -> Result<T> {
         let arg_raw = unsafe { *args.as_ptr().offset(offset.into()) };
         let arg_ptr = NonNull::new(arg_raw).ok_or_else(|| {
             self.make_error((ErrorKind::Overflow, c"argument is NULL"))
         })?;
-        unsafe { A::try_from_value(arg_ptr, self) }
+        unsafe { T::try_from_value(arg_ptr, self) }
     }
 }
 
@@ -210,9 +210,23 @@ impl<State> Context<State> {
     ) -> Result<T> {
         self.inner.with_raw(fun)
     }
+
+    /// TODO: docs.
+    #[inline]
+    pub(crate) fn with_raw_and_state<T>(
+        &mut self,
+        fun: impl FnOnce(*mut sys::c_context, &mut State) -> T,
+    ) -> Result<T> {
+        self.inner.with_raw(|raw_ctx| fun(raw_ctx, &mut self.state))
+    }
 }
 
 impl EvalState {
+    #[inline]
+    pub(crate) fn as_ptr(&mut self) -> *mut sys::EvalState {
+        self.inner.as_ptr()
+    }
+
     #[inline]
     pub(crate) fn new(inner: NonNull<sys::EvalState>) -> Self {
         Self { inner }
@@ -275,7 +289,11 @@ impl<'ctx> ListBuilder<'ctx> {
 
             write_value(dest_ptr, self.context)?;
 
-            cpp::list_builder_insert(self.inner.as_ptr(), self.index, dest_ptr.as_ptr());
+            cpp::list_builder_insert(
+                self.inner.as_ptr(),
+                self.index,
+                dest_ptr.as_ptr(),
+            );
             self.index += 1;
 
             Ok(())

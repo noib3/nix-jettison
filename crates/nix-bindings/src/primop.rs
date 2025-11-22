@@ -9,8 +9,8 @@ use nix_bindings_sys as sys;
 
 use crate::Utf8CStr;
 use crate::context::{Context, EvalState};
-use crate::error::{Result, TryFromI64Error, TypeMismatchError};
-use crate::value::{TryIntoValue, Value, ValueKind};
+use crate::error::Result;
+use crate::value::{TryIntoValue, Value};
 
 /// TODO: docs.
 pub trait PrimOp: PrimOpImpl + Sized + 'static {
@@ -242,53 +242,3 @@ impl Args for NoArgs {
         Ok(Self)
     }
 }
-
-impl Arg for i64 {
-    #[inline]
-    unsafe fn try_from_value(
-        value: NonNull<nix_bindings_sys::Value>,
-        ctx: &mut Context,
-    ) -> Result<Self> {
-        ctx.value_force(value)?;
-
-        match ctx.get_kind(value)? {
-            ValueKind::Int => ctx
-                .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_ptr()) }),
-            other => Err(ctx.make_error(TypeMismatchError {
-                expected: ValueKind::Int,
-                found: other,
-            })),
-        }
-    }
-}
-
-macro_rules! impl_arg_for_int {
-    ($ty:ty) => {
-        impl Arg for $ty {
-            #[inline]
-            unsafe fn try_from_value(
-                value: NonNull<nix_bindings_sys::Value>,
-                ctx: &mut Context,
-            ) -> Result<Self> {
-                let int = unsafe { i64::try_from_value(value, ctx)? };
-
-                int.try_into().map_err(|_| {
-                    ctx.make_error(TryFromI64Error::<$ty>::new(int))
-                })
-            }
-        }
-    };
-}
-
-impl_arg_for_int!(i8);
-impl_arg_for_int!(i16);
-impl_arg_for_int!(i32);
-impl_arg_for_int!(i128);
-impl_arg_for_int!(isize);
-
-impl_arg_for_int!(u8);
-impl_arg_for_int!(u16);
-impl_arg_for_int!(u32);
-impl_arg_for_int!(u64);
-impl_arg_for_int!(u128);
-impl_arg_for_int!(usize);
