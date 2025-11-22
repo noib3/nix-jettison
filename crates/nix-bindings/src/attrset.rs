@@ -12,7 +12,7 @@ use nix_bindings_sys as sys;
 use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
-use crate::value::{FnOnceValue, TryFromValue, Values};
+use crate::value::{FnOnceValue, TryFromValue, ValuePointer, Values};
 
 /// TODO: docs.
 pub trait Attrset: Sized {
@@ -61,8 +61,8 @@ pub trait Attrset: Sized {
 
     /// TODO: docs.
     #[inline]
-    fn get<T: TryFromValue>(
-        &self,
+    fn get<'this, T: TryFromValue<'this>>(
+        &'this self,
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<T> {
@@ -76,8 +76,8 @@ pub trait Attrset: Sized {
 
     /// TODO: docs.
     #[inline]
-    fn get_opt<T: TryFromValue>(
-        &self,
+    fn get_opt<'this, T: TryFromValue<'this>>(
+        &'this self,
         _key: &CStr,
         _ctx: &mut Context,
     ) -> Result<Option<T>> {
@@ -165,8 +165,8 @@ pub trait FnOnceKey<'a, T: 'a> {
 }
 
 /// TODO: docs.
-pub struct AnyAttrset {
-    inner: NonNull<sys::Value>,
+pub struct AnyAttrset<'value> {
+    inner: ValuePointer<'value>,
 }
 
 /// The attribute set type produced by the [`attrset!`] macro.
@@ -197,7 +197,7 @@ where
     }
 }
 
-impl Attrset for AnyAttrset {
+impl Attrset for AnyAttrset<'_> {
     #[inline]
     fn get_key(&self, _idx: c_uint) -> &str {
         todo!()
@@ -230,15 +230,15 @@ impl Attrset for AnyAttrset {
     }
 }
 
-impl TryFromValue for AnyAttrset {
+impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
     #[inline]
     unsafe fn try_from_value(
-        value: NonNull<sys::Value>,
+        value: ValuePointer<'a>,
         ctx: &mut Context,
     ) -> Result<Self> {
-        ctx.force(value)?;
+        ctx.force(value.as_ptr())?;
 
-        match ctx.get_kind(value)? {
+        match ctx.get_kind(value.as_ptr())? {
             ValueKind::Attrset => Ok(Self { inner: value }),
             other => Err(ctx.make_error(TypeMismatchError {
                 expected: ValueKind::Attrset,

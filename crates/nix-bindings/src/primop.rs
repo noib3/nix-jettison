@@ -129,13 +129,13 @@ pub trait Constant {
 /// TODO: docs.
 pub trait Function {
     /// TODO: docs.
-    type Args: Args;
+    type Args<'a>: Args;
 
     /// TODO: docs.
-    fn call(
-        args: Self::Args,
+    fn call<'a: 'a>(
+        args: Self::Args<'a>,
         ctx: &mut Context,
-    ) -> impl TryIntoValue + use<Self>;
+    ) -> impl TryIntoValue + use<'a, Self>;
 }
 
 /// TODO: docs.
@@ -171,10 +171,10 @@ struct UserData {
 }
 
 impl<C: Constant> Function for C {
-    type Args = NoArgs;
+    type Args<'a> = NoArgs;
 
     #[inline]
-    fn call(_: NoArgs, _: &mut Context) -> impl Value + use<C> {
+    fn call<'a: 'a>(_: NoArgs, _: &mut Context) -> impl Value + use<C> {
         C::value()
     }
 }

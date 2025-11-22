@@ -2,6 +2,7 @@
 
 use alloc::ffi::CString;
 use core::ffi::{CStr, c_uint};
+use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
@@ -39,7 +40,7 @@ pub trait Value {
 
 /// A trait for types that can be fallibly converted from a [`sys::Value`]
 /// pointer.
-pub trait TryFromValue: Sized {
+pub trait TryFromValue<'a>: Sized {
     /// TODO: docs.
     ///
     /// # Safety
@@ -47,7 +48,7 @@ pub trait TryFromValue: Sized {
     /// The caller must ensure that `value` is a valid pointer to a
     /// `sys::Value`.
     unsafe fn try_from_value(
-        value: NonNull<sys::Value>,
+        value: ValuePointer<'a>,
         ctx: &mut Context,
     ) -> Result<Self>;
 }
@@ -59,6 +60,13 @@ pub trait TryIntoValue {
         self,
         ctx: &mut Context,
     ) -> Result<impl Value + use<Self>>;
+}
+
+/// TODO: docs.
+#[derive(Debug, Copy, Clone)]
+pub struct ValuePointer<'a> {
+    ptr: NonNull<sys::Value>,
+    _lifetime: PhantomData<&'a sys::Value>,
 }
 
 /// TODO: docs.
@@ -117,6 +125,20 @@ pub enum ValueKind {
 
     /// TODO: docs.
     Thunk,
+}
+
+impl<'a> ValuePointer<'a> {
+    /// TODO: docs.
+    #[inline]
+    pub fn as_ptr(self) -> NonNull<sys::Value> {
+        self.ptr
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub fn as_raw(self) -> *mut sys::Value {
+        self.ptr.as_ptr()
+    }
 }
 
 impl Value for () {
@@ -365,6 +387,23 @@ impl Value for std::path::Path {
 }
 
 #[cfg(feature = "std")]
+impl Value for &std::path::Path {
+    #[inline(always)]
+    fn kind(&self) -> ValueKind {
+        (*self).kind()
+    }
+
+    #[inline(always)]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { (*self).write(dest, ctx) }
+    }
+}
+
+#[cfg(feature = "std")]
 impl Value for std::path::PathBuf {
     #[inline]
     fn kind(&self) -> ValueKind {
@@ -381,17 +420,17 @@ impl Value for std::path::PathBuf {
     }
 }
 
-impl TryFromValue for i64 {
+impl TryFromValue<'_> for i64 {
     #[inline]
     unsafe fn try_from_value(
-        value: NonNull<nix_bindings_sys::Value>,
+        value: ValuePointer<'_>,
         ctx: &mut Context,
     ) -> Result<Self> {
         ctx.force(value)?;
 
         match ctx.get_kind(value)? {
             ValueKind::Int => ctx
-                .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_ptr()) }),
+                .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_raw()) }),
             other => Err(ctx.make_error(TypeMismatchError {
                 expected: ValueKind::Int,
                 found: other,
@@ -402,10 +441,10 @@ impl TryFromValue for i64 {
 
 macro_rules! impl_try_from_value_for_int {
     ($ty:ty) => {
-        impl TryFromValue for $ty {
+        impl TryFromValue<'_> for $ty {
             #[inline]
             unsafe fn try_from_value(
-                value: NonNull<nix_bindings_sys::Value>,
+                value: NonNull<sys::Value>,
                 ctx: &mut Context,
             ) -> Result<Self> {
                 let int = unsafe { i64::try_from_value(value, ctx)? };
@@ -430,6 +469,55 @@ impl_try_from_value_for_int!(u32);
 impl_try_from_value_for_int!(u64);
 impl_try_from_value_for_int!(u128);
 impl_try_from_value_for_int!(usize);
+
+#[cfg(all(unix, feature = "std"))]
+impl<'a> TryFromValue<'a> for &'a std::path::Path {
+    #[inline]
+    unsafe fn try_from_value(
+        value: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+
+        ctx.force(value)?;
+
+        match ctx.get_kind(value)? {
+            ValueKind::Path => {},
+            other => {
+                return Err(ctx.make_error(TypeMismatchError {
+                    expected: ValueKind::Path,
+                    found: other,
+                }));
+            },
+        }
+
+        let cstr_ptr = ctx.with_raw(|ctx| unsafe {
+            sys::get_path_string(ctx, value.as_ptr())
+        })?;
+
+        // SAFETY: the [docs] guarantee that the returned pointer is
+        // valid for as long as the value is alive.
+        //
+        // [docs]: https://hydra.nixos.org/build/313564006/download/1/html/group__value__extract.html#ga3420055c22accfd07cc5537210d748a9
+        let cstr = unsafe { CStr::from_ptr(cstr_ptr) };
+
+        let os_str = std::ffi::OsStr::from_bytes(cstr.to_bytes());
+
+        Ok(std::path::Path::new(os_str))
+    }
+}
+
+#[cfg(feature = "std")]
+impl TryFromValue<'_> for std::path::PathBuf {
+    #[inline]
+    unsafe fn try_from_value(
+        value: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        unsafe { <&std::path::Path>::try_from_value(value, ctx) }
+            .map(|path| path.to_owned())
+    }
+}
 
 impl<T: Value> TryIntoValue for T {
     #[inline]

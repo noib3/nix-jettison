@@ -175,7 +175,7 @@ impl Context<EvalState> {
     /// `Context`'s public API.
     #[doc(hidden)]
     #[inline]
-    pub unsafe fn get_arg<T: TryFromValue>(
+    pub unsafe fn get_arg<'a, T: TryFromValue<'a>>(
         &mut self,
         args: NonNull<*mut sys::Value>,
         offset: u8,
