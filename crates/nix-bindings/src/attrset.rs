@@ -84,15 +84,6 @@ pub trait Attrset<'a>: Sized {
         todo!();
     }
 
-    /// Returns the index of the attribute with the given key, or `None` if no
-    /// such key exists.
-    ///
-    /// If an index is returned, it is guaranteed to be less than `self.len()`.
-    #[inline]
-    fn get_idx_of_key(&self, key: &str) -> Option<c_uint> {
-        (0..self.len()).find(|idx| self.get_key(*idx) == key)
-    }
-
     /// Returns the key of the attribute at the given index.
     ///
     /// # Panics
@@ -195,6 +186,15 @@ where
     pub fn new(keys: Keys, values: Values) -> Self {
         Self { keys, values }
     }
+
+    /// Returns the index of the attribute with the given key, or `None` if no
+    /// such key exists.
+    ///
+    /// If an index is returned, it is guaranteed to be less than `self.len()`.
+    #[inline]
+    fn get_idx_of_key(&self, key: &CStr) -> Option<c_uint> {
+        (0..self.len()).find(|idx| self.get_key_as_c_str(*idx) == key)
+    }
 }
 
 impl<'a> Attrset<'a> for AnyAttrset<'a> {
@@ -215,10 +215,9 @@ impl<'a> Attrset<'a> for AnyAttrset<'a> {
 
     #[inline]
     fn len(&self) -> c_uint {
-        // 'get_attrs_size' errors when the value pointer is NULL or when the
+        // 'get_attrs_size' errors when the value pointer is null or when the
         // value is not initizialized, but having a ValuePointer guarantees
-        // neither of those can happen, so we can use a null pointer for the
-        // context argument.
+        // neither of those can happen, so we can use a null context.
         unsafe { sys::get_attrs_size(ptr::null_mut(), self.inner.as_raw()) }
     }
 

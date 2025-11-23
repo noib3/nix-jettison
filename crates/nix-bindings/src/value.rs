@@ -140,6 +140,9 @@ impl<'a> ValuePointer<'a> {
         self.ptr.as_ptr()
     }
 
+    /// # Safety
+    ///
+    /// The caller must ensure that the value has been initialized.
     #[inline]
     pub(crate) unsafe fn new(inner: NonNull<sys::Value>) -> Self {
         Self { ptr: inner, _lifetime: PhantomData }
