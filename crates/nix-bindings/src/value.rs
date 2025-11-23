@@ -40,7 +40,7 @@ pub trait Value {
 
 /// A trait for types that can be fallibly converted from a [`sys::Value`]
 /// pointer.
-pub trait TryFromValue<'a>: Sized {
+pub trait TryFromValue<'a>: Sized + 'a {
     /// TODO: docs.
     ///
     /// # Safety

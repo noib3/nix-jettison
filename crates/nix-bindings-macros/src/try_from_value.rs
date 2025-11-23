@@ -110,7 +110,7 @@ fn try_from_attrset_impl(
 
         fields_initializers.extend(quote! {
             // SAFETY: up to the caller.
-            let #field = unsafe { #attrset.get(#field_name, #ctx)? };
+            let #field = unsafe { #attrset.get_inner(#field_name, #ctx)? };
         })
     }
 

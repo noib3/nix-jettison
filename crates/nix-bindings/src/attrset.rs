@@ -15,15 +15,15 @@ use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
 use crate::value::{FnOnceValue, TryFromValue, ValuePointer, Values};
 
 /// TODO: docs.
-pub trait Attrset<'a>: Sized {
+pub trait Attrset: Sized {
     /// Returns an [`Attrset`] implementation that borrows from `self`.
     #[inline]
-    fn borrow(&self) -> impl Attrset<'_> {
+    fn borrow(&self) -> impl Attrset {
         struct BorrowedAttrset<'a, T> {
             inner: &'a T,
         }
 
-        impl<'a, T: Attrset<'a>> Attrset<'_> for BorrowedAttrset<'_, T> {
+        impl<T: Attrset> Attrset for BorrowedAttrset<'_, T> {
             #[inline]
             fn get_key(&self, idx: c_uint) -> &str {
                 self.inner.get_key(idx)
@@ -54,6 +54,16 @@ pub trait Attrset<'a>: Sized {
             ) -> Result<()> {
                 unsafe { self.inner.write_value(idx, dest, namespace, ctx) }
             }
+
+            #[inline]
+            fn with_value<'this, V: 'this>(
+                &'this self,
+                key: &CStr,
+                fun: impl FnOnceValue<'this, V>,
+                ctx: &mut Context,
+            ) -> Result<Option<V>> {
+                self.inner.with_value(key, fun, ctx)
+            }
         }
 
         BorrowedAttrset { inner: self }
@@ -61,8 +71,8 @@ pub trait Attrset<'a>: Sized {
 
     /// TODO: docs.
     #[inline]
-    fn get<T: TryFromValue<'a>>(
-        &self,
+    fn get<'this, T: TryFromValue<'this>>(
+        &'this self,
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<T> {
@@ -76,8 +86,8 @@ pub trait Attrset<'a>: Sized {
 
     /// TODO: docs.
     #[inline]
-    fn get_opt<T: TryFromValue<'a>>(
-        &self,
+    fn get_opt<'this, T: TryFromValue<'this>>(
+        &'this self,
         _key: &CStr,
         _ctx: &mut Context,
     ) -> Result<Option<T>> {
@@ -134,6 +144,14 @@ pub trait Attrset<'a>: Sized {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()>;
+
+    /// TODO: docs.
+    fn with_value<'this, T: 'this>(
+        &'this self,
+        _key: &CStr,
+        _fun: impl FnOnceValue<'this, T>,
+        _ctx: &mut Context,
+    ) -> Result<Option<T>>;
 }
 
 /// TODO: docs.
@@ -156,6 +174,7 @@ pub trait FnOnceKey<'a, T: 'a> {
 }
 
 /// TODO: docs.
+#[derive(Copy, Clone)]
 pub struct AnyAttrset<'value> {
     inner: ValuePointer<'value>,
 }
@@ -177,9 +196,52 @@ pub struct MissingAttributeError<'a, Attrset> {
     pub attr: &'a CStr,
 }
 
-impl<'a, Keys, Values> LiteralAttrset<Keys, Values>
+impl<'a> AnyAttrset<'a> {
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_inner<T: TryFromValue<'a>>(
+        self,
+        key: &CStr,
+        ctx: &mut Context,
+    ) -> Result<T> {
+        self.get_opt_inner(key, ctx)?.ok_or_else(|| {
+            ctx.make_error(MissingAttributeError {
+                attrset: self.borrow(),
+                attr: key,
+            })
+        })
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_opt_inner<T: TryFromValue<'a>>(
+        self,
+        key: &CStr,
+        ctx: &mut Context,
+    ) -> Result<Option<T>> {
+        self.with_attr_inner(
+            key,
+            |value, ctx| unsafe { T::try_from_value(value, ctx) },
+            ctx,
+        )?
+        .transpose()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn with_attr_inner<T: 'a>(
+        self,
+        _key: &CStr,
+        _fun: impl FnOnce(ValuePointer<'a>, &mut Context) -> T,
+        _ctx: &mut Context,
+    ) -> Result<Option<T>> {
+        todo!();
+    }
+}
+
+impl<Keys, Values> LiteralAttrset<Keys, Values>
 where
-    Self: Attrset<'a>,
+    Self: Attrset,
 {
     /// Creates a new `LiteralAttrset`.
     #[inline]
@@ -197,7 +259,7 @@ where
     }
 }
 
-impl<'a> Attrset<'a> for AnyAttrset<'a> {
+impl Attrset for AnyAttrset<'_> {
     #[inline]
     fn get_key(&self, _idx: c_uint) -> &str {
         todo!()
@@ -231,6 +293,16 @@ impl<'a> Attrset<'a> for AnyAttrset<'a> {
     ) -> Result<()> {
         todo!()
     }
+
+    #[inline]
+    fn with_value<'this, T: 'this>(
+        &'this self,
+        key: &CStr,
+        fun: impl FnOnceValue<'this, T>,
+        ctx: &mut Context,
+    ) -> Result<Option<T>> {
+        todo!();
+    }
 }
 
 impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
@@ -251,7 +323,7 @@ impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
     }
 }
 
-impl<K: Keys, V: Values> Attrset<'_> for LiteralAttrset<K, V> {
+impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
     fn get_key(&self, idx: c_uint) -> &str {
         struct GetKey;
@@ -317,11 +389,23 @@ impl<K: Keys, V: Values> Attrset<'_> for LiteralAttrset<K, V> {
         }
         self.values.with_value(idx, WriteValue { dest, namespace, ctx })
     }
+
+    #[inline]
+    fn with_value<'a, T: 'a>(
+        &'a self,
+        key: &CStr,
+        fun: impl FnOnceValue<'a, T>,
+        _: &mut Context,
+    ) -> Result<Option<T>> {
+        Ok(self
+            .get_idx_of_key(key)
+            .map(|idx| self.values.with_value(idx, fun)))
+    }
 }
 
-impl<'a, Keys, Values> Value for LiteralAttrset<Keys, Values>
+impl<Keys, Values> Value for LiteralAttrset<Keys, Values>
 where
-    Self: Attrset<'a>,
+    Self: Attrset,
 {
     #[inline]
     fn kind(&self) -> ValueKind {
@@ -351,14 +435,14 @@ where
     }
 }
 
-impl<'a, A: Attrset<'a>> fmt::Display for MissingAttributeError<'_, A> {
+impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "attribute '`{:?}`' missing", self.attr)
     }
 }
 
-impl<'a, A: Attrset<'a>> ToError for MissingAttributeError<'_, A> {
+impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
     #[inline]
     fn kind(&self) -> ErrorKind {
         ErrorKind::Nix
@@ -374,7 +458,7 @@ impl<'a, A: Attrset<'a>> ToError for MissingAttributeError<'_, A> {
 /// A newtype wrapper that implements `Value` for every `Attrset`.
 struct AttrsetValue<T>(T);
 
-impl<'a, T: Attrset<'a>> Value for AttrsetValue<T> {
+impl<T: Attrset> Value for AttrsetValue<T> {
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::Attrset
