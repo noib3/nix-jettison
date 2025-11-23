@@ -36,13 +36,9 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
                 #value: ::nix_bindings::value::ValuePointer<#lifetime>,
                 #ctx: &mut ::nix_bindings::context::Context,
             ) -> ::nix_bindings::error::Result<Self> {
-                // SAFETY: up to the caller.
-                let #attrset = unsafe {
-                    ::nix_bindings::attrset::AnyAttrset::try_from_value(
-                        #value,
-                        #ctx,
-                    )?
-                };
+                let #attrset = ::nix_bindings::attrset::AnyAttrset::try_from_value(
+                    #value, #ctx,
+                )?;
                 #try_from_attrset_impl
             }
         }
@@ -109,8 +105,7 @@ fn try_from_attrset_impl(
             .map(|name| Literal::c_string(&name))?;
 
         fields_initializers.extend(quote! {
-            // SAFETY: up to the caller.
-            let #field = unsafe { #attrset.get(#field_name, #ctx)? };
+            let #field = #attrset.get(#field_name, #ctx)?;
         })
     }
 

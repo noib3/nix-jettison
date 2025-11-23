@@ -66,6 +66,7 @@ impl Context<EvalState> {
     #[inline]
     pub(crate) fn force(&mut self, value: NonNull<sys::Value>) -> Result<()> {
         unsafe {
+            // TODO: this shouldn't be infallible.
             cpp::force_value(self.state.inner.as_ptr(), value.as_ptr());
         }
         Ok(())
