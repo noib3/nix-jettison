@@ -6,26 +6,35 @@ use quote::{ToTokens, quote};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::token::Comma;
-use syn::{Data, DeriveInput, Fields, FieldsNamed};
+use syn::{
+    Data,
+    DeriveInput,
+    Fields,
+    FieldsNamed,
+    LifetimeParam,
+    parse_quote,
+};
 
 #[inline]
 pub(crate) fn args(input: DeriveInput) -> syn::Result<TokenStream> {
-    let args = Ident::new("args", Span::call_site());
-    let ctx = Ident::new("ctx", Span::call_site());
+    let args = Ident::new("__args_list", Span::call_site());
+    let ctx = Ident::new("__ctx", Span::call_site());
+    let lifetime: LifetimeParam = parse_quote!('a);
 
     let fields = named_fields(&input)?;
     let args_list = args_list(fields)?;
     let fields_initializers = fields_initializers(fields, &args, &ctx);
     let fields_list = fields_list(fields);
+    let lifetime_generic = lifetime_generic(&input, &lifetime)?;
     let struct_name = &input.ident;
 
     Ok(quote! {
-        impl ::nix_bindings::primop::Args for #struct_name {
+        impl<#lifetime> ::nix_bindings::primop::Args<#lifetime> for #struct_name #lifetime_generic {
             const NAMES: &'static [*const ::core::ffi::c_char] = &[#args_list];
 
             #[inline]
             unsafe fn from_raw(
-                #args: ::core::ptr::NonNull<*mut ::nix_bindings::sys::Value>,
+                #args: ::nix_bindings::primop::ArgsList<#lifetime>,
                 #ctx: &mut ::nix_bindings::context::Context,
             ) -> ::nix_bindings::error::Result<Self> {
                  #(#fields_initializers)*
@@ -107,13 +116,10 @@ fn fields_initializers(
 ) -> impl Iterator<Item = impl ToTokens> {
     fields.named.iter().enumerate().map(move |(idx, field)| {
         let ident = field.ident.as_ref().expect("fields are named");
-        let ty = &field.ty;
         let idx = idx as u8;
         quote! {
             // SAFETY: up to the caller.
-            let #ident = unsafe {
-                #ctx.get_arg::<#ty>(#args, #idx)?
-            };
+            let #ident = unsafe { #args.get(#idx, #ctx)? };
         }
     })
 }
@@ -124,4 +130,24 @@ fn fields_list(fields: &FieldsNamed) -> impl ToTokens {
         .iter()
         .map(|field| field.ident.as_ref().expect("fields are named"))
         .collect::<Punctuated<_, Comma>>()
+}
+
+fn lifetime_generic(
+    input: &DeriveInput,
+    lifetime: &LifetimeParam,
+) -> syn::Result<impl ToTokens> {
+    match input.generics.params.iter().fold(
+        (0, 0),
+        |(num_total, num_lifetimes), r#gen| {
+            let is_lifetime = matches!(r#gen, syn::GenericParam::Lifetime(_));
+            (num_total + 1, num_lifetimes + (is_lifetime as usize))
+        },
+    ) {
+        (0, 0) => Ok(None),
+        (1, 1) => Ok(Some(quote! { <#lifetime> })),
+        _ => Err(syn::Error::new(
+            input.generics.span(),
+            "Args can only have zero or one lifetime generic parameter",
+        )),
+    }
 }
