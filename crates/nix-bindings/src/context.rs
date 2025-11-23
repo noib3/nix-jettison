@@ -152,6 +152,11 @@ impl<State> Context<State> {
         Self { inner: ContextInner::new(ctx_ptr), state }
     }
 
+    #[inline]
+    pub(crate) fn state_mut(&mut self) -> &mut State {
+        &mut self.state
+    }
+
     /// TODO: docs.
     #[inline]
     pub(crate) fn with_raw<T>(

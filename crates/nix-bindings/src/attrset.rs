@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::ffi::CString;
 
 pub use nix_bindings_macros::attrset;
-use nix_bindings_sys as sys;
+use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
@@ -135,7 +135,7 @@ impl<'a> AnyAttrset<'a> {
             key,
             |value, ctx| T::try_from_value(value, ctx),
             ctx,
-        )?
+        )
         .transpose()
     }
 
@@ -145,28 +145,19 @@ impl<'a> AnyAttrset<'a> {
         key: &CStr,
         fun: impl FnOnce(ValuePointer<'a>, &mut Context) -> T,
         ctx: &mut Context,
-    ) -> Result<Option<T>> {
-        let res = ctx.with_raw_and_state(|ctx, state| unsafe {
-            sys::get_attr_byname_lazy(
-                ctx,
+    ) -> Option<T> {
+        let value_raw = unsafe {
+            cpp::get_attr_byname_lazy(
                 self.inner.as_raw(),
-                state.as_ptr(),
+                ctx.state_mut().as_ptr(),
                 key.as_ptr(),
             )
-        });
-
-        let value_raw = match res {
-            Ok(ptr) => ptr,
-            Err(err) if err.kind() == ErrorKind::Key => return Ok(None),
-            Err(err) => return Err(err),
         };
 
-        let Some(value_ptr) = NonNull::new(value_raw) else {
-            panic!("nix_get_attr_byname_lazy returned NULL pointer");
-        };
+        let value_ptr = NonNull::new(value_raw)?;
 
         // SAFETY: the value returned by Nix is initialized.
-        Ok(Some(fun(unsafe { ValuePointer::new(value_ptr) }, ctx)))
+        Some(fun(unsafe { ValuePointer::new(value_ptr) }, ctx))
     }
 }
 
@@ -214,7 +205,7 @@ impl Attrset for AnyAttrset<'_> {
         fun: impl FnOnceValue<T>,
         ctx: &mut Context,
     ) -> Result<Option<T>> {
-        self.with_attr_inner(key, |value, _| fun.call(value), ctx)
+        Ok(self.with_attr_inner(key, |value, _| fun.call(value), ctx))
     }
 }
 
@@ -316,7 +307,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
 impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "attribute '`{:?}`' missing", self.attr)
+        write!(f, "attribute '{}' missing", self.attr.to_string_lossy())
     }
 }
 

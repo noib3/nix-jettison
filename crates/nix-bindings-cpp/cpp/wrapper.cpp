@@ -21,6 +21,15 @@ extern "C" void make_attrs(Value* v, nix::BindingsBuilder* builder) {
     delete builder;
 }
 
+extern "C" Value* get_attr_byname_lazy(const Value* value, EvalState* state, const char* name) {
+    Symbol sym = state->symbols.create(name);
+    const Attr* attr = value->attrs()->get(sym);
+    if (!attr) {
+        return nullptr;
+    }
+    return attr->value;
+}
+
 // Values.
 
 extern "C" Value* alloc_value(EvalState* state) {

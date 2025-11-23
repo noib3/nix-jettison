@@ -86,11 +86,6 @@ pub struct TryFromI64Error<Int> {
 }
 
 impl Error {
-    #[inline]
-    pub(crate) fn kind(&self) -> ErrorKind {
-        self.kind
-    }
-
     #[deprecated = "use Context::make_error instead"]
     #[inline]
     pub(crate) fn new(kind: ErrorKind, _: &mut ContextInner) -> Self {

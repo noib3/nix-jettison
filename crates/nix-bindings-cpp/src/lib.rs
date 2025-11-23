@@ -31,6 +31,18 @@ unsafe extern "C" {
     ///
     /// This frees the builder automatically.
     pub fn make_attrs(ret: *mut Value, builder: *mut BindingsBuilder);
+
+    /// Get an attribute by name from an attribute set without forcing it.
+    ///
+    /// This is what `nix_get_attr_byname_lazy` SHOULD do, but it segfaults.
+    ///
+    /// Returns a pointer to the attribute's value if found, or null if the
+    /// attribute doesn't exist.
+    pub fn get_attr_byname_lazy(
+        value: *const Value,
+        state: *mut EvalState,
+        name: *const c_char,
+    ) -> *mut Value;
 }
 
 // Lists.
