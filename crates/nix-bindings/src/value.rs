@@ -103,18 +103,6 @@ pub trait Value {
     }
 }
 
-/// TODO: docs.
-pub trait PathValue<'a>: Value + Sized {
-    /// # Safety
-    ///
-    /// This method should only be called after a successful call to
-    /// [`kind`](Value::kind) returns `ValueKind::Path`.
-    unsafe fn into_path_string(
-        self,
-        ctx: &mut Context,
-    ) -> Result<Cow<'a, CStr>>;
-}
-
 /// A trait for types that can be fallibly converted from a [`sys::Value`]
 /// pointer.
 pub trait TryFromValue<V: Value>: Sized {
@@ -146,6 +134,18 @@ pub trait Values {
 pub trait FnOnceValue<T> {
     /// Calls the function with the given value.
     fn call(self, value: impl Value) -> T;
+}
+
+/// TODO: docs.
+pub trait PathValue: Value + Sized {
+    /// TODO: docs.
+    type Path: AsRef<CStr>;
+
+    /// # Safety
+    ///
+    /// This method should only be called after a successful call to
+    /// [`kind`](Value::kind) returns `ValueKind::Path`.
+    unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path>;
 }
 
 /// TODO: docs.
@@ -482,14 +482,13 @@ impl Value for &std::path::Path {
 }
 
 #[cfg(feature = "std")]
-impl<'a> PathValue<'a> for &std::path::Path {
+impl PathValue for &std::path::Path {
+    type Path = CString;
+
     #[inline]
-    unsafe fn into_path_string(
-        self,
-        ctx: &mut Context,
-    ) -> Result<Cow<'a, CStr>> {
+    unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path> {
         match CString::new(self.as_os_str().as_encoded_bytes()) {
-            Ok(cstr) => Ok(Cow::Owned(cstr)),
+            Ok(cstr) => Ok(cstr),
             Err(err) => Err(ctx.make_error(err)),
         }
     }
@@ -513,12 +512,11 @@ impl Value for std::path::PathBuf {
 }
 
 #[cfg(feature = "std")]
-impl<'a> PathValue<'a> for std::path::PathBuf {
+impl PathValue for std::path::PathBuf {
+    type Path = CString;
+
     #[inline]
-    unsafe fn into_path_string(
-        self,
-        ctx: &mut Context,
-    ) -> Result<Cow<'a, CStr>> {
+    unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path> {
         unsafe { self.as_path().into_path_string(ctx) }
     }
 }
@@ -581,12 +579,11 @@ impl Value for ValuePointer<'_> {
     }
 }
 
-impl<'a> PathValue<'a> for ValuePointer<'a> {
+impl<'a> PathValue for ValuePointer<'a> {
+    type Path = &'a CStr;
+
     #[inline]
-    unsafe fn into_path_string(
-        self,
-        _: &mut Context,
-    ) -> Result<Cow<'a, CStr>> {
+    unsafe fn into_path_string(self, _: &mut Context) -> Result<Self::Path> {
         let cstr_ptr =
             unsafe { sys::get_path_string(ptr::null_mut(), self.as_raw()) };
 
@@ -594,7 +591,7 @@ impl<'a> PathValue<'a> for ValuePointer<'a> {
         // valid for as long as the value is alive.
         //
         // [docs]: https://hydra.nixos.org/build/313564006/download/1/html/group__value__extract.html#ga3420055c22accfd07cc5537210d748a9
-        Ok(Cow::Borrowed(unsafe { CStr::from_ptr(cstr_ptr) }))
+        Ok(unsafe { CStr::from_ptr(cstr_ptr) })
     }
 }
 
@@ -664,7 +661,37 @@ impl_try_from_value_for_int!(u128);
 impl_try_from_value_for_int!(usize);
 
 #[cfg(all(unix, feature = "std"))]
-impl<'a, V: PathValue<'a>> TryFromValue<V> for Cow<'a, std::path::Path> {
+impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>
+    for &'a std::path::Path
+{
+    #[inline]
+    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+
+        value.force(ctx)?;
+
+        match value.kind() {
+            ValueKind::Path => {
+                // SAFETY: the value's kind is a path.
+                let cstr = unsafe { value.into_path_string(ctx)? };
+                let os_str = OsStr::from_bytes(cstr.to_bytes());
+                Ok(Path::new(os_str))
+            },
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Path,
+                found: other,
+            })),
+        }
+    }
+}
+
+#[cfg(all(unix, feature = "std"))]
+impl<'a, V: PathValue> TryFromValue<V> for Cow<'a, std::path::Path>
+where
+    V::Path: Into<Cow<'a, CStr>>,
+{
     #[inline]
     fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
         use alloc::borrow::Cow;
@@ -677,7 +704,7 @@ impl<'a, V: PathValue<'a>> TryFromValue<V> for Cow<'a, std::path::Path> {
         match value.kind() {
             ValueKind::Path => {
                 // SAFETY: the value's kind is a path.
-                match unsafe { value.into_path_string(ctx)? } {
+                match unsafe { value.into_path_string(ctx)? }.into() {
                     Cow::Borrowed(cstr) => {
                         let os_str = OsStr::from_bytes(cstr.to_bytes());
                         Ok(Cow::Borrowed(Path::new(os_str)))
@@ -697,7 +724,10 @@ impl<'a, V: PathValue<'a>> TryFromValue<V> for Cow<'a, std::path::Path> {
 }
 
 #[cfg(feature = "std")]
-impl<'a, V: PathValue<'a>> TryFromValue<V> for std::path::PathBuf {
+impl<'a, V: PathValue> TryFromValue<V> for std::path::PathBuf
+where
+    V::Path: Into<Cow<'a, CStr>>,
+{
     #[inline]
     fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
         <Cow<'_, std::path::Path>>::try_from_value(value, ctx)

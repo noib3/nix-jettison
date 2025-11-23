@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::path::Path;
 
 use nix_bindings::prelude::*;
@@ -11,7 +10,7 @@ pub(crate) struct BuildPackage;
 #[args(flatten, name = "args")]
 pub(crate) struct BuildPackageArgs<'a> {
     pkgs: AnyAttrset<'a>,
-    src: Cow<'a, Path>,
+    src: &'a Path,
 }
 
 impl Function for BuildPackage {
