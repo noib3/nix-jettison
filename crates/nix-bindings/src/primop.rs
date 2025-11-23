@@ -190,7 +190,7 @@ impl<'a> ArgsList<'a> {
     /// public API.
     #[doc(hidden)]
     #[inline]
-    pub unsafe fn get<T: TryFromValue<'a>>(
+    pub unsafe fn get<T: TryFromValue<ValuePointer<'a>>>(
         self,
         offset: u8,
         ctx: &mut Context,

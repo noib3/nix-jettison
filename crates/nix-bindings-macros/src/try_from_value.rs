@@ -30,9 +30,9 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let struct_name = &input.ident;
 
     Ok(quote! {
-        impl<#lifetime> ::nix_bindings::value::TryFromValue<#lifetime> for #struct_name #lifetime_generic {
+        impl<#lifetime> ::nix_bindings::value::TryFromValue<::nix_bindings::value::ValuePointer<#lifetime>> for #struct_name #lifetime_generic {
             #[inline]
-            unsafe fn try_from_value(
+            fn try_from_value(
                 #value: ::nix_bindings::value::ValuePointer<#lifetime>,
                 #ctx: &mut ::nix_bindings::context::Context,
             ) -> ::nix_bindings::error::Result<Self> {
@@ -110,7 +110,7 @@ fn try_from_attrset_impl(
 
         fields_initializers.extend(quote! {
             // SAFETY: up to the caller.
-            let #field = unsafe { #attrset.get_inner(#field_name, #ctx)? };
+            let #field = unsafe { #attrset.get(#field_name, #ctx)? };
         })
     }
 

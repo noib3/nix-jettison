@@ -48,31 +48,6 @@ pub trait Attrset {
         BorrowedAttrset { inner: self }
     }
 
-    /// TODO: docs.
-    #[inline]
-    fn get<'this, T: TryFromValue<'this>>(
-        &'this self,
-        key: &CStr,
-        ctx: &mut Context,
-    ) -> Result<T> {
-        self.get_opt(key, ctx)?.ok_or_else(|| {
-            ctx.make_error(MissingAttributeError {
-                attrset: self.borrow(),
-                attr: key,
-            })
-        })
-    }
-
-    /// TODO: docs.
-    #[inline]
-    fn get_opt<'this, T: TryFromValue<'this>>(
-        &'this self,
-        _key: &CStr,
-        _ctx: &mut Context,
-    ) -> Result<Option<T>> {
-        todo!();
-    }
-
     /// Returns the number of attributes in this attribute set.
     fn len(&self) -> c_uint;
 
@@ -134,14 +109,14 @@ pub struct MissingAttributeError<'a, Attrset> {
 }
 
 impl<'a> AnyAttrset<'a> {
-    #[doc(hidden)]
+    /// TODO: docs.
     #[inline]
-    pub fn get_inner<T: TryFromValue<'a>>(
+    pub fn get<T: TryFromValue<ValuePointer<'a>> + 'a>(
         self,
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<T> {
-        self.get_opt_inner(key, ctx)?.ok_or_else(|| {
+        self.get_opt(key, ctx)?.ok_or_else(|| {
             ctx.make_error(MissingAttributeError {
                 attrset: self.borrow(),
                 attr: key,
@@ -149,16 +124,16 @@ impl<'a> AnyAttrset<'a> {
         })
     }
 
-    #[doc(hidden)]
+    /// TODO: docs.
     #[inline]
-    pub fn get_opt_inner<T: TryFromValue<'a>>(
+    pub fn get_opt<T: TryFromValue<ValuePointer<'a>> + 'a>(
         self,
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<Option<T>> {
         self.with_attr_inner(
             key,
-            |value, ctx| unsafe { T::try_from_value(value, ctx) },
+            |value, ctx| T::try_from_value(value, ctx),
             ctx,
         )?
         .transpose()
@@ -243,9 +218,9 @@ impl Attrset for AnyAttrset<'_> {
     }
 }
 
-impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
+impl<'a> TryFromValue<ValuePointer<'a>> for AnyAttrset<'a> {
     #[inline]
-    unsafe fn try_from_value(
+    fn try_from_value(
         value: ValuePointer<'a>,
         ctx: &mut Context,
     ) -> Result<Self> {

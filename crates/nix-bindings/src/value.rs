@@ -1,5 +1,6 @@
 //! TODO: docs.
 
+use alloc::borrow::Cow;
 use alloc::ffi::CString;
 use core::ffi::{CStr, c_uint};
 use core::marker::PhantomData;
@@ -13,6 +14,35 @@ use crate::prelude::{Context, PrimOp};
 
 /// TODO: docs.
 pub trait Value {
+    /// Returns the kind of this value.
+    fn kind(&self) -> ValueKind;
+
+    /// Writes this value into the given, pre-allocated destination.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the `dest` points to a value that has been
+    /// allocated but *not* yet initialized.
+    #[doc(hidden)]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()>;
+
+    /// TODO: docs.
+    #[doc(hidden)]
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
+        dest: NonNull<sys::Value>,
+        #[expect(unused_variables)] namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        debug_assert_ne!(self.kind(), ValueKind::Attrset);
+        unsafe { self.write(dest, ctx) }
+    }
+
     /// TODO: docs.
     #[inline]
     fn borrow(&self) -> impl Value {
@@ -56,49 +86,42 @@ pub trait Value {
         BorrowedValue { inner: self }
     }
 
-    /// Returns the kind of this value.
-    fn kind(&self) -> ValueKind;
+    /// TODO: docs.
+    #[inline(always)]
+    fn force(self, _ctx: &mut Context) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(self)
+    }
 
-    /// Writes this value into the given, pre-allocated destination.
-    ///
     /// # Safety
     ///
-    /// The caller must ensure that the `dest` points to a value that has been
-    /// allocated but *not* yet initialized.
-    #[doc(hidden)]
-    unsafe fn write(
-        &self,
-        dest: NonNull<sys::Value>,
-        ctx: &mut Context,
-    ) -> Result<()>;
+    /// This method should only be called after a successful call to
+    /// [`kind`](Value::kind) returns `ValueKind::Int`.
+    #[allow(unused_variables)]
+    unsafe fn get_int(&self, ctx: &mut Context) -> i64 {
+        unimplemented!()
+    }
 
-    /// TODO: docs.
-    #[doc(hidden)]
-    #[inline]
-    unsafe fn write_with_namespace(
-        &self,
-        dest: NonNull<sys::Value>,
-        #[expect(unused_variables)] namespace: impl Namespace,
+    /// # Safety
+    ///
+    /// This method should only be called after a successful call to
+    /// [`kind`](Value::kind) returns `ValueKind::Path`.
+    #[allow(unused_variables)]
+    unsafe fn get_path_string<'this>(
+        &'this self,
         ctx: &mut Context,
-    ) -> Result<()> {
-        debug_assert_ne!(self.kind(), ValueKind::Attrset);
-        unsafe { self.write(dest, ctx) }
+    ) -> Result<Cow<'this, CStr>> {
+        unimplemented!()
     }
 }
 
 /// A trait for types that can be fallibly converted from a [`sys::Value`]
 /// pointer.
-pub trait TryFromValue<'a>: Sized + 'a {
+pub trait TryFromValue<V: Value + Sized>: Sized {
     /// TODO: docs.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `value` is a valid pointer to a
-    /// `sys::Value`.
-    unsafe fn try_from_value(
-        value: ValuePointer<'a>,
-        ctx: &mut Context,
-    ) -> Result<Self>;
+    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self>;
 }
 
 /// A trait for types that can be fallibly converted into [`Value`]s.
@@ -246,6 +269,11 @@ macro_rules! impl_value_for_int {
                 ctx.with_raw(|ctx| unsafe {
                     sys::init_int(ctx, dest.as_ptr(), (*self).into());
                 })
+            }
+
+            #[inline]
+            unsafe fn get_int(&self, _: &mut Context) -> i64 {
+                (*self).into()
             }
         }
     };
@@ -436,6 +464,17 @@ impl Value for std::path::Path {
             );
         })
     }
+
+    #[inline]
+    unsafe fn get_path_string<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> Result<Cow<'this, CStr>> {
+        match CString::new(self.as_os_str().as_encoded_bytes()) {
+            Ok(cstr) => Ok(Cow::Owned(cstr)),
+            Err(err) => Err(ctx.make_error(err)),
+        }
+    }
 }
 
 #[cfg(feature = "std")]
@@ -452,6 +491,14 @@ impl Value for &std::path::Path {
         ctx: &mut Context,
     ) -> Result<()> {
         unsafe { (*self).write(dest, ctx) }
+    }
+
+    #[inline(always)]
+    unsafe fn get_path_string<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> Result<Cow<'this, CStr>> {
+        unsafe { (*self).get_path_string(ctx) }
     }
 }
 
@@ -470,9 +517,22 @@ impl Value for std::path::PathBuf {
     ) -> Result<()> {
         unsafe { self.as_path().write(dest, ctx) }
     }
+
+    #[inline(always)]
+    unsafe fn get_path_string<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> Result<Cow<'this, CStr>> {
+        unsafe { self.as_path().get_path_string(ctx) }
+    }
 }
 
 impl Value for ValuePointer<'_> {
+    #[inline]
+    fn force(self, ctx: &mut Context) -> Result<Self> {
+        ctx.force(self.as_ptr()).map(|()| self)
+    }
+
     #[inline]
     fn kind(&self) -> ValueKind {
         // 'nix_get_type' errors when the value pointer is null or when the
@@ -518,19 +578,36 @@ impl Value for ValuePointer<'_> {
         };
         Ok(())
     }
+
+    #[inline]
+    unsafe fn get_int(&self, _: &mut Context) -> i64 {
+        unsafe { sys::get_int(ptr::null_mut(), self.as_raw()) }
+    }
+
+    #[inline]
+    unsafe fn get_path_string<'this>(
+        &'this self,
+        _: &mut Context,
+    ) -> Result<Cow<'this, CStr>> {
+        let cstr_ptr =
+            unsafe { sys::get_path_string(ptr::null_mut(), self.as_raw()) };
+
+        // SAFETY: the [docs] guarantee that the returned pointer is
+        // valid for as long as the value is alive.
+        //
+        // [docs]: https://hydra.nixos.org/build/313564006/download/1/html/group__value__extract.html#ga3420055c22accfd07cc5537210d748a9
+        Ok(Cow::Borrowed(unsafe { CStr::from_ptr(cstr_ptr) }))
+    }
 }
 
-impl TryFromValue<'_> for i64 {
+impl<V: Value> TryFromValue<V> for i64 {
     #[inline]
-    unsafe fn try_from_value(
-        value: ValuePointer<'_>,
-        ctx: &mut Context,
-    ) -> Result<Self> {
-        ctx.force(value.as_ptr())?;
+    fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
+        value = value.force(ctx)?;
 
         match value.kind() {
-            ValueKind::Int => ctx
-                .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_raw()) }),
+            // SAFETY: the value's kind is an integer.
+            ValueKind::Int => Ok(unsafe { value.get_int(ctx) }),
             other => Err(ctx.make_error(TypeMismatchError {
                 expected: ValueKind::Int,
                 found: other,
@@ -541,13 +618,10 @@ impl TryFromValue<'_> for i64 {
 
 macro_rules! impl_try_from_value_for_int {
     ($ty:ty) => {
-        impl TryFromValue<'_> for $ty {
+        impl<V: Value> TryFromValue<V> for $ty {
             #[inline]
-            unsafe fn try_from_value(
-                value: ValuePointer<'_>,
-                ctx: &mut Context,
-            ) -> Result<Self> {
-                let int = unsafe { i64::try_from_value(value, ctx)? };
+            fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
+                let int = i64::try_from_value(value, ctx)?;
 
                 int.try_into().map_err(|_| {
                     ctx.make_error(TryFromI64Error::<$ty>::new(int))
@@ -571,50 +645,34 @@ impl_try_from_value_for_int!(u128);
 impl_try_from_value_for_int!(usize);
 
 #[cfg(all(unix, feature = "std"))]
-impl<'a> TryFromValue<'a> for &'a std::path::Path {
+impl<'a, V: Value + 'a> TryFromValue<V> for &'a std::path::Path {
     #[inline]
-    unsafe fn try_from_value(
-        value: ValuePointer<'a>,
-        ctx: &mut Context,
-    ) -> Result<Self> {
+    fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
         use std::os::unix::ffi::OsStrExt;
 
-        ctx.force(value.as_ptr())?;
+        value = value.force(ctx)?;
 
         match value.kind() {
-            ValueKind::Path => {},
-            other => {
-                return Err(ctx.make_error(TypeMismatchError {
-                    expected: ValueKind::Path,
-                    found: other,
-                }));
+            ValueKind::Path => {
+                // SAFETY: the value's kind is a path.
+                let cstr = unsafe { value.get_path_string(ctx)? };
+                let _os_str = std::ffi::OsStr::from_bytes(cstr.to_bytes());
+                todo!();
+                // Ok(std::path::Path::new(os_str))
             },
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Path,
+                found: other,
+            })),
         }
-
-        let cstr_ptr = ctx.with_raw(|ctx| unsafe {
-            sys::get_path_string(ctx, value.as_raw())
-        })?;
-
-        // SAFETY: the [docs] guarantee that the returned pointer is
-        // valid for as long as the value is alive.
-        //
-        // [docs]: https://hydra.nixos.org/build/313564006/download/1/html/group__value__extract.html#ga3420055c22accfd07cc5537210d748a9
-        let cstr = unsafe { CStr::from_ptr(cstr_ptr) };
-
-        let os_str = std::ffi::OsStr::from_bytes(cstr.to_bytes());
-
-        Ok(std::path::Path::new(os_str))
     }
 }
 
 #[cfg(feature = "std")]
-impl TryFromValue<'_> for std::path::PathBuf {
+impl<V: Value> TryFromValue<V> for std::path::PathBuf {
     #[inline]
-    unsafe fn try_from_value(
-        value: ValuePointer<'_>,
-        ctx: &mut Context,
-    ) -> Result<Self> {
-        unsafe { <&std::path::Path>::try_from_value(value, ctx) }
+    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
+        <&std::path::Path>::try_from_value(value, ctx)
             .map(|path| path.to_owned())
     }
 }
