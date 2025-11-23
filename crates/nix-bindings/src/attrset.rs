@@ -30,17 +30,6 @@ pub trait Attrset {
             }
 
             #[inline]
-            unsafe fn write_value(
-                &self,
-                idx: c_uint,
-                dest: NonNull<sys::Value>,
-                namespace: impl Namespace,
-                ctx: &mut Context,
-            ) -> Result<()> {
-                unsafe { self.inner.write_value(idx, dest, namespace, ctx) }
-            }
-
-            #[inline]
             fn with_value<'this, V: 'this>(
                 &'this self,
                 key: &CStr,
@@ -88,28 +77,12 @@ pub trait Attrset {
         self.len() == 0
     }
 
-    /// Writes the value of the attribute at the given index into the given
-    /// destination pointer.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `dest` points to a valid, uninitialized
-    /// `sys::Value` instance.
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn write_value(
-        &self,
-        idx: c_uint,
-        dest: NonNull<sys::Value>,
-        namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()>;
-
     /// TODO: docs.
     fn with_value<'this, T: 'this>(
         &'this self,
-        _key: &CStr,
-        _fun: impl FnOnceValue<'this, T>,
-        _ctx: &mut Context,
+        key: &CStr,
+        fun: impl FnOnceValue<'this, T>,
+        ctx: &mut Context,
     ) -> Result<Option<T>>;
 }
 
@@ -255,17 +228,6 @@ impl Attrset for AnyAttrset<'_> {
     }
 
     #[inline]
-    unsafe fn write_value(
-        &self,
-        _idx: c_uint,
-        _dest: NonNull<nix_bindings_sys::Value>,
-        _namespace: impl Namespace,
-        _ctx: &mut Context,
-    ) -> Result<()> {
-        todo!()
-    }
-
-    #[inline]
     fn with_value<'this, T: 'this>(
         &'this self,
         key: &CStr,
@@ -302,33 +264,6 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 
     #[inline]
-    unsafe fn write_value(
-        &self,
-        idx: c_uint,
-        dest: NonNull<sys::Value>,
-        namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        struct WriteValue<'ctx, N> {
-            dest: NonNull<sys::Value>,
-            namespace: N,
-            ctx: &'ctx mut Context,
-        }
-        impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
-            fn call(self, value: impl Value) -> Result<()> {
-                unsafe {
-                    value.write_with_namespace(
-                        self.dest,
-                        self.namespace,
-                        self.ctx,
-                    )
-                }
-            }
-        }
-        self.values.with_value(idx, WriteValue { dest, namespace, ctx })
-    }
-
-    #[inline]
     fn with_value<'a, T: 'a>(
         &'a self,
         key: &CStr,
@@ -362,19 +297,39 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
         mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe {
-            let len = self.len();
-            let mut builder = ctx.make_attrset_builder(len as usize)?;
-            for idx in 0..len {
-                let key = self.get_key(idx);
-                let new_namespace = namespace.push(key);
-                builder.insert(key, |dest, ctx| {
-                    self.write_value(idx, dest, new_namespace, ctx)
-                })?;
-                namespace = new_namespace.pop();
-            }
-            builder.build(dest)
+        struct WriteValue<'ctx, N> {
+            dest: NonNull<sys::Value>,
+            namespace: N,
+            ctx: &'ctx mut Context,
         }
+
+        impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
+            fn call(self, value: impl Value) -> Result<()> {
+                unsafe {
+                    value.write_with_namespace(
+                        self.dest,
+                        self.namespace,
+                        self.ctx,
+                    )
+                }
+            }
+        }
+
+        let len = self.len();
+
+        let mut builder = ctx.make_attrset_builder(len as usize)?;
+
+        for idx in 0..len {
+            let key = self.get_key(idx);
+            let new_namespace = namespace.push(key);
+            builder.insert(key, |dest, ctx| {
+                self.values
+                    .with_value(idx, WriteValue { dest, namespace, ctx })
+            })?;
+            namespace = new_namespace.pop();
+        }
+
+        builder.build(dest)
     }
 }
 
