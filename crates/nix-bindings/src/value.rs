@@ -14,6 +14,44 @@ use crate::prelude::{Context, PrimOp};
 /// TODO: docs.
 pub trait Value {
     /// Returns the kind of this value.
+    #[inline]
+    fn borrow(&self) -> impl Value {
+        struct BorrowedValue<'a, T: ?Sized> {
+            inner: &'a T,
+        }
+
+        impl<T: Value + ?Sized> Value for BorrowedValue<'_, T> {
+            #[inline]
+            fn kind(&self) -> ValueKind {
+                self.inner.kind()
+            }
+
+            #[inline]
+            unsafe fn write(
+                &self,
+                dest: NonNull<sys::Value>,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                unsafe { self.inner.write(dest, ctx) }
+            }
+
+            #[inline]
+            unsafe fn write_with_namespace(
+                &self,
+                dest: NonNull<sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                unsafe {
+                    self.inner.write_with_namespace(dest, namespace, ctx)
+                }
+            }
+        }
+
+        BorrowedValue { inner: self }
+    }
+
+    /// Returns the kind of this value.
     fn kind(&self) -> ValueKind;
 
     /// Writes this value into the given, pre-allocated destination.
@@ -85,7 +123,7 @@ pub trait Values {
 /// This is semantically equivalent to `FnOnce(&impl Value) -> T`.
 pub trait FnOnceValue<'a, T: 'a> {
     /// Calls the function with the given value.
-    fn call(self, value: &'a impl Value) -> T;
+    fn call(self, value: impl Value + 'a) -> T;
 }
 
 /// TODO: docs.
@@ -643,7 +681,7 @@ mod values_impls {
                     _fun: impl FnOnceValue<'a, T>,
                 ) -> T {
                     match value_idx {
-                        $($idx => _fun.call(&self.$idx),)*
+                        $($idx => _fun.call(self.$idx.borrow()),)*
                         other => panic_tuple_index_oob(other, <Self as Values>::LEN),
                     }
                 }

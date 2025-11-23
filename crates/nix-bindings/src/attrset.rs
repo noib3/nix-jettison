@@ -15,15 +15,15 @@ use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
 use crate::value::{FnOnceValue, TryFromValue, ValuePointer, Values};
 
 /// TODO: docs.
-pub trait Attrset: Sized {
+pub trait Attrset {
     /// Returns an [`Attrset`] implementation that borrows from `self`.
     #[inline]
     fn borrow(&self) -> impl Attrset {
-        struct BorrowedAttrset<'a, T> {
+        struct BorrowedAttrset<'a, T: ?Sized> {
             inner: &'a T,
         }
 
-        impl<T: Attrset> Attrset for BorrowedAttrset<'_, T> {
+        impl<T: Attrset + ?Sized> Attrset for BorrowedAttrset<'_, T> {
             #[inline]
             fn len(&self) -> c_uint {
                 self.inner.len()
@@ -186,9 +186,8 @@ impl<'a> AnyAttrset<'a> {
         .transpose()
     }
 
-    #[doc(hidden)]
     #[inline]
-    pub fn with_attr_inner<T: 'a>(
+    fn with_attr_inner<T: 'a>(
         self,
         _key: &CStr,
         _fun: impl FnOnce(ValuePointer<'a>, &mut Context) -> T,
@@ -249,11 +248,11 @@ impl Attrset for AnyAttrset<'_> {
     #[inline]
     fn with_value<'this, T: 'this>(
         &'this self,
-        _key: &CStr,
-        _fun: impl FnOnceValue<'this, T>,
-        _ctx: &mut Context,
+        key: &CStr,
+        fun: impl FnOnceValue<'this, T>,
+        ctx: &mut Context,
     ) -> Result<Option<T>> {
-        todo!();
+        self.with_attr_inner(key, |value, _| fun.call(value), ctx)
     }
 }
 
@@ -296,7 +295,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
             ctx: &'ctx mut Context,
         }
         impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
-            fn call(self, value: &impl Value) -> Result<()> {
+            fn call(self, value: impl Value) -> Result<()> {
                 unsafe {
                     value.write_with_namespace(
                         self.dest,

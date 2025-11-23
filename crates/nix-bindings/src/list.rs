@@ -109,7 +109,7 @@ impl<V: Values> List for LiteralList<V> {
     fn get_value_kind(&self, idx: c_uint) -> ValueKind {
         struct GetValueKind;
         impl FnOnceValue<'_, ValueKind> for GetValueKind {
-            fn call(self, value: &impl Value) -> ValueKind {
+            fn call(self, value: impl Value) -> ValueKind {
                 value.kind()
             }
         }
@@ -135,7 +135,7 @@ impl<V: Values> List for LiteralList<V> {
             ctx: &'ctx mut Context,
         }
         impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
-            fn call(self, value: &impl Value) -> Result<()> {
+            fn call(self, value: impl Value) -> Result<()> {
                 unsafe {
                     value.write_with_namespace(
                         self.dest,
@@ -183,7 +183,7 @@ where
         ctx: &mut Context,
     ) -> Result<()> {
         unsafe {
-            self.borrow()
+            List::borrow(self)
                 .into_value()
                 .write_with_namespace(dest, namespace, ctx)
         }
