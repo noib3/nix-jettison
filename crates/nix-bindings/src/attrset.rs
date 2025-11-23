@@ -15,15 +15,15 @@ use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
 use crate::value::{FnOnceValue, TryFromValue, ValuePointer, Values};
 
 /// TODO: docs.
-pub trait Attrset: Sized {
+pub trait Attrset<'a>: Sized {
     /// Returns an [`Attrset`] implementation that borrows from `self`.
     #[inline]
-    fn borrow(&self) -> impl Attrset {
+    fn borrow(&self) -> impl Attrset<'_> {
         struct BorrowedAttrset<'a, T> {
             inner: &'a T,
         }
 
-        impl<T: Attrset> Attrset for BorrowedAttrset<'_, T> {
+        impl<'a, T: Attrset<'a>> Attrset<'_> for BorrowedAttrset<'_, T> {
             #[inline]
             fn get_key(&self, idx: c_uint) -> &str {
                 self.inner.get_key(idx)
@@ -61,8 +61,8 @@ pub trait Attrset: Sized {
 
     /// TODO: docs.
     #[inline]
-    fn get<'this, T: TryFromValue<'this>>(
-        &'this self,
+    fn get<T: TryFromValue<'a>>(
+        &self,
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<T> {
@@ -76,8 +76,8 @@ pub trait Attrset: Sized {
 
     /// TODO: docs.
     #[inline]
-    fn get_opt<'this, T: TryFromValue<'this>>(
-        &'this self,
+    fn get_opt<T: TryFromValue<'a>>(
+        &self,
         _key: &CStr,
         _ctx: &mut Context,
     ) -> Result<Option<T>> {
@@ -186,9 +186,9 @@ pub struct MissingAttributeError<'a, Attrset> {
     pub attr: &'a CStr,
 }
 
-impl<Keys, Values> LiteralAttrset<Keys, Values>
+impl<'a, Keys, Values> LiteralAttrset<Keys, Values>
 where
-    Self: Attrset,
+    Self: Attrset<'a>,
 {
     /// Creates a new `LiteralAttrset`.
     #[inline]
@@ -197,7 +197,7 @@ where
     }
 }
 
-impl Attrset for AnyAttrset<'_> {
+impl<'a> Attrset<'a> for AnyAttrset<'a> {
     #[inline]
     fn get_key(&self, _idx: c_uint) -> &str {
         todo!()
@@ -248,7 +248,7 @@ impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
     }
 }
 
-impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
+impl<K: Keys, V: Values> Attrset<'_> for LiteralAttrset<K, V> {
     #[inline]
     fn get_key(&self, idx: c_uint) -> &str {
         struct GetKey;
@@ -316,9 +316,9 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 }
 
-impl<Keys, Values> Value for LiteralAttrset<Keys, Values>
+impl<'a, Keys, Values> Value for LiteralAttrset<Keys, Values>
 where
-    Self: Attrset,
+    Self: Attrset<'a>,
 {
     #[inline]
     fn kind(&self) -> ValueKind {
@@ -348,14 +348,14 @@ where
     }
 }
 
-impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
+impl<'a, A: Attrset<'a>> fmt::Display for MissingAttributeError<'_, A> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "attribute '`{:?}`' missing", self.attr)
     }
 }
 
-impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
+impl<'a, A: Attrset<'a>> ToError for MissingAttributeError<'_, A> {
     #[inline]
     fn kind(&self) -> ErrorKind {
         ErrorKind::Nix
@@ -371,7 +371,7 @@ impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
 /// A newtype wrapper that implements `Value` for every `Attrset`.
 struct AttrsetValue<T>(T);
 
-impl<T: Attrset> Value for AttrsetValue<T> {
+impl<'a, T: Attrset<'a>> Value for AttrsetValue<T> {
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::Attrset

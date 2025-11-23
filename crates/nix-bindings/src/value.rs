@@ -139,6 +139,11 @@ impl<'a> ValuePointer<'a> {
     pub fn as_raw(self) -> *mut sys::Value {
         self.ptr.as_ptr()
     }
+
+    #[inline]
+    pub(crate) unsafe fn new(inner: NonNull<sys::Value>) -> Self {
+        Self { ptr: inner, _lifetime: PhantomData }
+    }
 }
 
 impl Value for () {
@@ -426,9 +431,9 @@ impl TryFromValue<'_> for i64 {
         value: ValuePointer<'_>,
         ctx: &mut Context,
     ) -> Result<Self> {
-        ctx.force(value)?;
+        ctx.force(value.as_ptr())?;
 
-        match ctx.get_kind(value)? {
+        match ctx.get_kind(value.as_ptr())? {
             ValueKind::Int => ctx
                 .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_raw()) }),
             other => Err(ctx.make_error(TypeMismatchError {
@@ -444,7 +449,7 @@ macro_rules! impl_try_from_value_for_int {
         impl TryFromValue<'_> for $ty {
             #[inline]
             unsafe fn try_from_value(
-                value: NonNull<sys::Value>,
+                value: ValuePointer<'_>,
                 ctx: &mut Context,
             ) -> Result<Self> {
                 let int = unsafe { i64::try_from_value(value, ctx)? };
@@ -474,14 +479,14 @@ impl_try_from_value_for_int!(usize);
 impl<'a> TryFromValue<'a> for &'a std::path::Path {
     #[inline]
     unsafe fn try_from_value(
-        value: NonNull<sys::Value>,
+        value: ValuePointer<'a>,
         ctx: &mut Context,
     ) -> Result<Self> {
         use std::os::unix::ffi::OsStrExt;
 
-        ctx.force(value)?;
+        ctx.force(value.as_ptr())?;
 
-        match ctx.get_kind(value)? {
+        match ctx.get_kind(value.as_ptr())? {
             ValueKind::Path => {},
             other => {
                 return Err(ctx.make_error(TypeMismatchError {
@@ -492,7 +497,7 @@ impl<'a> TryFromValue<'a> for &'a std::path::Path {
         }
 
         let cstr_ptr = ctx.with_raw(|ctx| unsafe {
-            sys::get_path_string(ctx, value.as_ptr())
+            sys::get_path_string(ctx, value.as_raw())
         })?;
 
         // SAFETY: the [docs] guarantee that the returned pointer is
@@ -511,7 +516,7 @@ impl<'a> TryFromValue<'a> for &'a std::path::Path {
 impl TryFromValue<'_> for std::path::PathBuf {
     #[inline]
     unsafe fn try_from_value(
-        value: NonNull<sys::Value>,
+        value: ValuePointer<'_>,
         ctx: &mut Context,
     ) -> Result<Self> {
         unsafe { <&std::path::Path>::try_from_value(value, ctx) }

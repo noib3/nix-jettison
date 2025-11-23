@@ -8,7 +8,7 @@ use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 use crate::error::{Error, ErrorKind, Result, ToError};
 use crate::namespace::Namespace;
 use crate::primop::PrimOp;
-use crate::value::{TryFromValue, ValueKind};
+use crate::value::{TryFromValue, ValueKind, ValuePointer};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -184,7 +184,7 @@ impl Context<EvalState> {
         let arg_ptr = NonNull::new(arg_raw).ok_or_else(|| {
             self.make_error((ErrorKind::Overflow, c"argument is NULL"))
         })?;
-        unsafe { T::try_from_value(arg_ptr, self) }
+        unsafe { T::try_from_value(ValuePointer::new(arg_ptr), self) }
     }
 }
 
