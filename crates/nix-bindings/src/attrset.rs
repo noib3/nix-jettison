@@ -33,7 +33,7 @@ pub trait Attrset {
             fn with_value<'this, V: 'this>(
                 &'this self,
                 key: &CStr,
-                fun: impl FnOnceValue<'this, V>,
+                fun: impl FnOnceValue<V>,
                 ctx: &mut Context,
             ) -> Result<Option<V>> {
                 self.inner.with_value(key, fun, ctx)
@@ -81,7 +81,7 @@ pub trait Attrset {
     fn with_value<'this, T: 'this>(
         &'this self,
         key: &CStr,
-        fun: impl FnOnceValue<'this, T>,
+        fun: impl FnOnceValue<T>,
         ctx: &mut Context,
     ) -> Result<Option<T>>;
 }
@@ -231,7 +231,7 @@ impl Attrset for AnyAttrset<'_> {
     fn with_value<'this, T: 'this>(
         &'this self,
         key: &CStr,
-        fun: impl FnOnceValue<'this, T>,
+        fun: impl FnOnceValue<T>,
         ctx: &mut Context,
     ) -> Result<Option<T>> {
         self.with_attr_inner(key, |value, _| fun.call(value), ctx)
@@ -267,7 +267,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     fn with_value<'a, T: 'a>(
         &'a self,
         key: &CStr,
-        fun: impl FnOnceValue<'a, T>,
+        fun: impl FnOnceValue<T>,
         _: &mut Context,
     ) -> Result<Option<T>> {
         Ok(self
@@ -303,7 +303,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
             ctx: &'ctx mut Context,
         }
 
-        impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
+        impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, N> {
             fn call(self, value: impl Value) -> Result<()> {
                 unsafe {
                     value.write_with_namespace(

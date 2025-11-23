@@ -114,16 +114,16 @@ pub trait Values {
     fn with_value<'a, T: 'a>(
         &'a self,
         value_idx: c_uint,
-        fun: impl FnOnceValue<'a, T>,
+        fun: impl FnOnceValue<T>,
     ) -> T;
 }
 
 /// A trait to get around the lack of support for generics in closures.
 ///
 /// This is semantically equivalent to `FnOnce(&impl Value) -> T`.
-pub trait FnOnceValue<'a, T: 'a> {
+pub trait FnOnceValue<T> {
     /// Calls the function with the given value.
-    fn call(self, value: impl Value + 'a) -> T;
+    fn call(self, value: impl Value) -> T;
 }
 
 /// TODO: docs.
@@ -678,7 +678,7 @@ mod values_impls {
                 fn with_value<'a, T: 'a>(
                     &'a self,
                     value_idx: c_uint,
-                    _fun: impl FnOnceValue<'a, T>,
+                    _fun: impl FnOnceValue<T>,
                 ) -> T {
                     match value_idx {
                         $($idx => _fun.call(self.$idx.borrow()),)*

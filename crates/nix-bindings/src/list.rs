@@ -108,7 +108,7 @@ impl<V: Values> List for LiteralList<V> {
     #[inline]
     fn get_value_kind(&self, idx: c_uint) -> ValueKind {
         struct GetValueKind;
-        impl FnOnceValue<'_, ValueKind> for GetValueKind {
+        impl FnOnceValue<ValueKind> for GetValueKind {
             fn call(self, value: impl Value) -> ValueKind {
                 value.kind()
             }
@@ -134,7 +134,7 @@ impl<V: Values> List for LiteralList<V> {
             namespace: N,
             ctx: &'ctx mut Context,
         }
-        impl<N: Namespace> FnOnceValue<'_, Result<()>> for WriteValue<'_, N> {
+        impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, N> {
             fn call(self, value: impl Value) -> Result<()> {
                 unsafe {
                     value.write_with_namespace(
