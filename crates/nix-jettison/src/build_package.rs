@@ -7,11 +7,8 @@ use nix_bindings::prelude::*;
 pub(crate) struct BuildPackage;
 
 #[derive(nix_bindings::Args)]
-pub(crate) struct SingleArg<'a> {
-    args: BuildPackageArgs<'a>,
-}
-
-struct BuildPackageArgs<'a> {
+#[args(flatten, name = "args")]
+pub(crate) struct BuildPackageArgs<'a> {
     pkgs: AnyAttrset<'a>,
     src: &'a Path,
 }
@@ -31,11 +28,11 @@ impl<'a> TryFromValue<'a> for BuildPackageArgs<'a> {
 }
 
 impl Function for BuildPackage {
-    type Args<'a> = SingleArg<'a>;
+    type Args<'a> = BuildPackageArgs<'a>;
 
-    fn call<'a: 'a>(
-        SingleArg { args }: Self::Args<'a>,
-        _ctx: &mut Context,
+    fn call<'a>(
+        args: Self::Args<'a>,
+        _: &mut Context,
     ) -> impl Value + use<'a> {
         attrset! {
             pkgs_len: args.pkgs.len(),

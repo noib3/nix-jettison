@@ -9,7 +9,7 @@ use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
 /// TODO: docs
-#[proc_macro_derive(Args)]
+#[proc_macro_derive(Args, attributes(args))]
 pub fn args(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
     args::args(input).unwrap_or_else(syn::Error::into_compile_error).into()
