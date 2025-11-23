@@ -30,8 +30,8 @@ pub trait Attrset {
             }
 
             #[inline]
-            fn with_value<'this, V: 'this>(
-                &'this self,
+            fn with_value<V>(
+                &self,
                 key: &CStr,
                 fun: impl FnOnceValue<V>,
                 ctx: &mut Context,
@@ -78,8 +78,8 @@ pub trait Attrset {
     }
 
     /// TODO: docs.
-    fn with_value<'this, T: 'this>(
-        &'this self,
+    fn with_value<T>(
+        &self,
         key: &CStr,
         fun: impl FnOnceValue<T>,
         ctx: &mut Context,
@@ -228,8 +228,8 @@ impl Attrset for AnyAttrset<'_> {
     }
 
     #[inline]
-    fn with_value<'this, T: 'this>(
-        &'this self,
+    fn with_value<T>(
+        &self,
         key: &CStr,
         fun: impl FnOnceValue<T>,
         ctx: &mut Context,
@@ -264,8 +264,8 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 
     #[inline]
-    fn with_value<'a, T: 'a>(
-        &'a self,
+    fn with_value<T>(
+        &self,
         key: &CStr,
         fun: impl FnOnceValue<T>,
         _: &mut Context,

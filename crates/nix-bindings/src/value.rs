@@ -111,16 +111,12 @@ pub trait Values {
     const LEN: c_uint;
 
     /// TODO: docs.
-    fn with_value<'a, T: 'a>(
-        &'a self,
-        value_idx: c_uint,
-        fun: impl FnOnceValue<T>,
-    ) -> T;
+    fn with_value<T>(&self, value_idx: c_uint, fun: impl FnOnceValue<T>) -> T;
 }
 
 /// A trait to get around the lack of support for generics in closures.
 ///
-/// This is semantically equivalent to `FnOnce(&impl Value) -> T`.
+/// This is semantically equivalent to `FnOnce<V: Value>(V) -> T`.
 pub trait FnOnceValue<T> {
     /// Calls the function with the given value.
     fn call(self, value: impl Value) -> T;
@@ -170,7 +166,7 @@ pub enum ValueKind {
     Thunk,
 }
 
-impl<'a> ValuePointer<'a> {
+impl ValuePointer<'_> {
     /// TODO: docs.
     #[inline]
     pub fn as_ptr(self) -> NonNull<sys::Value> {
@@ -675,8 +671,8 @@ mod values_impls {
 
                 #[track_caller]
                 #[inline]
-                fn with_value<'a, T: 'a>(
-                    &'a self,
+                fn with_value<T>(
+                    &self,
                     value_idx: c_uint,
                     _fun: impl FnOnceValue<T>,
                 ) -> T {
