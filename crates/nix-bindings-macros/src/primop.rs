@@ -6,7 +6,7 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields};
 
 #[inline]
-pub(crate) fn primop(input: DeriveInput) -> syn::Result<TokenStream> {
+pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let camel_case_name = camel_case_name(&input)?;
     let constructor = constructor(&input)?;
     let docs = docs(&input)?;

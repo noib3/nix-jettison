@@ -18,7 +18,7 @@ use syn::{
 };
 
 #[inline]
-pub(crate) fn args(input: DeriveInput) -> syn::Result<TokenStream> {
+pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let attrs = ArgsAttributes::parse(&input.attrs)?;
     let fields = named_fields(&input)?;
 
@@ -156,21 +156,20 @@ fn from_raw_impl(
             unsafe { #args.get(0, #ctx) }
         }
     } else {
-        let fields_initializers =
-            fields.named.iter().enumerate().map(move |(idx, field)| {
-                let ident = field.ident.as_ref().expect("fields are named");
-                let idx = idx as u8;
-                quote! {
-                    // SAFETY: up to the caller.
-                    let #ident = unsafe { #args.get(#idx, #ctx)? };
-                }
-            });
-
         let fields_list = fields
             .named
             .iter()
             .map(|field| field.ident.as_ref().expect("fields are named"))
             .collect::<Punctuated<_, Comma>>();
+
+        let fields_initializers =
+            fields_list.iter().enumerate().map(move |(idx, &field)| {
+                let idx = idx as u8;
+                quote! {
+                    // SAFETY: up to the caller.
+                    let #field = unsafe { #args.get(#idx, #ctx)? };
+                }
+            });
 
         quote! {
             #(#fields_initializers)*
@@ -179,7 +178,7 @@ fn from_raw_impl(
     }
 }
 
-fn lifetime_generic(
+pub(crate) fn lifetime_generic(
     input: &DeriveInput,
     lifetime: &LifetimeParam,
 ) -> syn::Result<impl ToTokens> {

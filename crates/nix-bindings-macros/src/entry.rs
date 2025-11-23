@@ -4,7 +4,7 @@ use syn::parse::Nothing;
 use syn::{ItemFn, parse_quote};
 
 #[inline]
-pub(crate) fn entry(
+pub(crate) fn expand(
     attr: proc_macro::TokenStream,
     entrypoint_fn: ItemFn,
 ) -> syn::Result<TokenStream> {

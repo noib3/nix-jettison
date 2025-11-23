@@ -17,7 +17,7 @@ pub mod value;
 
 #[doc(hidden)]
 pub use entry::entry;
-pub use nix_bindings_macros::{Args, PrimOp, entry};
+pub use nix_bindings_macros::{Args, PrimOp, TryFromValue, entry};
 #[doc(hidden)]
 pub use nix_bindings_sys as sys;
 pub use utf8_cstr::Utf8CStr;

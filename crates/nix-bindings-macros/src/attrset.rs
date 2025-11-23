@@ -10,7 +10,7 @@ use syn::{Token, braced};
 use crate::list::Value;
 
 #[inline]
-pub(crate) fn attrset(input: TokenStream) -> syn::Result<TokenStream> {
+pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let Attrset { keys, values } = syn::parse2(input)?;
 
     Ok(quote! {

@@ -7,7 +7,7 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 
 #[inline]
-pub(crate) fn list(input: TokenStream) -> syn::Result<TokenStream> {
+pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let List { values } = syn::parse2(input)?;
 
     Ok(quote! {
