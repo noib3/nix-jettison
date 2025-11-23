@@ -189,11 +189,31 @@ impl<'a> AnyAttrset<'a> {
     #[inline]
     fn with_attr_inner<T: 'a>(
         self,
-        _key: &CStr,
-        _fun: impl FnOnce(ValuePointer<'a>, &mut Context) -> T,
-        _ctx: &mut Context,
+        key: &CStr,
+        fun: impl FnOnce(ValuePointer<'a>, &mut Context) -> T,
+        ctx: &mut Context,
     ) -> Result<Option<T>> {
-        todo!();
+        let res = ctx.with_raw_and_state(|ctx, state| unsafe {
+            sys::get_attr_byname_lazy(
+                ctx,
+                self.inner.as_raw(),
+                state.as_ptr(),
+                key.as_ptr(),
+            )
+        });
+
+        let value_raw = match res {
+            Ok(ptr) => ptr,
+            Err(err) if err.kind() == ErrorKind::Key => return Ok(None),
+            Err(err) => return Err(err),
+        };
+
+        let Some(value_ptr) = NonNull::new(value_raw) else {
+            panic!("nix_get_attr_byname_lazy returned NULL pointer");
+        };
+
+        // SAFETY: the value returned by Nix is initialized.
+        Ok(Some(fun(unsafe { ValuePointer::new(value_ptr) }, ctx)))
     }
 }
 
