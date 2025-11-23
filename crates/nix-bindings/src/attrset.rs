@@ -25,21 +25,6 @@ pub trait Attrset: Sized {
 
         impl<T: Attrset> Attrset for BorrowedAttrset<'_, T> {
             #[inline]
-            fn get_key(&self, idx: c_uint) -> &str {
-                self.inner.get_key(idx)
-            }
-
-            #[inline]
-            fn get_key_as_c_str(&self, idx: c_uint) -> &CStr {
-                self.inner.get_key_as_c_str(idx)
-            }
-
-            #[inline]
-            fn get_value_kind(&self, idx: c_uint) -> ValueKind {
-                self.inner.get_value_kind(idx)
-            }
-
-            #[inline]
             fn len(&self) -> c_uint {
                 self.inner.len()
             }
@@ -94,34 +79,8 @@ pub trait Attrset: Sized {
         todo!();
     }
 
-    /// Returns the key of the attribute at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the index is out of bounds (i.e. greater than or equal to
-    /// `self.len()`).
-    fn get_key(&self, idx: c_uint) -> &str;
-
-    /// Same as [`get_key_by_idx`](Attrset::get_key_by_idx), but returns the
-    /// key as a `&CStr`.
-    fn get_key_as_c_str(&self, idx: c_uint) -> &CStr;
-
-    /// Returns the [`ValueKind`] of the attribute at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the index is out of bounds (i.e. greater than or equal to
-    /// `self.len()`).
-    fn get_value_kind(&self, idx: c_uint) -> ValueKind;
-
     /// Returns the number of attributes in this attribute set.
     fn len(&self) -> c_uint;
-
-    /// TODO: docs.
-    #[inline]
-    fn into_value(self) -> impl Value {
-        AttrsetValue(self)
-    }
 
     /// Returns whether this attribute set is empty.
     #[inline]
@@ -239,13 +198,10 @@ impl<'a> AnyAttrset<'a> {
     }
 }
 
-impl<Keys, Values> LiteralAttrset<Keys, Values>
-where
-    Self: Attrset,
-{
+impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     /// Creates a new `LiteralAttrset`.
     #[inline]
-    pub fn new(keys: Keys, values: Values) -> Self {
+    pub fn new(keys: K, values: V) -> Self {
         Self { keys, values }
     }
 
@@ -257,24 +213,20 @@ where
     fn get_idx_of_key(&self, key: &CStr) -> Option<c_uint> {
         (0..self.len()).find(|idx| self.get_key_as_c_str(*idx) == key)
     }
+
+    #[inline]
+    fn get_key_as_c_str(&self, idx: c_uint) -> &CStr {
+        struct GetKeyAsCStr;
+        impl<'a> FnOnceKey<'a, &'a CStr> for GetKeyAsCStr {
+            fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a CStr {
+                value.as_ref().as_c_str()
+            }
+        }
+        self.keys.with_key(idx, GetKeyAsCStr)
+    }
 }
 
 impl Attrset for AnyAttrset<'_> {
-    #[inline]
-    fn get_key(&self, _idx: c_uint) -> &str {
-        todo!()
-    }
-
-    #[inline]
-    fn get_key_as_c_str(&self, _idx: c_uint) -> &CStr {
-        todo!()
-    }
-
-    #[inline]
-    fn get_value_kind(&self, _idx: c_uint) -> ValueKind {
-        todo!()
-    }
-
     #[inline]
     fn len(&self) -> c_uint {
         // 'get_attrs_size' errors when the value pointer is null or when the
@@ -297,9 +249,9 @@ impl Attrset for AnyAttrset<'_> {
     #[inline]
     fn with_value<'this, T: 'this>(
         &'this self,
-        key: &CStr,
-        fun: impl FnOnceValue<'this, T>,
-        ctx: &mut Context,
+        _key: &CStr,
+        _fun: impl FnOnceValue<'this, T>,
+        _ctx: &mut Context,
     ) -> Result<Option<T>> {
         todo!();
     }
@@ -324,39 +276,6 @@ impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
 }
 
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
-    #[inline]
-    fn get_key(&self, idx: c_uint) -> &str {
-        struct GetKey;
-        impl<'a> FnOnceKey<'a, &'a str> for GetKey {
-            fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a str {
-                value.as_ref().as_str()
-            }
-        }
-        self.keys.with_key(idx, GetKey)
-    }
-
-    #[inline]
-    fn get_key_as_c_str(&self, idx: c_uint) -> &CStr {
-        struct GetKeyAsCStr;
-        impl<'a> FnOnceKey<'a, &'a CStr> for GetKeyAsCStr {
-            fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a CStr {
-                value.as_ref().as_c_str()
-            }
-        }
-        self.keys.with_key(idx, GetKeyAsCStr)
-    }
-
-    #[inline]
-    fn get_value_kind(&self, idx: c_uint) -> ValueKind {
-        struct GetValueKind;
-        impl FnOnceValue<'_, ValueKind> for GetValueKind {
-            fn call(self, value: &impl Value) -> ValueKind {
-                value.kind()
-            }
-        }
-        self.values.with_value(idx, GetValueKind)
-    }
-
     #[inline]
     fn len(&self) -> c_uint {
         debug_assert_eq!(K::LEN, V::LEN);
@@ -403,10 +322,7 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 }
 
-impl<Keys, Values> Value for LiteralAttrset<Keys, Values>
-where
-    Self: Attrset,
-{
+impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::Attrset
@@ -424,13 +340,21 @@ where
     unsafe fn write_with_namespace(
         &self,
         dest: NonNull<sys::Value>,
-        namespace: impl Namespace,
+        mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         unsafe {
-            self.borrow()
-                .into_value()
-                .write_with_namespace(dest, namespace, ctx)
+            let len = self.len();
+            let mut builder = ctx.make_attrset_builder(len as usize)?;
+            for idx in 0..len {
+                let key = self.get_key_as_c_str(idx);
+                let new_namespace = namespace.push(key);
+                builder.insert(key, |dest, ctx| {
+                    self.write_value(idx, dest, new_namespace, ctx)
+                })?;
+                namespace = new_namespace.pop();
+            }
+            builder.build(dest)
         }
     }
 }
@@ -452,48 +376,6 @@ impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
         // SAFETY: the Display impl doesn't contain any NUL bytes.
         unsafe { CString::from_vec_unchecked(self.to_string().into()).into() }
-    }
-}
-
-/// A newtype wrapper that implements `Value` for every `Attrset`.
-struct AttrsetValue<T>(T);
-
-impl<T: Attrset> Value for AttrsetValue<T> {
-    #[inline]
-    fn kind(&self) -> ValueKind {
-        ValueKind::Attrset
-    }
-
-    unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unreachable!()
-    }
-
-    #[inline]
-    unsafe fn write_with_namespace(
-        &self,
-        dest: NonNull<sys::Value>,
-        mut namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        let Self(attrset) = self;
-
-        unsafe {
-            let len = attrset.len();
-            let mut builder = ctx.make_attrset_builder(len as usize)?;
-            for idx in 0..len {
-                let key = attrset.get_key_as_c_str(idx);
-                let new_namespace = namespace.push(key);
-                builder.insert(key, |dest, ctx| {
-                    attrset.write_value(idx, dest, new_namespace, ctx)
-                })?;
-                namespace = new_namespace.pop();
-            }
-            builder.build(dest)
-        }
     }
 }
 
