@@ -1,8 +1,8 @@
 //! TODO: docs.
 
 use core::ffi::{CStr, c_uint};
-use core::fmt;
 use core::ptr::NonNull;
+use core::{fmt, ptr};
 use std::borrow::Cow;
 use std::ffi::CString;
 
@@ -215,7 +215,11 @@ impl<'a> Attrset<'a> for AnyAttrset<'a> {
 
     #[inline]
     fn len(&self) -> c_uint {
-        todo!()
+        // 'get_attrs_size' errors when the value pointer is NULL or when the
+        // value is not initizialized, but having a ValuePointer guarantees
+        // neither of those can happen, so we can use a null pointer for the
+        // context argument.
+        unsafe { sys::get_attrs_size(ptr::null_mut(), self.inner.as_raw()) }
     }
 
     #[inline]

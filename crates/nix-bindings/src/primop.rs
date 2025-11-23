@@ -199,6 +199,8 @@ impl<'a> ArgsList<'a> {
         let arg_ptr = NonNull::new(arg_raw).ok_or_else(|| {
             ctx.make_error((ErrorKind::Overflow, c"argument is NULL"))
         })?;
+        // SAFETY: the argument list comes from a primop callback, so every
+        // argument has been initialized.
         unsafe { T::try_from_value(ValuePointer::new(arg_ptr), ctx) }
     }
 }
