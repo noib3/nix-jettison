@@ -40,6 +40,10 @@ extern "C" void force_value(EvalState* state, Value* value) {
     state->forceValue(*value, nix::noPos);
 }
 
+extern "C" void init_path_string(EvalState* state, Value* value, const char* str) {
+    value->mkPath(state->rootPath(nix::CanonPath(str)));
+}
+
 // Lists.
 
 extern "C" nix::ListBuilder* make_list_builder(EvalState* state, size_t size) {

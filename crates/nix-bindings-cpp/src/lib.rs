@@ -82,4 +82,14 @@ unsafe extern "C" {
     ///
     /// This is what `nix_value_force` SHOULD do, but it segfaults.
     pub fn force_value(state: *mut EvalState, value: *mut Value);
+
+    /// Initialize a value as a path from a string.
+    ///
+    /// This is what `nix_init_path_string` SHOULD do, but it causes the primop
+    /// callback it's used in to segfault *after* the Rust code completes.
+    pub fn init_path_string(
+        state: *mut EvalState,
+        value: *mut Value,
+        path_str: *const c_char,
+    );
 }

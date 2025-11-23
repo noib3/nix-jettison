@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
 
-use nix_bindings_sys as sys;
+use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::error::{Result, ToError, TryFromI64Error, TypeMismatchError};
 use crate::namespace::Namespace;
@@ -453,9 +453,8 @@ impl Value for std::path::Path {
     ) -> Result<()> {
         let bytes = self.as_os_str().as_encoded_bytes();
         let cstr = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
-        ctx.with_raw_and_state(|ctx, state| unsafe {
-            sys::init_path_string(
-                ctx,
+        ctx.with_raw_and_state(|_ctx, state| unsafe {
+            cpp::init_path_string(
                 state.as_ptr(),
                 dest.as_ptr(),
                 cstr.as_ptr(),
