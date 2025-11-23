@@ -24,6 +24,11 @@ pub trait List: Sized {
 
         impl<T: List> List for BorrowedList<'_, T> {
             #[inline]
+            fn borrow(&self) -> impl List {
+                BorrowedList { inner: self.inner }
+            }
+
+            #[inline]
             fn get_value_kind(&self, idx: c_uint) -> ValueKind {
                 self.inner.get_value_kind(idx)
             }

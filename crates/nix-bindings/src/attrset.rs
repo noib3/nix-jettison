@@ -25,6 +25,11 @@ pub trait Attrset {
 
         impl<T: Attrset + ?Sized> Attrset for BorrowedAttrset<'_, T> {
             #[inline]
+            fn borrow(&self) -> impl Attrset {
+                Self { inner: self.inner }
+            }
+
+            #[inline]
             fn len(&self) -> c_uint {
                 self.inner.len()
             }

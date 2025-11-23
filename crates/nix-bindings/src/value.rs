@@ -13,7 +13,7 @@ use crate::prelude::{Context, PrimOp};
 
 /// TODO: docs.
 pub trait Value {
-    /// Returns the kind of this value.
+    /// TODO: docs.
     #[inline]
     fn borrow(&self) -> impl Value {
         struct BorrowedValue<'a, T: ?Sized> {
@@ -21,6 +21,11 @@ pub trait Value {
         }
 
         impl<T: Value + ?Sized> Value for BorrowedValue<'_, T> {
+            #[inline]
+            fn borrow(&self) -> impl Value {
+                Self { inner: self.inner }
+            }
+
             #[inline]
             fn kind(&self) -> ValueKind {
                 self.inner.kind()
