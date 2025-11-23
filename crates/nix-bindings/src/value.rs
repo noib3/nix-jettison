@@ -453,13 +453,14 @@ impl Value for std::path::Path {
     ) -> Result<()> {
         let bytes = self.as_os_str().as_encoded_bytes();
         let cstr = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
-        ctx.with_raw_and_state(|_ctx, state| unsafe {
+        unsafe {
             cpp::init_path_string(
-                state.as_ptr(),
+                ctx.state_mut().as_ptr(),
                 dest.as_ptr(),
                 cstr.as_ptr(),
             );
-        })
+        }
+        Ok(())
     }
 }
 

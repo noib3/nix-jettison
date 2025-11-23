@@ -165,15 +165,6 @@ impl<State> Context<State> {
     ) -> Result<T> {
         self.inner.with_raw(fun)
     }
-
-    /// TODO: docs.
-    #[inline]
-    pub(crate) fn with_raw_and_state<T>(
-        &mut self,
-        fun: impl FnOnce(*mut sys::c_context, &mut State) -> T,
-    ) -> Result<T> {
-        self.inner.with_raw(|raw_ctx| fun(raw_ctx, &mut self.state))
-    }
 }
 
 impl EvalState {
