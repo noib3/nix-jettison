@@ -8,7 +8,6 @@ use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 use crate::error::{Error, ErrorKind, Result, ToError};
 use crate::namespace::Namespace;
 use crate::primop::PrimOp;
-use crate::value::ValueKind;
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -70,32 +69,6 @@ impl Context<EvalState> {
             cpp::force_value(self.state.inner.as_ptr(), value.as_ptr());
         }
         Ok(())
-    }
-
-    /// Returns the kind of the given value.
-    #[inline]
-    pub(crate) fn get_kind(
-        &mut self,
-        value: NonNull<sys::Value>,
-    ) -> Result<ValueKind> {
-        Ok(
-            match self.inner.with_raw(|ctx| unsafe {
-                sys::get_type(ctx, value.as_ptr())
-            })? {
-                sys::ValueType_NIX_TYPE_ATTRS => ValueKind::Attrset,
-                sys::ValueType_NIX_TYPE_BOOL => ValueKind::Bool,
-                sys::ValueType_NIX_TYPE_EXTERNAL => ValueKind::External,
-                sys::ValueType_NIX_TYPE_FLOAT => ValueKind::Float,
-                sys::ValueType_NIX_TYPE_FUNCTION => ValueKind::Function,
-                sys::ValueType_NIX_TYPE_INT => ValueKind::Int,
-                sys::ValueType_NIX_TYPE_LIST => ValueKind::List,
-                sys::ValueType_NIX_TYPE_NULL => ValueKind::Null,
-                sys::ValueType_NIX_TYPE_PATH => ValueKind::Path,
-                sys::ValueType_NIX_TYPE_STRING => ValueKind::String,
-                sys::ValueType_NIX_TYPE_THUNK => ValueKind::Thunk,
-                other => unreachable!("invalid ValueType: {other}"),
-            },
-        )
     }
 
     /// Creates a new [`AttrsetBuilder`] with the given capacity.

@@ -211,26 +211,26 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     /// If an index is returned, it is guaranteed to be less than `self.len()`.
     #[inline]
     fn get_idx_of_key(&self, key: &CStr) -> Option<c_uint> {
-        (0..self.len()).find(|idx| self.get_key_as_c_str(*idx) == key)
+        (0..self.len()).find(|idx| self.get_key(*idx) == key)
     }
 
     #[inline]
-    fn get_key_as_c_str(&self, idx: c_uint) -> &CStr {
-        struct GetKeyAsCStr;
-        impl<'a> FnOnceKey<'a, &'a CStr> for GetKeyAsCStr {
+    fn get_key(&self, idx: c_uint) -> &CStr {
+        struct GetKey;
+        impl<'a> FnOnceKey<'a, &'a CStr> for GetKey {
             fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a CStr {
                 value.as_ref().as_c_str()
             }
         }
-        self.keys.with_key(idx, GetKeyAsCStr)
+        self.keys.with_key(idx, GetKey)
     }
 }
 
 impl Attrset for AnyAttrset<'_> {
     #[inline]
     fn len(&self) -> c_uint {
-        // 'get_attrs_size' errors when the value pointer is null or when the
-        // value is not initizialized, but having a ValuePointer guarantees
+        // 'nix_get_attrs_size' errors when the value pointer is null or when
+        // the value is not initizialized, but having a ValuePointer guarantees
         // neither of those can happen, so we can use a null context.
         unsafe { sys::get_attrs_size(ptr::null_mut(), self.inner.as_raw()) }
     }
@@ -265,7 +265,7 @@ impl<'a> TryFromValue<'a> for AnyAttrset<'a> {
     ) -> Result<Self> {
         ctx.force(value.as_ptr())?;
 
-        match ctx.get_kind(value.as_ptr())? {
+        match value.kind() {
             ValueKind::Attrset => Ok(Self { inner: value }),
             other => Err(ctx.make_error(TypeMismatchError {
                 expected: ValueKind::Attrset,
@@ -347,7 +347,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
             let len = self.len();
             let mut builder = ctx.make_attrset_builder(len as usize)?;
             for idx in 0..len {
-                let key = self.get_key_as_c_str(idx);
+                let key = self.get_key(idx);
                 let new_namespace = namespace.push(key);
                 builder.insert(key, |dest, ctx| {
                     self.write_value(idx, dest, new_namespace, ctx)

@@ -3,7 +3,7 @@
 use alloc::ffi::CString;
 use core::ffi::{CStr, c_uint};
 use core::marker::PhantomData;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 
 use nix_bindings_sys as sys;
 
@@ -17,6 +17,11 @@ pub trait Value {
     fn kind(&self) -> ValueKind;
 
     /// Writes this value into the given, pre-allocated destination.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the `dest` points to a value that has been
+    /// allocated but *not* yet initialized.
     #[doc(hidden)]
     unsafe fn write(
         &self,
@@ -63,13 +68,6 @@ pub trait TryIntoValue {
 }
 
 /// TODO: docs.
-#[derive(Debug, Copy, Clone)]
-pub struct ValuePointer<'a> {
-    ptr: NonNull<sys::Value>,
-    _lifetime: PhantomData<&'a sys::Value>,
-}
-
-/// TODO: docs.
 pub trait Values {
     /// TODO: docs.
     const LEN: c_uint;
@@ -88,6 +86,13 @@ pub trait Values {
 pub trait FnOnceValue<'a, T: 'a> {
     /// Calls the function with the given value.
     fn call(self, value: &'a impl Value) -> T;
+}
+
+/// TODO: docs.
+#[derive(Debug, Copy, Clone)]
+pub struct ValuePointer<'a> {
+    ptr: NonNull<sys::Value>,
+    _lifetime: PhantomData<&'a sys::Value>,
 }
 
 /// TODO: docs.
@@ -428,6 +433,54 @@ impl Value for std::path::PathBuf {
     }
 }
 
+impl Value for ValuePointer<'_> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        // 'nix_get_type' errors when the value pointer is null or when the
+        // value is not initizialized, but having a ValuePointer guarantees
+        // neither of those can happen, so we can use a null context.
+        let r#type = unsafe { sys::get_type(ptr::null_mut(), self.as_raw()) };
+
+        match r#type {
+            sys::ValueType_NIX_TYPE_ATTRS => ValueKind::Attrset,
+            sys::ValueType_NIX_TYPE_BOOL => ValueKind::Bool,
+            sys::ValueType_NIX_TYPE_EXTERNAL => ValueKind::External,
+            sys::ValueType_NIX_TYPE_FLOAT => ValueKind::Float,
+            sys::ValueType_NIX_TYPE_FUNCTION => ValueKind::Function,
+            sys::ValueType_NIX_TYPE_INT => ValueKind::Int,
+            sys::ValueType_NIX_TYPE_LIST => ValueKind::List,
+            sys::ValueType_NIX_TYPE_NULL => ValueKind::Null,
+            sys::ValueType_NIX_TYPE_PATH => ValueKind::Path,
+            sys::ValueType_NIX_TYPE_STRING => ValueKind::String,
+            sys::ValueType_NIX_TYPE_THUNK => ValueKind::Thunk,
+            other => unreachable!("invalid ValueType: {other}"),
+        }
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        // 'nix_copy_value' errors when:
+        //
+        // 1. the destination pointer is null;
+        // 2. the destination value is already initialized;
+        // 3. the source pointer is null;
+        // 4. the source value is not initialized.
+        //
+        // Having a ValuePointer guarantees that (3) and (4) cannot happen,
+        // having a NonNull destination pointer guarantees that (1) cannot
+        // happen, and the API contract for this method guarantees that (2)
+        // cannot happen, so we can use a null context.
+        unsafe {
+            sys::copy_value(ptr::null_mut(), dest.as_ptr(), self.as_raw());
+        };
+        Ok(())
+    }
+}
+
 impl TryFromValue<'_> for i64 {
     #[inline]
     unsafe fn try_from_value(
@@ -436,7 +489,7 @@ impl TryFromValue<'_> for i64 {
     ) -> Result<Self> {
         ctx.force(value.as_ptr())?;
 
-        match ctx.get_kind(value.as_ptr())? {
+        match value.kind() {
             ValueKind::Int => ctx
                 .with_raw(|ctx| unsafe { sys::get_int(ctx, value.as_raw()) }),
             other => Err(ctx.make_error(TypeMismatchError {
@@ -489,7 +542,7 @@ impl<'a> TryFromValue<'a> for &'a std::path::Path {
 
         ctx.force(value.as_ptr())?;
 
-        match ctx.get_kind(value.as_ptr())? {
+        match value.kind() {
             ValueKind::Path => {},
             other => {
                 return Err(ctx.make_error(TypeMismatchError {
