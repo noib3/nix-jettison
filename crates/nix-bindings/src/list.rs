@@ -34,12 +34,12 @@ pub trait List {
             }
 
             #[inline]
-            fn with_value<V>(
+            fn with_value<'ctx, V>(
                 &self,
                 idx: c_uint,
-                fun: impl FnOnceValue<V>,
-                ctx: &mut Context,
-            ) -> Result<V> {
+                fun: impl FnOnceValue<V, &'ctx mut Context>,
+                ctx: &'ctx mut Context,
+            ) -> V {
                 self.inner.with_value(idx, fun, ctx)
             }
         }
@@ -57,12 +57,12 @@ pub trait List {
     }
 
     /// TODO: docs.
-    fn with_value<T>(
+    fn with_value<'ctx, T>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<T>,
-        ctx: &mut Context,
-    ) -> Result<T>;
+        fun: impl FnOnceValue<T, &'ctx mut Context>,
+        ctx: &'ctx mut Context,
+    ) -> T;
 }
 
 /// The list type produced by the [`list!`] macro.
@@ -94,13 +94,25 @@ impl<V: Values> List for LiteralList<V> {
     }
 
     #[inline]
-    fn with_value<T>(
+    fn with_value<'a, T>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<T>,
-        _: &mut Context,
-    ) -> Result<T> {
-        Ok(self.values.with_value(idx, fun))
+        fun: impl FnOnceValue<T, &'a mut Context>,
+        ctx: &'a mut Context,
+    ) -> T {
+        struct MapFnOnceValue<'a, F> {
+            ctx: &'a mut Context,
+            fun: F,
+        }
+        impl<'a, F, T> FnOnceValue<T> for MapFnOnceValue<'a, F>
+        where
+            F: FnOnceValue<T, &'a mut Context>,
+        {
+            fn call(self, value: impl Value, _: ()) -> T {
+                self.fun.call(value, self.ctx)
+            }
+        }
+        self.values.with_value(idx, MapFnOnceValue { ctx, fun })
     }
 }
 
@@ -125,20 +137,15 @@ impl<V: Values> Value for LiteralList<V> {
         mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        struct WriteValue<'ctx, N> {
+        struct WriteValue<N> {
             dest: NonNull<sys::Value>,
             namespace: N,
-            ctx: &'ctx mut Context,
         }
 
-        impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, N> {
-            fn call(self, value: impl Value) -> Result<()> {
+        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context> for WriteValue<N> {
+            fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
                 unsafe {
-                    value.write_with_namespace(
-                        self.dest,
-                        self.namespace,
-                        self.ctx,
-                    )
+                    value.write_with_namespace(self.dest, self.namespace, ctx)
                 }
             }
         }
@@ -152,9 +159,10 @@ impl<V: Values> Value for LiteralList<V> {
             let idx_cstr = CString::new(idx.to_string()).expect("no NUL byte");
             let new_namespace = namespace.push(&idx_cstr);
             builder.insert(|dest, ctx| {
-                self.values.with_value(
+                self.with_value(
                     idx,
-                    WriteValue { dest, namespace: new_namespace, ctx },
+                    WriteValue { dest, namespace: new_namespace },
+                    ctx,
                 )
             })?;
             namespace = new_namespace.pop();
@@ -175,12 +183,12 @@ where
     }
 
     #[inline]
-    fn with_value<U>(
+    fn with_value<'ctx, U>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<U>,
-        _: &mut Context,
-    ) -> Result<U> {
-        Ok(fun.call(self.deref()[idx as usize].borrow()))
+        fun: impl FnOnceValue<U, &'ctx mut Context>,
+        ctx: &'ctx mut Context,
+    ) -> U {
+        fun.call(self.deref()[idx as usize].borrow(), ctx)
     }
 }

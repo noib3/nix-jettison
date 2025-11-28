@@ -205,7 +205,7 @@ impl Attrset for NixAttrset<'_> {
         fun: impl FnOnceValue<T>,
         ctx: &mut Context,
     ) -> Result<Option<T>> {
-        Ok(self.with_attr_inner(key, |value, _| fun.call(value), ctx))
+        Ok(self.with_attr_inner(key, |value, _| fun.call(value, ()), ctx))
     }
 }
 
@@ -272,7 +272,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
         }
 
         impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, N> {
-            fn call(self, value: impl Value) -> Result<()> {
+            fn call(self, value: impl Value, _: ()) -> Result<()> {
                 unsafe {
                     value.write_with_namespace(
                         self.dest,

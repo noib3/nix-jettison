@@ -130,9 +130,9 @@ pub trait Values {
 /// A trait to get around the lack of support for generics in closures.
 ///
 /// This is semantically equivalent to `FnOnce<V: Value>(V) -> T`.
-pub trait FnOnceValue<T> {
+pub trait FnOnceValue<T, Ctx = ()> {
     /// Calls the function with the given value.
-    fn call(self, value: impl Value) -> T;
+    fn call(self, value: impl Value, ctx: Ctx) -> T;
 }
 
 /// TODO: docs.
@@ -797,7 +797,7 @@ mod values_impls {
                     _fun: impl FnOnceValue<T>,
                 ) -> T {
                     match value_idx {
-                        $($idx => _fun.call(self.$idx.borrow()),)*
+                        $($idx => _fun.call(self.$idx.borrow(), ()),)*
                         other => panic_tuple_index_oob(other, <Self as Values>::LEN),
                     }
                 }
