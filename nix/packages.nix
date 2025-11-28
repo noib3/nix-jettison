@@ -20,10 +20,11 @@
       # Generate the Cargo.nix using IFD.
       mkCargoNix =
         targetPkgs:
-        inputs.crate2nix.tools.${targetPkgs.stdenv.hostPlatform.system}.appliedCargoNix {
-          name = packageName;
-          src = ../.;
-        };
+        inputs.crate2nix.tools.${targetPkgs.stdenv.hostPlatform.system}.appliedCargoNix
+          {
+            name = packageName;
+            src = ../.;
+          };
 
       mkBuild =
         {
@@ -36,8 +37,8 @@
           buildRustCrateForPkgs =
             crate:
             targetPkgs.buildRustCrate.override {
-              rustc = rust.mkToolchain targetPkgs;
               cargo = rust.mkToolchain targetPkgs;
+              rustc = rust.mkToolchain targetPkgs;
             };
           defaultCrateOverrides = targetPkgs.defaultCrateOverrides // {
             nix-bindings-cpp = attrs: {
@@ -49,6 +50,10 @@
               inherit (common) nativeBuildInputs;
               buildInputs = common.mkBuildInputs targetPkgs;
               env = common.mkEnv targetPkgs;
+            };
+            nix-jettison = attrs: {
+              inherit (common) nativeBuildInputs;
+              buildInputs = (common.mkBuildInputs targetPkgs) ++ [ targetPkgs.curl.dev ];
             };
           };
         };
