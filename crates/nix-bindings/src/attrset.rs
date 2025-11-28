@@ -291,8 +291,10 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
             let key = self.get_key(idx);
             let new_namespace = namespace.push(key);
             builder.insert(key, |dest, ctx| {
-                self.values
-                    .with_value(idx, WriteValue { dest, namespace, ctx })
+                self.values.with_value(
+                    idx,
+                    WriteValue { dest, namespace: new_namespace, ctx },
+                )
             })?;
             namespace = new_namespace.pop();
         }
