@@ -52,6 +52,15 @@ pub trait List {
     fn len(&self) -> c_uint;
 
     /// TODO: docs.
+    #[inline(always)]
+    fn into_list(self) -> impl List
+    where
+        Self: Sized,
+    {
+        self
+    }
+
+    /// TODO: docs.
     #[inline]
     fn into_value(self) -> impl Value
     where

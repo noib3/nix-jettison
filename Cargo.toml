@@ -11,8 +11,13 @@ publish = false
 
 [workspace.dependencies]
 # Third-party dependencies.
+anyhow = "1"
 bindgen = "0.72"
+cargo = { version = "0.92", default-features = false }
 cc = "1"
+derive_more = { version = "2", default-features = false, features = [
+  "display",
+] }
 doxygen-bindgen = "0.1"
 pkg-config = "0.3"
 proc-macro2 = "1.0"

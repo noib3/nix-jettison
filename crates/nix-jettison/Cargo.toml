@@ -10,6 +10,9 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+anyhow = { workspace = true }
+cargo = { workspace = true, default-features = true }
+derive_more = { workspace = true }
 nix-bindings = { workspace = true, features = ["std"] }
 
 [lints]
