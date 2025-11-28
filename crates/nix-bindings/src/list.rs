@@ -2,6 +2,7 @@
 
 use alloc::ffi::CString;
 use alloc::string::ToString;
+use core::cell::Cell;
 use core::ffi::c_uint;
 use core::ops::Deref;
 use core::ptr::NonNull;
@@ -50,6 +51,15 @@ pub trait List {
     /// Returns the number of elements in this list.
     fn len(&self) -> c_uint;
 
+    /// TODO: docs.
+    #[inline]
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+    {
+        ListValue(self)
+    }
+
     /// Returns whether this list is empty.
     #[inline]
     fn is_empty(&self) -> bool {
@@ -65,10 +75,35 @@ pub trait List {
     ) -> T;
 }
 
+/// An extension trait for iterators of [`Value`]s.
+pub trait IteratorExt: IntoIterator<Item: Value> {
+    /// TODO: docs.
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+        Self::IntoIter: ExactSizeIterator + Clone;
+}
+
 /// The list type produced by the [`list!`] macro.
 pub struct LiteralList<Values> {
     values: Values,
 }
+
+/// A hybrid trait between a [`List`] and an [`Iterator`] over values, with a
+/// more relaxed interface than either.
+trait ValueIterator {
+    fn initial_len(&self) -> c_uint;
+
+    fn with_next_value<'ctx, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context>,
+        ctx: &'ctx mut Context,
+    ) -> T;
+}
+
+/// A newtype wrapper that implements [`Value`] for every [`ValueIterator`].
+struct ListValue<T>(T);
 
 impl<Values> LiteralList<Values> {
     /// Creates a new `LiteralList`.
@@ -134,6 +169,35 @@ impl<V: Values> Value for LiteralList<V> {
     unsafe fn write_with_namespace(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe {
+            List::borrow(self)
+                .into_value()
+                .write_with_namespace(dest, namespace, ctx)
+        }
+    }
+}
+
+impl<L: ValueIterator> Value for ListValue<L> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::List
+    }
+
+    unsafe fn write(
+        &self,
+        _: NonNull<nix_bindings_sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
+        dest: NonNull<sys::Value>,
         mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
@@ -150,7 +214,9 @@ impl<V: Values> Value for LiteralList<V> {
             }
         }
 
-        let len = self.len();
+        let Self(iter) = self;
+
+        let len = iter.initial_len();
 
         let mut builder = ctx.make_list_builder(len as usize)?;
 
@@ -159,7 +225,7 @@ impl<V: Values> Value for LiteralList<V> {
             let idx_cstr = CString::new(idx.to_string()).expect("no NUL byte");
             let new_namespace = namespace.push(&idx_cstr);
             builder.insert(|dest, ctx| {
-                self.with_value(
+                iter.with_next_value(
                     idx,
                     WriteValue { dest, namespace: new_namespace },
                     ctx,
@@ -190,5 +256,91 @@ where
         ctx: &'ctx mut Context,
     ) -> U {
         fun.call(self.deref()[idx as usize].borrow(), ctx)
+    }
+}
+
+impl<I: IntoIterator<Item: Value>> IteratorExt for I {
+    #[inline]
+    fn into_value(self) -> impl Value
+    where
+        Self::IntoIter: ExactSizeIterator + Clone,
+    {
+        struct Wrapper<I> {
+            current: Cell<Option<I>>,
+            orig: I,
+        }
+
+        impl<I: Clone> Wrapper<I> {
+            #[inline]
+            fn with_iter<T>(
+                &self,
+                fun: impl FnOnce(&mut I) -> (T, bool),
+            ) -> T {
+                // SAFETY: the inner Cell always contains Some(I).
+                let mut iter =
+                    unsafe { self.current.take().unwrap_unchecked() };
+
+                let (out, should_replenish) = fun(&mut iter);
+
+                let new_iter =
+                    if should_replenish { self.orig.clone() } else { iter };
+
+                self.current.set(Some(new_iter));
+
+                out
+            }
+        }
+
+        let iter = self.into_iter();
+
+        impl<I: ExactSizeIterator + Clone> ValueIterator for Wrapper<I>
+        where
+            I::Item: Value,
+        {
+            #[inline]
+            fn initial_len(&self) -> c_uint {
+                self.orig.len() as c_uint
+            }
+
+            #[inline]
+            fn with_next_value<'ctx, T>(
+                &self,
+                _: c_uint,
+                fun: impl FnOnceValue<T, &'ctx mut Context>,
+                ctx: &'ctx mut Context,
+            ) -> T {
+                self.with_iter(|iter| {
+                    let Some(value) = iter.next() else {
+                        panic!(
+                            "ValueIterator::with_next_value() called more \
+                             times than advertised by initial_len()"
+                        );
+                    };
+                    (fun.call(value, ctx), iter.len() == 0)
+                })
+            }
+        }
+
+        ListValue(Wrapper {
+            current: Cell::new(Some(iter.clone())),
+            orig: iter,
+        })
+    }
+}
+
+impl<L: List> ValueIterator for L {
+    #[inline]
+    fn initial_len(&self) -> c_uint {
+        L::len(self)
+    }
+
+    #[inline]
+    fn with_next_value<'ctx, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context>,
+        ctx: &'ctx mut Context,
+    ) -> T {
+        self.with_value(idx, fun, ctx)
     }
 }
