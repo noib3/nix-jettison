@@ -274,25 +274,25 @@ impl<I: IntoIterator<Item: Value>> IteratorExt for I {
     where
         Self::IntoIter: ExactSizeIterator + Clone,
     {
-        struct Wrapper<I> {
-            current: Cell<Option<I>>,
-            orig: I,
+        struct RewindIter<Iter> {
+            current: Cell<Option<Iter>>,
+            orig: Iter,
         }
 
-        impl<I: Clone> Wrapper<I> {
+        impl<Iter: Clone> RewindIter<Iter> {
             #[inline]
             fn with_iter<T>(
                 &self,
-                fun: impl FnOnce(&mut I) -> (T, bool),
+                fun: impl FnOnce(&mut Iter) -> (T, bool),
             ) -> T {
                 // SAFETY: the inner Cell always contains Some(I).
                 let mut iter =
                     unsafe { self.current.take().unwrap_unchecked() };
 
-                let (out, should_replenish) = fun(&mut iter);
+                let (out, should_rewind) = fun(&mut iter);
 
                 let new_iter =
-                    if should_replenish { self.orig.clone() } else { iter };
+                    if should_rewind { self.orig.clone() } else { iter };
 
                 self.current.set(Some(new_iter));
 
@@ -300,9 +300,7 @@ impl<I: IntoIterator<Item: Value>> IteratorExt for I {
             }
         }
 
-        let iter = self.into_iter();
-
-        impl<I: ExactSizeIterator + Clone> ValueIterator for Wrapper<I>
+        impl<I: ExactSizeIterator + Clone> ValueIterator for RewindIter<I>
         where
             I::Item: Value,
         {
@@ -330,7 +328,9 @@ impl<I: IntoIterator<Item: Value>> IteratorExt for I {
             }
         }
 
-        ListValue(Wrapper {
+        let iter = self.into_iter();
+
+        ListValue(RewindIter {
             current: Cell::new(Some(iter.clone())),
             orig: iter,
         })
