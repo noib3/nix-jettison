@@ -103,8 +103,7 @@ pub trait Value {
     }
 }
 
-/// A trait for types that can be fallibly converted from a [`sys::Value`]
-/// pointer.
+/// A trait for types that can be fallibly converted from [`Value`]s.
 pub trait TryFromValue<V: Value>: Sized {
     /// TODO: docs.
     fn try_from_value(value: V, ctx: &mut Context) -> Result<Self>;
@@ -150,7 +149,7 @@ pub trait PathValue: Value + Sized {
 
 /// TODO: docs.
 #[derive(Debug, Copy, Clone)]
-pub struct ValuePointer<'a> {
+pub struct NixValue<'a> {
     ptr: NonNull<sys::Value>,
     _lifetime: PhantomData<&'a sys::Value>,
 }
@@ -192,7 +191,7 @@ pub enum ValueKind {
     Thunk,
 }
 
-impl ValuePointer<'_> {
+impl NixValue<'_> {
     /// TODO: docs.
     #[inline]
     pub fn as_ptr(self) -> NonNull<sys::Value> {
@@ -521,7 +520,7 @@ impl PathValue for std::path::PathBuf {
     }
 }
 
-impl Value for ValuePointer<'_> {
+impl Value for NixValue<'_> {
     #[inline]
     fn force(&self, ctx: &mut Context) -> Result<()> {
         ctx.force(self.as_ptr())
@@ -579,7 +578,7 @@ impl Value for ValuePointer<'_> {
     }
 }
 
-impl<'a> PathValue for ValuePointer<'a> {
+impl<'a> PathValue for NixValue<'a> {
     type Path = &'a CStr;
 
     #[inline]

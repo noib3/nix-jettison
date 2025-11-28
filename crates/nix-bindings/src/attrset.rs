@@ -12,7 +12,7 @@ use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
-use crate::value::{FnOnceValue, TryFromValue, ValuePointer, Values};
+use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait Attrset {
@@ -87,8 +87,8 @@ pub trait FnOnceKey<'a, T: 'a> {
 
 /// TODO: docs.
 #[derive(Copy, Clone)]
-pub struct AnyAttrset<'value> {
-    inner: ValuePointer<'value>,
+pub struct NixAttrset<'value> {
+    inner: NixValue<'value>,
 }
 
 /// The attribute set type produced by the [`attrset!`] macro.
@@ -108,10 +108,10 @@ pub struct MissingAttributeError<'a, Attrset> {
     pub attr: &'a CStr,
 }
 
-impl<'a> AnyAttrset<'a> {
+impl<'a> NixAttrset<'a> {
     /// TODO: docs.
     #[inline]
-    pub fn get<T: TryFromValue<ValuePointer<'a>> + 'a>(
+    pub fn get<T: TryFromValue<NixValue<'a>> + 'a>(
         self,
         key: &CStr,
         ctx: &mut Context,
@@ -126,7 +126,7 @@ impl<'a> AnyAttrset<'a> {
 
     /// TODO: docs.
     #[inline]
-    pub fn get_opt<T: TryFromValue<ValuePointer<'a>> + 'a>(
+    pub fn get_opt<T: TryFromValue<NixValue<'a>> + 'a>(
         self,
         key: &CStr,
         ctx: &mut Context,
@@ -143,7 +143,7 @@ impl<'a> AnyAttrset<'a> {
     fn with_attr_inner<T: 'a>(
         self,
         key: &CStr,
-        fun: impl FnOnce(ValuePointer<'a>, &mut Context) -> T,
+        fun: impl FnOnce(NixValue<'a>, &mut Context) -> T,
         ctx: &mut Context,
     ) -> Option<T> {
         let value_raw = unsafe {
@@ -157,7 +157,7 @@ impl<'a> AnyAttrset<'a> {
         let value_ptr = NonNull::new(value_raw)?;
 
         // SAFETY: the value returned by Nix is initialized.
-        Some(fun(unsafe { ValuePointer::new(value_ptr) }, ctx))
+        Some(fun(unsafe { NixValue::new(value_ptr) }, ctx))
     }
 }
 
@@ -189,7 +189,7 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     }
 }
 
-impl Attrset for AnyAttrset<'_> {
+impl Attrset for NixAttrset<'_> {
     #[inline]
     fn len(&self) -> c_uint {
         // 'nix_get_attrs_size' errors when the value pointer is null or when
@@ -209,12 +209,9 @@ impl Attrset for AnyAttrset<'_> {
     }
 }
 
-impl<'a> TryFromValue<ValuePointer<'a>> for AnyAttrset<'a> {
+impl<'a> TryFromValue<NixValue<'a>> for NixAttrset<'a> {
     #[inline]
-    fn try_from_value(
-        value: ValuePointer<'a>,
-        ctx: &mut Context,
-    ) -> Result<Self> {
+    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
         ctx.force(value.as_ptr())?;
 
         match value.kind() {

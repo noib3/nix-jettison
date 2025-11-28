@@ -9,7 +9,7 @@ pub(crate) struct BuildPackage;
 #[derive(nix_bindings::Args, nix_bindings::TryFromValue)]
 #[args(flatten, name = "args")]
 pub(crate) struct BuildPackageArgs<'a> {
-    pkgs: AnyAttrset<'a>,
+    pkgs: NixAttrset<'a>,
     src: &'a Path,
 }
 

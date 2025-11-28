@@ -11,7 +11,7 @@ use nix_bindings_sys as sys;
 use crate::Utf8CStr;
 use crate::context::{Context, EvalState};
 use crate::error::{ErrorKind, Result};
-use crate::value::{TryFromValue, TryIntoValue, Value, ValuePointer};
+use crate::value::{NixValue, TryFromValue, TryIntoValue, Value};
 
 /// TODO: docs.
 pub trait PrimOp: PrimOpImpl + Sized + 'static {
@@ -190,7 +190,7 @@ impl<'a> ArgsList<'a> {
     /// public API.
     #[doc(hidden)]
     #[inline]
-    pub unsafe fn get<T: TryFromValue<ValuePointer<'a>>>(
+    pub unsafe fn get<T: TryFromValue<NixValue<'a>>>(
         self,
         offset: u8,
         ctx: &mut Context,
@@ -201,7 +201,7 @@ impl<'a> ArgsList<'a> {
         })?;
         // SAFETY: the argument list comes from a primop callback, so every
         // argument has been initialized.
-        unsafe { T::try_from_value(ValuePointer::new(arg_ptr), ctx) }
+        unsafe { T::try_from_value(NixValue::new(arg_ptr), ctx) }
     }
 }
 
