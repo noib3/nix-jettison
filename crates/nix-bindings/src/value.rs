@@ -615,6 +615,19 @@ impl<T: Value + ?Sized + ToOwned> Value for Cow<'_, T> {
     }
 }
 
+macro_rules! impl_try_from_value_for_self {
+    ($ty:ty) => {
+        impl TryFromValue<Self> for $ty {
+            #[inline]
+            fn try_from_value(value: Self, _: &mut Context) -> Result<Self> {
+                Ok(value)
+            }
+        }
+    };
+}
+
+impl_try_from_value_for_self!(NixValue<'_>);
+
 impl<V: Value> TryFromValue<V> for i64 {
     #[inline]
     fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
