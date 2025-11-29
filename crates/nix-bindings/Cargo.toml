@@ -14,5 +14,8 @@ nix-bindings-cpp = { workspace = true }
 nix-bindings-macros = { workspace = true }
 nix-bindings-sys = { workspace = true }
 
+[build-dependencies]
+rustc_version = "0.4"
+
 [lints]
 workspace = true

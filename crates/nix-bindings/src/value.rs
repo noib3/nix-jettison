@@ -125,6 +125,19 @@ pub trait Values {
 
     /// TODO: docs.
     fn with_value<T>(&self, value_idx: c_uint, fun: impl FnOnceValue<T>) -> T;
+
+    /// TODO: docs.
+    #[inline]
+    fn array<T>(constructor: impl FnMut(usize) -> T) -> impl AsMut<[T]> {
+        #[cfg(nightly)]
+        {
+            core::array::from_fn::<_, { Self::LEN as usize }, _>(constructor)
+        }
+        #[cfg(not(nightly))]
+        {
+            (0..(Self::LEN as usize)).map(constructor).collect::<Vec<T>>()
+        }
+    }
 }
 
 /// A trait to get around the lack of support for generics in closures.

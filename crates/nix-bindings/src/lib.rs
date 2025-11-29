@@ -2,6 +2,7 @@
 
 #![allow(clippy::undocumented_unsafe_blocks)]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(nightly, feature(generic_const_exprs))]
 
 extern crate alloc;
 

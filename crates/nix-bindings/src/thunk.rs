@@ -21,6 +21,7 @@ enum ThunkState<'a, V> {
 impl<'a, V> Thunk<'a, V> {
     /// TODO: docs.
     #[inline]
+    #[allow(clippy::same_name_method)]
     pub fn force(self, ctx: &mut Context) -> Result<V>
     where
         V: TryFromValue<NixValue<'a>>,

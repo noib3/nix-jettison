@@ -56,7 +56,7 @@ future_incompatible = { level = "deny", priority = -1 }
 missing_docs = "deny"
 nonstandard_style = { level = "deny", priority = -1 }
 refining_impl_trait = { level = "allow", priority = -1 }
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(nightly)"] }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
