@@ -51,6 +51,15 @@ pub trait Attrset {
     /// Returns the number of attributes in this attribute set.
     fn len(&self) -> c_uint;
 
+    /// TODO: docs.
+    #[inline(always)]
+    fn into_attrset(self) -> impl Attrset
+    where
+        Self: Sized,
+    {
+        self
+    }
+
     /// Returns whether this attribute set is empty.
     #[inline]
     fn is_empty(&self) -> bool {
@@ -118,7 +127,7 @@ impl<'a> NixAttrset<'a> {
     ) -> Result<T> {
         self.get_opt(key, ctx)?.ok_or_else(|| {
             ctx.make_error(MissingAttributeError {
-                attrset: self.borrow(),
+                attrset: self.into_attrset().borrow(),
                 attr: key,
             })
         })
@@ -206,6 +215,22 @@ impl Attrset for NixAttrset<'_> {
         ctx: &mut Context,
     ) -> Result<Option<T>> {
         Ok(self.with_attr_inner(key, |value, _| fun.call(value, ()), ctx))
+    }
+}
+
+impl Value for NixAttrset<'_> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.inner.write(dest, ctx) }
     }
 }
 
