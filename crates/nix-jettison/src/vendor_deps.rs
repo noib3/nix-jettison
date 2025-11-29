@@ -94,9 +94,10 @@ impl VendorDeps {
         let mut links = Vec::new();
 
         for dep in deps {
+            let Dependency { name, version, .. } = dep;
+
             let source_path = match dep.source {
                 DependencySource::CratesIo(src) => {
-                    let Dependency { name, version, .. } = dep;
                     let args = attrset! {
                         name: format!("{name}-{version}.tar.gz"),
                         url: format!("https://static.crates.io/crates/{name}/{name}-{version}.crate"),
@@ -125,7 +126,7 @@ impl VendorDeps {
             };
 
             links.push(attrset! {
-                name: dep.name,
+                name: format!("{name}-{version}"),
                 path: source_path,
             });
         }
@@ -140,7 +141,32 @@ impl VendorDeps {
         _cargo_lock: &str,
     ) -> Result<impl Iterator<Item = Dependency<'_>>, ParseCargoLockError>
     {
-        Ok(core::iter::empty())
+        Ok([
+            Dependency {
+                name: "abs-path",
+                version: "0.1.0",
+                source: DependencySource::Git(GitSource {
+                    url: "https://github.com/nomad/abs-path.git",
+                    rev: "c9f47071a05cc80bcff4af7b65754a23f2edb6ad",
+                    url_fragment: None,
+                    branch: None,
+                    tag: None,
+                }),
+            },
+            Dependency {
+                name: "anstream",
+                version: "0.6.21",
+                source: DependencySource::CratesIo(CratesIoSource {
+                    checksum: "43d5b281e737544384e969a5ccad3f1cdd24b48086a0fc1b2a5262a26b8f4f4a",
+                }),
+            },
+            Dependency {
+                name: "local-dep",
+                version: "0.1.0",
+                source: DependencySource::Path,
+            },
+        ]
+        .into_iter())
     }
 }
 
