@@ -348,8 +348,32 @@ impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
     }
 }
 
+#[cfg(feature = "either")]
+impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
+    #[inline]
+    fn len(&self) -> c_uint {
+        match self {
+            either::Either::Left(l) => l.len(),
+            either::Either::Right(r) => r.len(),
+        }
+    }
+
+    #[inline]
+    fn with_value<T>(
+        &self,
+        key: &CStr,
+        fun: impl FnOnceValue<T>,
+        ctx: &mut Context,
+    ) -> Result<Option<T>> {
+        match self {
+            either::Either::Left(l) => l.with_value(key, fun, ctx),
+            either::Either::Right(r) => r.with_value(key, fun, ctx),
+        }
+    }
+}
+
 #[rustfmt::skip]
-mod keys_values_impls {
+mod keys_impls {
     use super::*;
 
     macro_rules! count {

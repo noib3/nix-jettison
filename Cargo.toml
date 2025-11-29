@@ -20,6 +20,7 @@ derive_more = { version = "2", default-features = false, features = [
   "display",
 ] }
 doxygen-bindgen = "0.1"
+either = { version = "1", default-features = false }
 pkg-config = "0.3"
 proc-macro2 = "1.0"
 quote = "1.0"

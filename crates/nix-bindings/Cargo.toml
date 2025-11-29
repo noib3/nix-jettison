@@ -7,12 +7,15 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+either = ["dep:either"]
 std = []
 
 [dependencies]
 nix-bindings-cpp = { workspace = true }
 nix-bindings-macros = { workspace = true }
 nix-bindings-sys = { workspace = true }
+
+either = { workspace = true, optional = true }
 
 [build-dependencies]
 rustc_version = "0.4"

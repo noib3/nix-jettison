@@ -2449,6 +2449,7 @@ dependencies = [
 name = "nix-bindings"
 version = "0.1.0"
 dependencies = [
+ "either",
  "nix-bindings-cpp",
  "nix-bindings-macros",
  "nix-bindings-sys",
