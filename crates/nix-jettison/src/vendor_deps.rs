@@ -5,6 +5,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
 /// Vendors the dependencies of a Rust package.
@@ -52,13 +53,29 @@ pub(crate) struct Dependency<'lock> {
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum DependencySource<'lock> {
     /// TODO: docs.
-    CratesIo { checksum: &'lock str },
+    CratesIo(CratesIoSource<'lock>),
 
     /// TODO: docs.
-    Git { url: &'lock str, rev: &'lock str },
+    Git(GitSource<'lock>),
 
     /// TODO: docs.
     Path,
+}
+
+/// TODO: docs.
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct CratesIoSource<'lock> {
+    checksum: &'lock str,
+}
+
+/// TODO: docs.
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct GitSource<'lock> {
+    url: &'lock str,
+    rev: &'lock str,
+    url_fragment: Option<&'lock str>,
+    branch: Option<&'lock str>,
+    tag: Option<&'lock str>,
 }
 
 /// The functions that will have to be called to create the vendor directory.
@@ -78,23 +95,30 @@ impl VendorDeps {
 
         for dep in deps {
             let source_path = match dep.source {
-                DependencySource::CratesIo { checksum } => {
-                    let url = format!(
-                        "https://crates.io/api/v1/crates/{name}/{version}/download",
-                        name = dep.name,
-                        version = dep.version,
-                    );
+                DependencySource::CratesIo(src) => {
+                    let Dependency { name, version, .. } = dep;
                     let args = attrset! {
-                        url: url,
-                        sha256: checksum,
+                        name: format!("{name}-{version}.tar.gz"),
+                        url: format!("https://static.crates.io/crates/{name}/{name}-{version}.crate"),
+                        sha256: src.checksum,
                     };
                     funs.fetchurl.call::<NixAttrset>(args, ctx)?
                 },
-                DependencySource::Git { url, rev } => {
+                DependencySource::Git(src) => {
+                    let r#ref = src.branch.map(Cow::Borrowed).or_else(|| {
+                        src.tag.map(|tag| format!("refs/tags/{tag}").into())
+                    });
+
                     let args = attrset! {
-                        url: url,
-                        rev: rev,
-                    };
+                        url: src.url,
+                        rev: src.url_fragment.unwrap_or(src.rev),
+                        submodules: true,
+                    }
+                    .merge(match r#ref {
+                        Some(r#ref) => Either::Left(attrset! { ref: r#ref, }),
+                        None => Either::Right(attrset! { allRefs: true, }),
+                    });
+
                     funs.fetch_git.call::<NixAttrset>(args, ctx)?
                 },
                 DependencySource::Path => continue,
