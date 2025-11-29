@@ -2,8 +2,8 @@
 
 use core::ffi::c_uint;
 use core::marker::PhantomData;
+use core::ptr;
 use core::ptr::NonNull;
-use core::{iter, ptr};
 
 use nix_bindings_sys as sys;
 
@@ -34,29 +34,35 @@ impl<'value> NixFunction<'value> {
         ctx: &mut Context,
     ) -> Result<Thunk<'static, T>> {
         let dest_ptr = ctx.alloc_value()?;
-
-        // Allocate a new value for the argument and write it there.
         let arg_ptr = ctx.alloc_value()?;
-        unsafe { arg.write(arg_ptr, ctx)? };
 
-        let apply_res = ctx.with_raw(|ctx| {
-            unsafe {
-                sys::init_apply(
-                    ctx,
-                    dest_ptr.as_ptr(),
-                    self.inner.as_raw(),
-                    arg_ptr.as_ptr(),
-                )
-            };
+        let res = (unsafe { arg.write(arg_ptr, ctx) }).and_then(|()| {
+            ctx.with_raw(|ctx| {
+                unsafe {
+                    sys::init_apply(
+                        ctx,
+                        dest_ptr.as_ptr(),
+                        self.inner.as_raw(),
+                        arg_ptr.as_ptr(),
+                    )
+                };
+            })
         });
 
-        // Free the argument value once we're done with it.
+        // Free the argument once we're done with it.
         ctx.with_raw(|ctx| unsafe {
             sys::value_decref(ctx, arg_ptr.as_ptr())
-        })?;
+        })
+        .ok();
 
-        // NOTE: we handle the apply error after freeing the argument.
-        apply_res?;
+        // Free the destination value if the call failed.
+        if let Err(err) = res {
+            ctx.with_raw(|ctx| unsafe {
+                sys::value_decref(ctx, dest_ptr.as_ptr())
+            })
+            .ok();
+            return Err(err);
+        }
 
         // SAFETY: `init_apply` has initialized the value at `dest_ptr`.
         let value = unsafe { NixValue::new(dest_ptr) };
@@ -135,18 +141,18 @@ impl<'value> NixFunction<'value> {
             })
         });
 
-        // If either writing the arguments or the function call failed, free
-        // the successfully allocated arguments and the destination value
-        // before returning the error.
+        // Free the arguments once we're done with them.
+        for &raw_arg in &args_slice[..num_written] {
+            ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, raw_arg) })
+                .ok();
+        }
+
+        // Free the destination value if the call failed.
         if let Err(err) = res {
-            for raw_arg in args_slice[..num_written]
-                .iter()
-                .copied()
-                .chain(iter::once(dest_ptr.as_ptr()))
-            {
-                ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, raw_arg) })
-                    .ok();
-            }
+            ctx.with_raw(|ctx| unsafe {
+                sys::value_decref(ctx, dest_ptr.as_ptr())
+            })
+            .ok();
             return Err(err);
         }
 
