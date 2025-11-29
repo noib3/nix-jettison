@@ -5,9 +5,12 @@ use core::ptr::NonNull;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
+use crate::attrset::NixAttrset;
+use crate::builtins::Builtins;
 use crate::error::{Error, ErrorKind, Result, ToError};
 use crate::namespace::Namespace;
 use crate::primop::PrimOp;
+use crate::value::{NixValue, TryFromValue};
 
 /// TODO: docs.
 pub struct Context<State = EvalState> {
@@ -59,6 +62,27 @@ impl Context<Entrypoint> {
 }
 
 impl Context<EvalState> {
+    /// Returns the global `builtins` attribute set.
+    ///
+    /// This provides access to all built-in functions like `fetchGit`,
+    /// `fetchurl`, `toString`, etc.
+    #[inline]
+    pub fn builtins(&mut self) -> Builtins<'static> {
+        let builtins_raw = unsafe { cpp::get_builtins(self.state.as_ptr()) };
+
+        let Some(builtins_ptr) = NonNull::new(builtins_raw) else {
+            panic!("failed to get builtins attrset: got null pointer");
+        };
+
+        // SAFETY: the value returned by `get_builtins` is initialized.
+        let builtins_value = unsafe { NixValue::new(builtins_ptr) };
+
+        match NixAttrset::try_from_value(builtins_value, self) {
+            Ok(attrset) => Builtins::new(attrset),
+            Err(err) => unreachable!("builtins is not an attrset: {err}"),
+        }
+    }
+
     /// Allocates a new, uninitialized value, returning a pointer to it.
     ///
     /// The caller is responsible for freeing the value by calling

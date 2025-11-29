@@ -45,6 +45,18 @@ unsafe extern "C" {
     ) -> *mut Value;
 }
 
+// Builtins.
+unsafe extern "C" {
+    /// Get the global `builtins` attribute set.
+    ///
+    /// Returns a pointer to the `builtins` attrset that contains all built-in
+    /// functions like `fetchGit`, `fetchurl`, `toString`, etc.
+    ///
+    /// The returned pointer is valid as long as the `EvalState` is alive.
+    /// It does not need to be freed (it's managed by the EvalState).
+    pub fn get_builtins(state: *mut EvalState) -> *mut Value;
+}
+
 // Lists.
 unsafe extern "C" {
     /// Create a list builder with the specified size.

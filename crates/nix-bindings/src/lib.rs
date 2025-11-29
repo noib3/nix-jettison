@@ -7,6 +7,7 @@
 extern crate alloc;
 
 pub mod attrset;
+pub mod builtins;
 pub mod context;
 mod entry;
 pub mod error;

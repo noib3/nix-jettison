@@ -30,18 +30,11 @@ extern "C" Value* get_attr_byname_lazy(const Value* value, EvalState* state, con
     return attr->value;
 }
 
-// Values.
+// Builtins.
 
-extern "C" Value* alloc_value(EvalState* state) {
-    return state->allocValue();
-}
-
-extern "C" void force_value(EvalState* state, Value* value) {
-    state->forceValue(*value, nix::noPos);
-}
-
-extern "C" void init_path_string(EvalState* state, Value* value, const char* str) {
-    value->mkPath(state->rootPath(nix::CanonPath(str)));
+extern "C" Value* get_builtins(EvalState* state) {
+    // builtins is the first value in baseEnv
+    return state->baseEnv.values[0];
 }
 
 // Lists.
@@ -58,4 +51,18 @@ extern "C" void list_builder_insert(nix::ListBuilder* builder, size_t index, Val
 extern "C" void make_list(Value* v, nix::ListBuilder* builder) {
     v->mkList(*builder);
     delete builder;
+}
+
+// Values.
+
+extern "C" Value* alloc_value(EvalState* state) {
+    return state->allocValue();
+}
+
+extern "C" void force_value(EvalState* state, Value* value) {
+    state->forceValue(*value, nix::noPos);
+}
+
+extern "C" void init_path_string(EvalState* state, Value* value, const char* str) {
+    value->mkPath(state->rootPath(nix::CanonPath(str)));
 }

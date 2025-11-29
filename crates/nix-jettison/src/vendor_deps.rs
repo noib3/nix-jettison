@@ -152,7 +152,7 @@ impl<'pkgs> CreateVendorDirFuns<'pkgs> {
         Ok(Self {
             link_farm: pkgs.get(c"linkFarm", ctx)?,
             fetchurl: pkgs.get(c"fetchurl", ctx)?,
-            fetch_git: todo!(),
+            fetch_git: ctx.builtins().fetch_git(ctx),
         })
     }
 }
