@@ -2,6 +2,7 @@ use std::ffi::CString;
 
 use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, quote};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
@@ -65,9 +66,10 @@ impl Parse for Key {
             let expr: syn::Expr = content.parse()?;
             Ok(Self::Expr(expr))
         }
-        // Otherwise, parse it as an ident and convert to c-string literal.
+        // Otherwise, parse it as an ident (including keywords) and convert to
+        // c-string literal.
         else {
-            let ident: syn::Ident = input.parse()?;
+            let ident = input.call(syn::Ident::parse_any)?;
             let ident_str = ident.to_string();
             let c_string = CString::new(ident_str).map_err(|_| {
                 syn::Error::new(
