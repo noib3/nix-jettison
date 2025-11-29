@@ -12,6 +12,7 @@ pub mod error;
 pub mod list;
 mod namespace;
 pub mod primop;
+pub mod thunk;
 mod utf8_cstr;
 pub mod value;
 
@@ -31,5 +32,6 @@ pub mod prelude {
     pub use crate::error::*;
     pub use crate::list::*;
     pub use crate::primop::*;
+    pub use crate::thunk::*;
     pub use crate::value::*;
 }
