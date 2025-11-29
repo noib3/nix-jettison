@@ -356,6 +356,23 @@ impl Value for CString {
     }
 }
 
+impl Value for str {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        let string = CString::new(self).map_err(|err| ctx.make_error(err))?;
+        unsafe { string.write(dest, ctx) }
+    }
+}
+
 impl Value for &str {
     #[inline]
     fn kind(&self) -> ValueKind {
@@ -368,8 +385,7 @@ impl Value for &str {
         dest: NonNull<sys::Value>,
         ctx: &mut Context,
     ) -> Result<()> {
-        let string = CString::new(*self).map_err(|err| ctx.make_error(err))?;
-        unsafe { string.write(dest, ctx) }
+        unsafe { (*self).write(dest, ctx) }
     }
 }
 
