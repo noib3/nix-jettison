@@ -1,5 +1,6 @@
 //! TODO: docs.
 
+use core::cell::OnceCell;
 use core::ffi::{CStr, c_uint};
 use core::ptr::NonNull;
 use core::{fmt, ptr};
@@ -16,8 +17,19 @@ use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait Attrset {
+    /// Returns the number of attributes in this attribute set.
+    fn len(&self, ctx: &mut Context) -> c_uint;
+
+    /// TODO: docs.
+    fn with_value<T>(
+        &self,
+        key: &CStr,
+        fun: impl FnOnceValue<T>,
+        ctx: &mut Context,
+    ) -> Option<T>;
+
     /// Returns an [`Attrset`] implementation that borrows from `self`.
-    #[inline]
+    #[inline(always)]
     fn borrow(&self) -> impl Attrset {
         struct BorrowedAttrset<'a, T: ?Sized> {
             inner: &'a T,
@@ -30,8 +42,8 @@ pub trait Attrset {
             }
 
             #[inline]
-            fn len(&self) -> c_uint {
-                self.inner.len()
+            fn len(&self, ctx: &mut Context) -> c_uint {
+                self.inner.len(ctx)
             }
 
             #[inline]
@@ -40,7 +52,7 @@ pub trait Attrset {
                 key: &CStr,
                 fun: impl FnOnceValue<V>,
                 ctx: &mut Context,
-            ) -> Result<Option<V>> {
+            ) -> Option<V> {
                 self.inner.with_value(key, fun, ctx)
             }
         }
@@ -48,8 +60,15 @@ pub trait Attrset {
         BorrowedAttrset { inner: self }
     }
 
-    /// Returns the number of attributes in this attribute set.
-    fn len(&self) -> c_uint;
+    /// TODO: docs.
+    #[inline(always)]
+    fn contains_key(&self, key: &CStr, ctx: &mut Context) -> bool {
+        struct NoOp;
+        impl FnOnceValue<()> for NoOp {
+            fn call(self, _: impl Value, _: ()) {}
+        }
+        self.with_value(key, NoOp, ctx).is_some()
+    }
 
     /// TODO: docs.
     #[inline(always)]
@@ -61,18 +80,19 @@ pub trait Attrset {
     }
 
     /// Returns whether this attribute set is empty.
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
+    #[inline(always)]
+    fn is_empty(&self, ctx: &mut Context) -> bool {
+        self.len(ctx) == 0
     }
 
     /// TODO: docs.
-    fn with_value<T>(
-        &self,
-        key: &CStr,
-        fun: impl FnOnceValue<T>,
-        ctx: &mut Context,
-    ) -> Result<Option<T>>;
+    #[inline(always)]
+    fn merge<T: Attrset>(self, other: T) -> Merge<Self, T>
+    where
+        Self: Sized,
+    {
+        Merge { left: self, right: other, conflicts: OnceCell::new() }
+    }
 }
 
 /// TODO: docs.
@@ -104,6 +124,16 @@ pub struct NixAttrset<'value> {
 pub struct LiteralAttrset<Keys, Values> {
     keys: Keys,
     values: Values,
+}
+
+/// The attribute set type created by [`merge`](Attrset::merge)ing two
+/// attribute sets.
+pub struct Merge<Left, Right> {
+    left: Left,
+    right: Right,
+    /// For keys that exist in both attribute sets, maps the index of the key
+    /// in `right` to the index of the corresponding key in `left`.
+    conflicts: OnceCell<Vec<(c_uint, c_uint)>>,
 }
 
 /// The type of error returned when an expected attribute is missing from
@@ -183,7 +213,7 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     /// If an index is returned, it is guaranteed to be less than `self.len()`.
     #[inline]
     fn get_idx_of_key(&self, key: &CStr) -> Option<c_uint> {
-        (0..self.len()).find(|idx| self.get_key(*idx) == key)
+        (0..V::LEN).find(|idx| self.get_key(*idx) == key)
     }
 
     #[inline]
@@ -198,9 +228,16 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     }
 }
 
+impl<L: Attrset, R: Attrset> Merge<L, R> {
+    #[inline]
+    fn conflicts(&self, _ctx: &mut Context) -> &[(c_uint, c_uint)] {
+        self.conflicts.get_or_init(Vec::new)
+    }
+}
+
 impl Attrset for NixAttrset<'_> {
     #[inline]
-    fn len(&self) -> c_uint {
+    fn len(&self, _: &mut Context) -> c_uint {
         // 'nix_get_attrs_size' errors when the value pointer is null or when
         // the value is not initizialized, but having a ValuePointer guarantees
         // neither of those can happen, so we can use a null context.
@@ -213,8 +250,8 @@ impl Attrset for NixAttrset<'_> {
         key: &CStr,
         fun: impl FnOnceValue<T>,
         ctx: &mut Context,
-    ) -> Result<Option<T>> {
-        Ok(self.with_attr_inner(key, |value, _| fun.call(value, ()), ctx))
+    ) -> Option<T> {
+        self.with_attr_inner(key, |value, _| fun.call(value, ()), ctx)
     }
 }
 
@@ -251,7 +288,7 @@ impl<'a> TryFromValue<NixValue<'a>> for NixAttrset<'a> {
 
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
-    fn len(&self) -> c_uint {
+    fn len(&self, _: &mut Context) -> c_uint {
         debug_assert_eq!(K::LEN, V::LEN);
         K::LEN
     }
@@ -262,10 +299,8 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
         key: &CStr,
         fun: impl FnOnceValue<T>,
         _: &mut Context,
-    ) -> Result<Option<T>> {
-        Ok(self
-            .get_idx_of_key(key)
-            .map(|idx| self.values.with_value(idx, fun)))
+    ) -> Option<T> {
+        self.get_idx_of_key(key).map(|idx| self.values.with_value(idx, fun))
     }
 }
 
@@ -308,7 +343,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
             }
         }
 
-        let len = self.len();
+        let len = self.len(ctx);
 
         let mut builder = ctx.make_attrset_builder(len as usize)?;
 
@@ -325,6 +360,53 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
         }
 
         builder.build(dest)
+    }
+}
+
+impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
+    #[inline]
+    fn len(&self, ctx: &mut Context) -> c_uint {
+        self.left.len(ctx) + self.right.len(ctx)
+            - self.conflicts(ctx).len() as c_uint
+    }
+
+    #[inline]
+    fn with_value<T>(
+        &self,
+        _key: &CStr,
+        _fun: impl FnOnceValue<T>,
+        _ctx: &mut Context,
+    ) -> Option<T> {
+        todo!();
+    }
+}
+
+impl<L, R> Value for Merge<L, R>
+where
+    Self: Attrset,
+{
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        _: NonNull<nix_bindings_sys::Value>,
+        _: &mut Context,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    #[inline]
+    unsafe fn write_with_namespace(
+        &self,
+        _dest: NonNull<nix_bindings_sys::Value>,
+        _namespace: impl Namespace,
+        _ctx: &mut Context,
+    ) -> Result<()> {
+        todo!();
     }
 }
 
@@ -351,10 +433,10 @@ impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
 #[cfg(feature = "either")]
 impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     #[inline]
-    fn len(&self) -> c_uint {
+    fn len(&self, ctx: &mut Context) -> c_uint {
         match self {
-            either::Either::Left(l) => l.len(),
-            either::Either::Right(r) => r.len(),
+            Self::Left(l) => l.len(ctx),
+            Self::Right(r) => r.len(ctx),
         }
     }
 
@@ -364,10 +446,10 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
         key: &CStr,
         fun: impl FnOnceValue<T>,
         ctx: &mut Context,
-    ) -> Result<Option<T>> {
+    ) -> Option<T> {
         match self {
-            either::Either::Left(l) => l.with_value(key, fun, ctx),
-            either::Either::Right(r) => r.with_value(key, fun, ctx),
+            Self::Left(l) => l.with_value(key, fun, ctx),
+            Self::Right(r) => r.with_value(key, fun, ctx),
         }
     }
 }
