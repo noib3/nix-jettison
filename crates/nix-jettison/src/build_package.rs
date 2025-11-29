@@ -8,6 +8,8 @@ use cargo::GlobalContext;
 use cargo::core::Workspace;
 use nix_bindings::prelude::*;
 
+use crate::vendor_deps::{VendorDeps, VendorDepsArgs, VendorDepsError};
+
 /// Builds a Rust package.
 #[derive(nix_bindings::PrimOp)]
 pub(crate) struct BuildPackage;
@@ -20,7 +22,7 @@ pub(crate) struct BuildPackageArgs<'a> {
 }
 
 /// The type of error that can occur when building a package fails.
-#[derive(Debug, derive_more::Display)]
+#[derive(Debug, derive_more::Display, cauchy::From)]
 #[display("{_0}")]
 pub(crate) enum BuildPackageError {
     /// Constructing the [`GlobalContext`] failed.
@@ -28,6 +30,9 @@ pub(crate) enum BuildPackageError {
 
     /// Constructing the [`Workspace`] failed.
     CreateWorkspace(anyhow::Error),
+
+    /// Vendoring the dependencies failed.
+    VendorDeps(#[from] VendorDepsError),
 }
 
 impl Function for BuildPackage {
@@ -35,8 +40,15 @@ impl Function for BuildPackage {
 
     fn call<'a: 'a>(
         args: Self::Args<'a>,
-        _: &mut Context,
+        ctx: &mut Context,
     ) -> Result<impl Value + use<>, BuildPackageError> {
+        let vendor_args = VendorDepsArgs {
+            pkgs: args.pkgs,
+            cargo_lock: args.src.join("Cargo.lock").into(),
+        };
+
+        let _vendor_dir = <VendorDeps as Function>::call(vendor_args, ctx)?;
+
         let manifest_path = args.src.join("Cargo.toml");
 
         let global_ctx = GlobalContext::default()

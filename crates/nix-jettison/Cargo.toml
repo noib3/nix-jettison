@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = { workspace = true }
 cargo = { workspace = true, default-features = true }
+cauchy = { workspace = true }
 derive_more = { workspace = true }
 nix-bindings = { workspace = true, features = ["std"] }
 

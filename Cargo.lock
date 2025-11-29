@@ -414,6 +414,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cauchy"
+version = "0.1.0"
+source = "git+https://github.com/nomad/cauchy.git#88ab3944dac23488d3ec098bb0815763a6a01403"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2478,6 +2488,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cargo",
+ "cauchy",
  "derive_more",
  "nix-bindings",
 ]

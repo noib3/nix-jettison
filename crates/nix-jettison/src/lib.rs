@@ -1,23 +1,12 @@
 #![allow(missing_docs)]
 
 mod build_package;
+mod jettison;
+mod vendor_deps;
 
-use build_package::BuildPackage;
-use nix_bindings::prelude::*;
-
-/// nix-jettison's library functions.
-#[derive(nix_bindings::PrimOp)]
-struct Jettison;
-
-impl Constant for Jettison {
-    fn value() -> impl Value {
-        attrset! {
-            { <BuildPackage as PrimOp>::NAME }: BuildPackage,
-        }
-    }
-}
+use nix_bindings::context::{Context, Entrypoint};
 
 #[nix_bindings::entry]
 fn jettison(ctx: &mut Context<Entrypoint>) {
-    ctx.register_primop::<Jettison>()
+    ctx.register_primop::<jettison::Jettison>()
 }
