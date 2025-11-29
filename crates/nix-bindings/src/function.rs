@@ -1,0 +1,199 @@
+//! TODO: docs.
+
+use core::ffi::c_uint;
+use core::marker::PhantomData;
+use core::ptr::NonNull;
+use core::{iter, ptr};
+
+use nix_bindings_sys as sys;
+
+use crate::context::Context;
+use crate::error::{Result, TypeMismatchError};
+use crate::thunk::Thunk;
+use crate::value::{
+    FnOnceValue,
+    NixValue,
+    TryFromValue,
+    Value,
+    ValueKind,
+    Values,
+};
+
+/// TODO: docs.
+#[derive(Copy, Clone)]
+pub struct NixFunction<'value> {
+    inner: NixValue<'value>,
+}
+
+impl<'value> NixFunction<'value> {
+    /// TODO: docs.
+    #[inline]
+    pub fn call<T: TryFromValue<NixValue<'static>>>(
+        &self,
+        arg: impl Value,
+        ctx: &mut Context,
+    ) -> Result<Thunk<'static, T>> {
+        let dest_ptr = ctx.alloc_value()?;
+
+        // Allocate a new value for the argument and write it there.
+        let arg_ptr = ctx.alloc_value()?;
+        unsafe { arg.write(arg_ptr, ctx)? };
+
+        let apply_res = ctx.with_raw(|ctx| {
+            unsafe {
+                sys::init_apply(
+                    ctx,
+                    dest_ptr.as_ptr(),
+                    self.inner.as_raw(),
+                    arg_ptr.as_ptr(),
+                )
+            };
+        });
+
+        // Free the argument value once we're done with it.
+        ctx.with_raw(|ctx| unsafe {
+            sys::value_decref(ctx, arg_ptr.as_ptr())
+        })?;
+
+        // NOTE: we handle the apply error after freeing the argument.
+        apply_res?;
+
+        // SAFETY: `init_apply` has initialized the value at `dest_ptr`.
+        let value = unsafe { NixValue::new(dest_ptr) };
+
+        Thunk::try_from_value(value, ctx)
+    }
+
+    /// TODO: docs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of arguments is less than 2.
+    #[inline]
+    #[track_caller]
+    #[allow(clippy::too_many_lines)]
+    pub fn call_multi<T: TryFromValue<NixValue<'static>>>(
+        &self,
+        args: impl Values,
+        ctx: &mut Context,
+    ) -> Result<Thunk<'static, T>> {
+        const fn values_len<V: Values>(_: &V) -> c_uint {
+            V::LEN
+        }
+
+        fn values_array<V: Values>(_: &V) -> impl AsMut<[*mut sys::Value]> {
+            V::array(|_| ptr::null_mut())
+        }
+
+        let args_len = values_len(&args);
+
+        assert!(
+            args_len >= 2,
+            "NixFunction::call_multi() requires at least 2 arguments"
+        );
+
+        let dest_ptr = ctx.alloc_value()?;
+
+        let mut args_array = values_array(&args);
+
+        // We'll do an eager call with the first N - 1 arguments, followed by
+        // a lazy call with the last argument.
+        let args_slice = &mut args_array.as_mut()[..args_len as usize - 1];
+
+        let mut num_written = 0;
+
+        let mut try_write_args = || {
+            struct WriteArg<'ctx> {
+                dest: NonNull<sys::Value>,
+                ctx: &'ctx mut Context,
+            }
+            impl FnOnceValue<Result<()>> for WriteArg<'_> {
+                #[inline]
+                fn call(self, value: impl Value, _: ()) -> Result<()> {
+                    unsafe { value.write(self.dest, self.ctx) }
+                }
+            }
+            for (arg_idx, arg_ptr) in args_slice.iter_mut().enumerate() {
+                let dest = ctx.alloc_value()?;
+                args.with_value(arg_idx as c_uint, WriteArg { dest, ctx })?;
+                *arg_ptr = dest.as_ptr();
+                num_written += 1;
+            }
+            Result::Ok(())
+        };
+
+        let res = try_write_args().and_then(|()| {
+            ctx.with_raw_and_state(|ctx, state| unsafe {
+                sys::value_call_multi(
+                    ctx,
+                    state.as_ptr(),
+                    self.inner.as_raw(),
+                    args_slice.len(),
+                    args_slice.as_mut_ptr(),
+                    dest_ptr.as_ptr(),
+                );
+            })
+        });
+
+        // If either writing the arguments or the function call failed, free
+        // the successfully allocated arguments and the destination value
+        // before returning the error.
+        if let Err(err) = res {
+            for raw_arg in args_slice[..num_written]
+                .iter()
+                .copied()
+                .chain(iter::once(dest_ptr.as_ptr()))
+            {
+                ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, raw_arg) })
+                    .ok();
+            }
+            return Err(err);
+        }
+
+        // SAFETY: `value_call_multi` has initialized the value at `dest_ptr`.
+        let value = unsafe { NixValue::new(dest_ptr) };
+
+        let function = NixFunction::try_from_value(value, ctx)?;
+
+        struct LazyCallLastArg<'function, 'ctx, Ret> {
+            function: NixFunction<'function>,
+            ctx: &'ctx mut Context,
+            ret: PhantomData<Ret>,
+        }
+
+        impl<Ret> FnOnceValue<Result<Thunk<'static, Ret>>>
+            for LazyCallLastArg<'_, '_, Ret>
+        where
+            Ret: TryFromValue<NixValue<'static>>,
+        {
+            #[inline]
+            fn call(
+                self,
+                value: impl Value,
+                _: (),
+            ) -> Result<Thunk<'static, Ret>> {
+                self.function.call::<Ret>(value, self.ctx)
+            }
+        }
+
+        args.with_value(
+            args_len - 1 as c_uint,
+            LazyCallLastArg::<T> { function, ctx, ret: PhantomData },
+        )
+    }
+}
+
+impl<'a> TryFromValue<NixValue<'a>> for NixFunction<'a> {
+    #[inline]
+    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
+        ctx.force(value.as_ptr())?;
+
+        match value.kind() {
+            ValueKind::Function => Ok(Self { inner: value }),
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Function,
+                found: other,
+            })),
+        }
+    }
+}
