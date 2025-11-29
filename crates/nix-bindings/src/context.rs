@@ -59,6 +59,19 @@ impl Context<Entrypoint> {
 }
 
 impl Context<EvalState> {
+    /// Allocates a new, uninitialized value, returning a pointer to it.
+    ///
+    /// The caller is responsible for freeing the value by calling
+    /// [`sys::value_decref`] once it is no longer needed.
+    #[inline]
+    pub(crate) fn alloc_value(&mut self) -> Result<NonNull<sys::Value>> {
+        let raw_ptr = unsafe { cpp::alloc_value(self.state.inner.as_ptr()) };
+
+        NonNull::new(raw_ptr).ok_or_else(|| {
+            self.make_error((ErrorKind::Overflow, c"failed to allocate Value"))
+        })
+    }
+
     /// Forces the evaluation of the given value.
     ///
     /// The value's kind is guaranteed to not be [`ValueKind::Thunk`] after
@@ -165,6 +178,15 @@ impl<State> Context<State> {
     ) -> Result<T> {
         self.inner.with_raw(fun)
     }
+
+    /// TODO: docs.
+    #[inline]
+    pub(crate) fn with_raw_and_state<T>(
+        &mut self,
+        fun: impl FnOnce(*mut sys::c_context, &mut State) -> T,
+    ) -> Result<T> {
+        self.inner.with_raw(|raw_ctx| fun(raw_ctx, &mut self.state))
+    }
 }
 
 impl EvalState {
@@ -187,14 +209,7 @@ impl<'ctx> AttrsetBuilder<'ctx> {
         write_value: impl FnOnce(NonNull<sys::Value>, &mut Context) -> Result<()>,
     ) -> Result<()> {
         unsafe {
-            let dest_raw = cpp::alloc_value(self.context.state.inner.as_ptr());
-
-            let dest_ptr = NonNull::new(dest_raw).ok_or_else(|| {
-                self.context.make_error((
-                    ErrorKind::Overflow,
-                    c"failed to allocate Value for AttrsetBuilder insert",
-                ))
-            })?;
+            let dest_ptr = self.context.alloc_value()?;
 
             write_value(dest_ptr, self.context)?;
 
@@ -224,14 +239,7 @@ impl<'ctx> ListBuilder<'ctx> {
         write_value: impl FnOnce(NonNull<sys::Value>, &mut Context) -> Result<()>,
     ) -> Result<()> {
         unsafe {
-            let dest_raw = cpp::alloc_value(self.context.state.inner.as_ptr());
-
-            let dest_ptr = NonNull::new(dest_raw).ok_or_else(|| {
-                self.context.make_error((
-                    ErrorKind::Overflow,
-                    c"failed to allocate Value for ListBuilder insert",
-                ))
-            })?;
+            let dest_ptr = self.context.alloc_value()?;
 
             write_value(dest_ptr, self.context)?;
 
