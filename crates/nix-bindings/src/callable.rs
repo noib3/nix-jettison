@@ -7,6 +7,7 @@ use core::ptr::NonNull;
 
 use nix_bindings_sys as sys;
 
+use crate::attrset::NixAttrset;
 use crate::context::Context;
 use crate::error::{Result, TypeMismatchError};
 use crate::thunk::Thunk;
@@ -189,8 +190,50 @@ pub trait Callable {
 
 /// TODO: docs.
 #[derive(Copy, Clone)]
+pub struct NixFunctor<'value> {
+    inner: NixAttrset<'value>,
+}
+
+/// TODO: docs.
+#[derive(Copy, Clone)]
 pub struct NixLambda<'value> {
     inner: NixValue<'value>,
+}
+
+impl Callable for NixFunctor<'_> {
+    #[inline]
+    fn value(&self) -> NixValue<'_> {
+        self.inner.into()
+    }
+}
+
+impl<'a> TryFromValue<NixValue<'a>> for NixFunctor<'a> {
+    #[inline]
+    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
+        NixAttrset::try_from_value(value, ctx)
+            .and_then(|attrset| Self::try_from_value(attrset, ctx))
+    }
+}
+
+impl<'a> TryFromValue<NixAttrset<'a>> for NixFunctor<'a> {
+    #[inline]
+    fn try_from_value(
+        attrset: NixAttrset<'a>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        match attrset.get::<NixValue>(c"__functor", ctx)?.kind() {
+            // We also accept thunks to avoid eagerly forcing functors. If the
+            // __functor doesn't evaluates to a function, the user will get an
+            // error when calling 'Callable::call{_multi}()'.
+            ValueKind::Function | ValueKind::Thunk => {
+                Ok(Self { inner: attrset })
+            },
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Function,
+                found: other,
+            })),
+        }
+    }
 }
 
 impl Callable for NixLambda<'_> {
