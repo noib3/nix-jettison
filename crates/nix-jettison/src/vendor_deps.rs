@@ -79,15 +79,15 @@ pub(crate) struct GitSource<'lock> {
 }
 
 /// The functions that will have to be called to create the vendor directory.
-struct CreateVendorDirFuns<'pkgs, 'eval> {
+struct CreateVendorDirFuns<'pkgs, 'builtins> {
     link_farm: NixLambda<'pkgs>,
     fetchurl: NixFunctor<'pkgs>,
-    fetch_git: NixLambda<'eval>,
+    fetch_git: NixLambda<'builtins>,
 }
 
 impl VendorDeps {
     fn create_vendor_dir<'a>(
-        funs: CreateVendorDirFuns<'_, '_>,
+        funs: CreateVendorDirFuns,
         deps: impl Iterator<Item = Dependency<'a>>,
         ctx: &mut Context,
     ) -> Result<Thunk<'static, NixAttrset<'static>>, NixError> {
@@ -170,19 +170,6 @@ impl VendorDeps {
     }
 }
 
-impl<'pkgs, 'eval> CreateVendorDirFuns<'pkgs, 'eval> {
-    fn new(
-        pkgs: NixAttrset<'pkgs>,
-        ctx: &mut Context<'eval>,
-    ) -> Result<Self, NixError> {
-        Ok(Self {
-            link_farm: pkgs.get(c"linkFarm", ctx)?,
-            fetchurl: pkgs.get(c"fetchurl", ctx)?,
-            fetch_git: ctx.builtins().fetch_git(ctx),
-        })
-    }
-}
-
 impl Function for VendorDeps {
     type Args<'a> = VendorDepsArgs<'a>;
 
@@ -210,7 +197,11 @@ impl Function for VendorDeps {
             },
         };
 
-        let funs = CreateVendorDirFuns::new(args.pkgs, ctx)?;
+        let funs = CreateVendorDirFuns {
+            link_farm: args.pkgs.get(c"linkFarm", ctx)?,
+            fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
+            fetch_git: ctx.builtins().fetch_git(ctx),
+        };
 
         Self::create_vendor_dir(funs, deps, ctx)?
             .force(ctx)
