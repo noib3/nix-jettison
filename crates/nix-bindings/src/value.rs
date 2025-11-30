@@ -12,6 +12,7 @@ use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 use crate::error::{Result, ToError, TryFromI64Error, TypeMismatchError};
 use crate::namespace::Namespace;
 use crate::prelude::{Context, PrimOp};
+use crate::primop::PrimOpImpl;
 
 /// TODO: docs.
 pub trait Value {
@@ -448,8 +449,7 @@ impl<T: Value> Value for Option<T> {
 impl<P: PrimOp> Value for P {
     #[inline]
     fn kind(&self) -> ValueKind {
-        // FIXME: this is not always correct.
-        ValueKind::Function
+        PrimOpImpl::value_kind(self)
     }
 
     #[inline]
@@ -468,7 +468,7 @@ impl<P: PrimOp> Value for P {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        ctx.write_primop::<P>(namespace, dest)
+        ctx.write_primop::<Self>(namespace, dest)
     }
 }
 

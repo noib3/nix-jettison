@@ -11,7 +11,7 @@ use nix_bindings_sys as sys;
 use crate::Utf8CStr;
 use crate::context::{Context, EvalState};
 use crate::error::{ErrorKind, Result};
-use crate::value::{NixValue, TryFromValue, TryIntoValue, Value};
+use crate::value::{NixValue, TryFromValue, TryIntoValue, Value, ValueKind};
 
 /// TODO: docs.
 pub trait PrimOp: PrimOpImpl + Sized + 'static {
@@ -119,6 +119,9 @@ pub trait PrimOpImpl {
 
         Some(wrapper)
     }
+
+    #[doc(hidden)]
+    fn value_kind(&self) -> ValueKind;
 }
 
 /// TODO: docs.
@@ -137,6 +140,12 @@ pub trait Function {
         args: Self::Args<'a>,
         ctx: &mut Context,
     ) -> impl TryIntoValue + use<'a, Self>;
+
+    #[doc(hidden)]
+    #[inline(always)]
+    fn value_kind() -> ValueKind {
+        ValueKind::Function
+    }
 }
 
 /// TODO: docs.
@@ -212,6 +221,11 @@ impl<C: Constant> Function for C {
     fn call<'a: 'a>(_: NoArgs, _: &mut Context) -> impl Value + use<C> {
         C::value()
     }
+
+    #[inline(always)]
+    fn value_kind() -> ValueKind {
+        C::value().kind()
+    }
 }
 
 impl<F: Function> PrimOpImpl for F {
@@ -247,6 +261,11 @@ impl<F: Function> PrimOpImpl for F {
         // Errors are handled by setting the `Context::inner` field, so we
         // can ignore the result here.
         let _ = try_block();
+    }
+
+    #[inline(always)]
+    fn value_kind(&self) -> ValueKind {
+        F::value_kind()
     }
 }
 
