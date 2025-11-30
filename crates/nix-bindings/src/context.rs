@@ -1,6 +1,7 @@
 //! TODO: docs.
 
 use core::ffi::CStr;
+use core::marker::PhantomData;
 use core::ptr::NonNull;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
@@ -13,27 +14,29 @@ use crate::primop::PrimOp;
 use crate::value::{NixValue, TryFromValue};
 
 /// TODO: docs.
-pub struct Context<State = EvalState> {
+pub struct Context<'state, State = EvalState<'state>> {
     inner: ContextInner,
     state: State,
+    _lifetime: PhantomData<&'state ()>,
 }
 
 /// TODO: docs.
 pub struct Entrypoint {}
 
 /// TODO: docs.
-pub struct EvalState {
+pub struct EvalState<'a> {
     inner: NonNull<sys::EvalState>,
+    _lifetime: PhantomData<&'a sys::EvalState>,
 }
 
-pub(crate) struct AttrsetBuilder<'ctx> {
+pub(crate) struct AttrsetBuilder<'ctx, 'eval> {
     inner: NonNull<sys::BindingsBuilder>,
-    context: &'ctx mut Context,
+    context: &'ctx mut Context<'eval>,
 }
 
-pub(crate) struct ListBuilder<'ctx> {
+pub(crate) struct ListBuilder<'ctx, 'eval> {
     inner: NonNull<sys::ListBuilder>,
-    context: &'ctx mut Context,
+    context: &'ctx mut Context<'eval>,
     index: usize,
 }
 
@@ -41,7 +44,7 @@ pub(crate) struct ContextInner {
     ptr: NonNull<sys::c_context>,
 }
 
-impl Context<Entrypoint> {
+impl Context<'_, Entrypoint> {
     /// Adds the given primop to the `builtins` attribute set.
     #[track_caller]
     #[inline]
@@ -61,13 +64,13 @@ impl Context<Entrypoint> {
     }
 }
 
-impl Context<EvalState> {
+impl<'eval> Context<'eval> {
     /// Returns the global `builtins` attribute set.
     ///
     /// This provides access to all built-in functions like `fetchGit`,
     /// `fetchurl`, `toString`, etc.
     #[inline]
-    pub fn builtins(&mut self) -> Builtins<'static> {
+    pub fn builtins(&mut self) -> Builtins<'eval> {
         let builtins_raw = unsafe { cpp::get_builtins(self.state.as_ptr()) };
 
         let Some(builtins_ptr) = NonNull::new(builtins_raw) else {
@@ -101,7 +104,7 @@ impl Context<EvalState> {
     pub(crate) fn make_attrset_builder(
         &mut self,
         capacity: usize,
-    ) -> Result<AttrsetBuilder<'_>> {
+    ) -> Result<AttrsetBuilder<'_, 'eval>> {
         unsafe {
             let builder_ptr = cpp::make_bindings_builder(
                 self.state.inner.as_ptr(),
@@ -124,7 +127,7 @@ impl Context<EvalState> {
     pub(crate) fn make_list_builder(
         &mut self,
         capacity: usize,
-    ) -> Result<ListBuilder<'_>> {
+    ) -> Result<ListBuilder<'_, 'eval>> {
         unsafe {
             let builder_ptr =
                 cpp::make_list_builder(self.state.inner.as_ptr(), capacity);
@@ -163,7 +166,7 @@ impl Context<EvalState> {
     }
 }
 
-impl<State> Context<State> {
+impl<State> Context<'_, State> {
     /// TODO: docs.
     #[inline]
     #[doc(hidden)]
@@ -173,7 +176,11 @@ impl<State> Context<State> {
 
     #[inline]
     pub(crate) fn new(ctx_ptr: NonNull<sys::c_context>, state: State) -> Self {
-        Self { inner: ContextInner::new(ctx_ptr), state }
+        Self {
+            inner: ContextInner::new(ctx_ptr),
+            state,
+            _lifetime: PhantomData,
+        }
     }
 
     #[inline]
@@ -200,7 +207,7 @@ impl<State> Context<State> {
     }
 }
 
-impl EvalState {
+impl EvalState<'_> {
     #[inline]
     pub(crate) fn as_ptr(&mut self) -> *mut sys::EvalState {
         self.inner.as_ptr()
@@ -208,11 +215,11 @@ impl EvalState {
 
     #[inline]
     pub(crate) fn new(inner: NonNull<sys::EvalState>) -> Self {
-        Self { inner }
+        Self { inner, _lifetime: PhantomData }
     }
 }
 
-impl<'ctx> AttrsetBuilder<'ctx> {
+impl AttrsetBuilder<'_, '_> {
     #[inline]
     pub(crate) fn insert(
         &mut self,
@@ -243,7 +250,7 @@ impl<'ctx> AttrsetBuilder<'ctx> {
     }
 }
 
-impl<'ctx> ListBuilder<'ctx> {
+impl ListBuilder<'_, '_> {
     #[inline]
     pub(crate) fn insert(
         &mut self,

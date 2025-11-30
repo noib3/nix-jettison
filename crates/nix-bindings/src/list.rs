@@ -35,11 +35,11 @@ pub trait List {
             }
 
             #[inline]
-            fn with_value<'ctx, V>(
+            fn with_value<'ctx, 'eval, V>(
                 &self,
                 idx: c_uint,
-                fun: impl FnOnceValue<V, &'ctx mut Context>,
-                ctx: &'ctx mut Context,
+                fun: impl FnOnceValue<V, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
             ) -> V {
                 self.inner.with_value(idx, fun, ctx)
             }
@@ -76,11 +76,11 @@ pub trait List {
     }
 
     /// TODO: docs.
-    fn with_value<'ctx, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context>,
-        ctx: &'ctx mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T;
 }
 
@@ -103,11 +103,11 @@ pub struct LiteralList<Values> {
 trait ValueIterator {
     fn initial_len(&self) -> c_uint;
 
-    fn with_next_value<'ctx, T>(
+    fn with_next_value<'ctx, 'eval, T>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context>,
-        ctx: &'ctx mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T;
 }
 
@@ -138,19 +138,19 @@ impl<V: Values> List for LiteralList<V> {
     }
 
     #[inline]
-    fn with_value<'a, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<T, &'a mut Context>,
-        ctx: &'a mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        struct MapFnOnceValue<'a, F> {
-            ctx: &'a mut Context,
+        struct MapFnOnceValue<'ctx, 'eval, F> {
+            ctx: &'ctx mut Context<'eval>,
             fun: F,
         }
-        impl<'a, F, T> FnOnceValue<T> for MapFnOnceValue<'a, F>
+        impl<'ctx, 'eval, F, T> FnOnceValue<T> for MapFnOnceValue<'ctx, 'eval, F>
         where
-            F: FnOnceValue<T, &'a mut Context>,
+            F: FnOnceValue<T, &'ctx mut Context<'eval>>,
         {
             fn call(self, value: impl Value, _: ()) -> T {
                 self.fun.call(value, self.ctx)
@@ -195,7 +195,9 @@ impl<L: ValueIterator> Value for ListValue<L> {
             namespace: N,
         }
 
-        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context> for WriteValue<N> {
+        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>>
+            for WriteValue<N>
+        {
             fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
                 unsafe { value.write(self.dest, self.namespace, ctx) }
             }
@@ -236,11 +238,11 @@ where
     }
 
     #[inline]
-    fn with_value<'ctx, U>(
+    fn with_value<'ctx, 'eval, U>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<U, &'ctx mut Context>,
-        ctx: &'ctx mut Context,
+        fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> U {
         fun.call(self.deref()[idx as usize].borrow(), ctx)
     }
@@ -288,11 +290,11 @@ impl<I: IntoIterator<Item: Value>> IteratorExt for I {
             }
 
             #[inline]
-            fn with_next_value<'ctx, T>(
+            fn with_next_value<'ctx, 'eval, T>(
                 &self,
                 _: c_uint,
-                fun: impl FnOnceValue<T, &'ctx mut Context>,
-                ctx: &'ctx mut Context,
+                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
             ) -> T {
                 self.with_iter(|iter| {
                     let Some(value) = iter.next() else {
@@ -322,11 +324,11 @@ impl<L: List> ValueIterator for L {
     }
 
     #[inline]
-    fn with_next_value<'ctx, T>(
+    fn with_next_value<'ctx, 'eval, T>(
         &self,
         idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context>,
-        ctx: &'ctx mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T {
         self.with_value(idx, fun, ctx)
     }

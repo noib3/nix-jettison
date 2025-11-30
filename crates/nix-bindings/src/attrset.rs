@@ -329,13 +329,13 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
         mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        struct WriteValue<'ctx, N> {
+        struct WriteValue<'ctx, 'eval, N> {
             dest: NonNull<sys::Value>,
             namespace: N,
-            ctx: &'ctx mut Context,
+            ctx: &'ctx mut Context<'eval>,
         }
 
-        impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, N> {
+        impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, '_, N> {
             fn call(self, value: impl Value, _: ()) -> Result<()> {
                 unsafe { value.write(self.dest, self.namespace, self.ctx) }
             }

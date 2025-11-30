@@ -79,15 +79,15 @@ pub(crate) struct GitSource<'lock> {
 }
 
 /// The functions that will have to be called to create the vendor directory.
-struct CreateVendorDirFuns<'pkgs> {
+struct CreateVendorDirFuns<'pkgs, 'eval> {
     link_farm: NixLambda<'pkgs>,
     fetchurl: NixFunctor<'pkgs>,
-    fetch_git: NixLambda<'static>,
+    fetch_git: NixLambda<'eval>,
 }
 
 impl VendorDeps {
     fn create_vendor_dir<'a>(
-        funs: CreateVendorDirFuns<'_>,
+        funs: CreateVendorDirFuns<'_, '_>,
         deps: impl Iterator<Item = Dependency<'a>>,
         ctx: &mut Context,
     ) -> Result<Thunk<'static, NixAttrset<'static>>, NixError> {
@@ -170,10 +170,10 @@ impl VendorDeps {
     }
 }
 
-impl<'pkgs> CreateVendorDirFuns<'pkgs> {
+impl<'pkgs, 'eval> CreateVendorDirFuns<'pkgs, 'eval> {
     fn new(
         pkgs: NixAttrset<'pkgs>,
-        ctx: &mut Context,
+        ctx: &mut Context<'eval>,
     ) -> Result<Self, NixError> {
         Ok(Self {
             link_farm: pkgs.get(c"linkFarm", ctx)?,

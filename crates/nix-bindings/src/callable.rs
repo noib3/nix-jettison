@@ -109,11 +109,11 @@ pub trait Callable {
         let mut num_written = 0;
 
         let mut try_write_args = || {
-            struct WriteArg<'ctx> {
+            struct WriteArg<'ctx, 'eval> {
                 dest: NonNull<sys::Value>,
-                ctx: &'ctx mut Context,
+                ctx: &'ctx mut Context<'eval>,
             }
-            impl FnOnceValue<Result<()>> for WriteArg<'_> {
+            impl FnOnceValue<Result<()>> for WriteArg<'_, '_> {
                 #[inline]
                 fn call(self, value: impl Value, _: ()) -> Result<()> {
                     unsafe { value.write_no_primop(self.dest, self.ctx) }
@@ -161,14 +161,14 @@ pub trait Callable {
 
         let lambda = NixLambda::try_from_value(value, ctx)?;
 
-        struct LazyCallLastArg<'lambda, 'ctx, Ret> {
+        struct LazyCallLastArg<'lambda, 'ctx, 'eval, Ret> {
             lambda: NixLambda<'lambda>,
-            ctx: &'ctx mut Context,
+            ctx: &'ctx mut Context<'eval>,
             ret: PhantomData<Ret>,
         }
 
         impl<Ret> FnOnceValue<Result<Thunk<'static, Ret>>>
-            for LazyCallLastArg<'_, '_, Ret>
+            for LazyCallLastArg<'_, '_, '_, Ret>
         where
             Ret: TryFromValue<NixValue<'static>>,
         {
