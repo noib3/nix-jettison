@@ -286,6 +286,13 @@ impl<'a> TryFromValue<NixValue<'a>> for NixAttrset<'a> {
     }
 }
 
+impl<'a> From<NixAttrset<'a>> for NixValue<'a> {
+    #[inline]
+    fn from(attrset: NixAttrset<'a>) -> Self {
+        attrset.inner
+    }
+}
+
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
     fn len(&self, _: &mut Context) -> c_uint {
