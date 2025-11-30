@@ -171,7 +171,7 @@ impl<V: Values> Value for LiteralList<V> {
         _: NonNull<sys::Value>,
         _: &mut Context,
     ) -> Result<()> {
-        unreachable!()
+        unimplemented!()
     }
 
     #[inline]

@@ -1,6 +1,6 @@
 //! TODO: docs.
 
-use alloc::borrow::Cow;
+use alloc::borrow::{Cow, ToOwned};
 use alloc::ffi::CString;
 use core::ffi::{CStr, c_uint};
 use core::marker::PhantomData;
@@ -93,15 +93,27 @@ pub trait Value {
     fn force(&self, _ctx: &mut Context) -> Result<()> {
         Ok(())
     }
+}
+
+/// TODO: docs.
+pub trait IntValue: Value + Sized {
+    /// # Safety
+    ///
+    /// This method should only be called after a successful call to
+    /// [`kind`](Value::kind) returns [`ValueKind::Int`].
+    unsafe fn into_int(self, ctx: &mut Context) -> Result<i64>;
+}
+
+/// TODO: docs.
+pub trait PathValue: Value + Sized {
+    /// TODO: docs.
+    type Path: AsRef<CStr>;
 
     /// # Safety
     ///
     /// This method should only be called after a successful call to
-    /// [`kind`](Value::kind) returns `ValueKind::Int`.
-    #[allow(unused_variables)]
-    unsafe fn get_int(&self, ctx: &mut Context) -> i64 {
-        unimplemented!()
-    }
+    /// [`kind`](Value::kind) returns [`ValueKind::Path`].
+    unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path>;
 }
 
 /// A trait for types that can be fallibly converted from [`Value`]s.
@@ -147,18 +159,6 @@ pub trait Values {
 pub trait FnOnceValue<T, Ctx = ()> {
     /// Calls the function with the given value.
     fn call(self, value: impl Value, ctx: Ctx) -> T;
-}
-
-/// TODO: docs.
-pub trait PathValue: Value + Sized {
-    /// TODO: docs.
-    type Path: AsRef<CStr>;
-
-    /// # Safety
-    ///
-    /// This method should only be called after a successful call to
-    /// [`kind`](Value::kind) returns `ValueKind::Path`.
-    unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path>;
 }
 
 /// TODO: docs.
@@ -287,10 +287,12 @@ macro_rules! impl_value_for_int {
                     sys::init_int(ctx, dest.as_ptr(), (*self).into());
                 })
             }
+        }
 
+        impl IntValue for $ty {
             #[inline]
-            unsafe fn get_int(&self, _: &mut Context) -> i64 {
-                (*self).into()
+            unsafe fn into_int(self, _: &mut Context) -> Result<i64> {
+                Ok(self.into())
             }
         }
     };
@@ -427,7 +429,7 @@ impl<T: Value> Value for Option<T> {
         _: NonNull<sys::Value>,
         _: &mut Context,
     ) -> Result<()> {
-        unreachable!()
+        unimplemented!()
     }
 
     #[inline]
@@ -458,7 +460,7 @@ impl<P: PrimOp> Value for P {
         _: NonNull<sys::Value>,
         _: &mut Context,
     ) -> Result<()> {
-        unreachable!()
+        unimplemented!()
     }
 
     #[inline]
@@ -606,10 +608,12 @@ impl Value for NixValue<'_> {
         };
         Ok(())
     }
+}
 
+impl IntValue for NixValue<'_> {
     #[inline]
-    unsafe fn get_int(&self, _: &mut Context) -> i64 {
-        unsafe { sys::get_int(ptr::null_mut(), self.as_raw()) }
+    unsafe fn into_int(self, _: &mut Context) -> Result<i64> {
+        Ok(unsafe { sys::get_int(ptr::null_mut(), self.as_raw()) })
     }
 }
 
@@ -643,11 +647,6 @@ impl<T: Value + ?Sized + ToOwned> Value for Cow<'_, T> {
     ) -> Result<()> {
         unsafe { self.deref().write(dest, ctx) }
     }
-
-    #[inline]
-    unsafe fn get_int(&self, ctx: &mut Context) -> i64 {
-        unsafe { self.deref().get_int(ctx) }
-    }
 }
 
 macro_rules! impl_try_from_value_for_self {
@@ -663,14 +662,14 @@ macro_rules! impl_try_from_value_for_self {
 
 impl_try_from_value_for_self!(NixValue<'_>);
 
-impl<V: Value> TryFromValue<V> for i64 {
+impl<V: IntValue> TryFromValue<V> for i64 {
     #[inline]
     fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
         value.force(ctx)?;
 
         match value.kind() {
             // SAFETY: the value's kind is an integer.
-            ValueKind::Int => Ok(unsafe { value.get_int(ctx) }),
+            ValueKind::Int => unsafe { value.into_int(ctx) },
             other => Err(ctx.make_error(TypeMismatchError {
                 expected: ValueKind::Int,
                 found: other,
@@ -681,7 +680,7 @@ impl<V: Value> TryFromValue<V> for i64 {
 
 macro_rules! impl_try_from_value_for_int {
     ($ty:ty) => {
-        impl<V: Value> TryFromValue<V> for $ty {
+        impl<V: IntValue> TryFromValue<V> for $ty {
             #[inline]
             fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
                 let int = i64::try_from_value(value, ctx)?;

@@ -1,11 +1,12 @@
 //! TODO: docs.
 
+use alloc::borrow::Cow;
+use alloc::ffi::CString;
+use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::ffi::{CStr, c_uint};
 use core::ptr::NonNull;
 use core::{fmt, ptr};
-use std::borrow::Cow;
-use std::ffi::CString;
 
 pub use nix_bindings_macros::attrset;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
@@ -322,7 +323,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
         _: NonNull<sys::Value>,
         _: &mut Context,
     ) -> Result<()> {
-        unreachable!()
+        unimplemented!()
     }
 
     #[inline]
