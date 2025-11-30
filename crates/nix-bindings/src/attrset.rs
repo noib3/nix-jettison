@@ -401,7 +401,7 @@ where
     #[inline]
     unsafe fn write(
         &self,
-        _: NonNull<nix_bindings_sys::Value>,
+        _: NonNull<sys::Value>,
         _: &mut Context,
     ) -> Result<()> {
         unimplemented!()
@@ -410,7 +410,7 @@ where
     #[inline]
     unsafe fn write_with_namespace(
         &self,
-        _dest: NonNull<nix_bindings_sys::Value>,
+        _dest: NonNull<sys::Value>,
         _namespace: impl Namespace,
         _ctx: &mut Context,
     ) -> Result<()> {

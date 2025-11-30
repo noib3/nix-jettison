@@ -242,8 +242,8 @@ impl<F: Function> PrimOpImpl for F {
     #[inline]
     unsafe fn call(
         &self,
-        args: NonNull<*mut nix_bindings_sys::Value>,
-        ret: NonNull<nix_bindings_sys::Value>,
+        args: NonNull<*mut sys::Value>,
+        ret: NonNull<sys::Value>,
         namespace: &Cow<'static, CStr>,
         ctx: &mut Context,
     ) {
