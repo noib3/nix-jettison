@@ -161,6 +161,12 @@ pub trait PathValue: Value + Sized {
 }
 
 /// TODO: docs.
+#[derive(
+    Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub struct Null;
+
+/// TODO: docs.
 #[derive(Debug, Copy, Clone)]
 pub struct NixValue<'a> {
     ptr: NonNull<sys::Value>,
@@ -226,7 +232,7 @@ impl NixValue<'_> {
     }
 }
 
-impl Value for () {
+impl Value for Null {
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::Null
@@ -434,7 +440,7 @@ impl<T: Value> Value for Option<T> {
             Some(value) => unsafe {
                 value.write_with_namespace(dest, namespace, ctx)
             },
-            None => unsafe { ().write(dest, ctx) },
+            None => unsafe { Null.write(dest, ctx) },
         }
     }
 }
@@ -809,6 +815,23 @@ impl<T: TryIntoValue, E: ToError> TryIntoValue for core::result::Result<T, E> {
 #[rustfmt::skip]
 mod values_impls {
     use super::*;
+
+    impl<V: Value> Values for V {
+        const LEN: c_uint = 1;
+
+        #[track_caller]
+        #[inline]
+        fn with_value<T>(
+            &self,
+            value_idx: c_uint,
+            fun: impl FnOnceValue<T>,
+        ) -> T {
+            match value_idx {
+                0 => fun.call(self.borrow(), ()),
+                other => panic_tuple_index_oob(other, <Self as Values>::LEN),
+            }
+        }
+    }
 
     macro_rules! count {
         () => { 0 };

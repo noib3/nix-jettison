@@ -116,8 +116,8 @@ impl VendorDeps {
                         submodules: true,
                     }
                     .merge(match r#ref {
-                        Some(r#ref) => Either::Left(attrset! { ref: r#ref, }),
-                        None => Either::Right(attrset! { allRefs: true, }),
+                        Some(r#ref) => Either::Left(attrset! { ref: r#ref }),
+                        None => Either::Right(attrset! { allRefs: true }),
                     });
 
                     funs.fetch_git.call::<NixAttrset>(args, ctx)?
