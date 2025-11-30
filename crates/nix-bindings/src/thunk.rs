@@ -22,14 +22,13 @@ enum ThunkState<'a, V> {
 impl<'a, V> Thunk<'a, V> {
     /// TODO: docs.
     #[inline]
-    #[allow(clippy::same_name_method)]
     pub fn force(self, ctx: &mut Context) -> Result<V>
     where
         V: TryFromValue<NixValue<'a>>,
     {
         match self.state {
-            ThunkState::Unevaluated(value) => {
-                ctx.force(value.as_ptr())?;
+            ThunkState::Unevaluated(mut value) => {
+                value.force_inline(ctx)?;
                 V::try_from_value(value, ctx)
             },
             ThunkState::Evaluated(value) => Ok(value),
@@ -52,9 +51,21 @@ impl<'a, V: TryFromValue<NixValue<'a>>> TryFromValue<NixValue<'a>>
 
 impl<V: Value> Value for Thunk<'_, V> {
     #[inline]
+    fn force_inline(&mut self, ctx: &mut Context) -> Result<()> {
+        if let ThunkState::Unevaluated(value) = &mut self.state {
+            value.force_inline(ctx)?;
+        }
+        Ok(())
+    }
+
+    #[inline]
     fn kind(&self) -> ValueKind {
         match &self.state {
-            ThunkState::Unevaluated(_) => ValueKind::Thunk,
+            // NOTE: even if the state is Unevaluated, we still call kind() on
+            // the inner value instead of always returning ValueKind::Thunk
+            // because a previous call to 'force_inline()' may have changed the
+            // value's kind.
+            ThunkState::Unevaluated(v) => v.kind(),
             ThunkState::Evaluated(v) => v.kind(),
         }
     }

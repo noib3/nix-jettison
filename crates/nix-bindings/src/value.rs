@@ -33,48 +33,6 @@ pub trait Value {
     ) -> Result<()>;
 
     /// TODO: docs.
-    ///
-    /// # Safety
-    ///
-    /// Panics if the call graph for [`Self::write`](Value::write) contains a
-    /// call to [`PrimOp`]'s implementation of [`Value::write`](Value::write).
-    ///
-    /// # Safety
-    ///
-    /// Same as [`write`](Value::write).
-    unsafe fn write_no_primop(
-        &self,
-        dest: NonNull<sys::Value>,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        #[derive(Copy, Clone)]
-        struct EmptyNamespace;
-
-        impl Namespace for EmptyNamespace {
-            #[inline(always)]
-            fn push(self, _: &CStr) -> impl PoppableNamespace<Self> {
-                self
-            }
-            #[track_caller]
-            fn display(self) -> Cow<'static, CStr> {
-                panic!(
-                    "attempted to write a PrimOp within a call to \
-                     Value::write_no_primop()"
-                )
-            }
-        }
-
-        impl PoppableNamespace<Self> for EmptyNamespace {
-            #[inline(always)]
-            fn pop(self) -> Self {
-                self
-            }
-        }
-
-        unsafe { self.write(dest, EmptyNamespace, ctx) }
-    }
-
-    /// TODO: docs.
     #[inline]
     fn borrow(&self) -> impl Value {
         struct BorrowedValue<'a, T: ?Sized> {
@@ -108,8 +66,51 @@ pub trait Value {
 
     /// TODO: docs.
     #[inline(always)]
-    fn force(&self, _ctx: &mut Context) -> Result<()> {
+    fn force_inline(&mut self, _ctx: &mut Context) -> Result<()> {
         Ok(())
+    }
+
+    /// TODO: docs.
+    ///
+    /// # Safety
+    ///
+    /// Panics if the call graph for [`Self::write`](Value::write) contains a
+    /// call to [`PrimOp`]'s implementation of [`Value::write`](Value::write).
+    ///
+    /// # Safety
+    ///
+    /// Same as [`write`](Value::write).
+    #[inline]
+    unsafe fn write_no_primop(
+        &self,
+        dest: NonNull<sys::Value>,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        #[derive(Copy, Clone)]
+        struct EmptyNamespace;
+
+        impl Namespace for EmptyNamespace {
+            #[inline(always)]
+            fn push(self, _: &CStr) -> impl PoppableNamespace<Self> {
+                self
+            }
+            #[track_caller]
+            fn display(self) -> Cow<'static, CStr> {
+                panic!(
+                    "attempted to write a PrimOp within a call to \
+                     Value::write_no_primop()"
+                )
+            }
+        }
+
+        impl PoppableNamespace<Self> for EmptyNamespace {
+            #[inline(always)]
+            fn pop(self) -> Self {
+                self
+            }
+        }
+
+        unsafe { self.write(dest, EmptyNamespace, ctx) }
     }
 }
 
@@ -230,15 +231,8 @@ pub enum ValueKind {
 }
 
 impl NixValue<'_> {
-    /// TODO: docs.
     #[inline]
-    pub fn as_ptr(self) -> NonNull<sys::Value> {
-        self.ptr
-    }
-
-    /// TODO: docs.
-    #[inline]
-    pub fn as_raw(self) -> *mut sys::Value {
+    pub(crate) fn as_raw(self) -> *mut sys::Value {
         self.ptr.as_ptr()
     }
 
@@ -569,8 +563,10 @@ impl PathValue for std::path::PathBuf {
 
 impl Value for NixValue<'_> {
     #[inline]
-    fn force(&self, ctx: &mut Context) -> Result<()> {
-        ctx.force(self.as_ptr())
+    fn force_inline(&mut self, ctx: &mut Context) -> Result<()> {
+        // TODO: this shouldn't be infallible.
+        unsafe { cpp::force_value(ctx.state_mut().as_ptr(), self.as_raw()) };
+        Ok(())
     }
 
     #[inline]
@@ -676,8 +672,8 @@ impl_try_from_value_for_self!(NixValue<'_>);
 
 impl<V: IntValue> TryFromValue<V> for i64 {
     #[inline]
-    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
-        value.force(ctx)?;
+    fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
+        value.force_inline(ctx)?;
 
         match value.kind() {
             // SAFETY: the value's kind is an integer.
@@ -723,12 +719,12 @@ impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>
     for &'a std::path::Path
 {
     #[inline]
-    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
+    fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
         use std::path::Path;
 
-        value.force(ctx)?;
+        value.force_inline(ctx)?;
 
         match value.kind() {
             ValueKind::Path => {
@@ -751,13 +747,13 @@ where
     V::Path: Into<Cow<'a, CStr>>,
 {
     #[inline]
-    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
+    fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
         use alloc::borrow::Cow;
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
         use std::path::Path;
 
-        value.force(ctx)?;
+        value.force_inline(ctx)?;
 
         match value.kind() {
             ValueKind::Path => {

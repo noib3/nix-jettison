@@ -96,19 +96,6 @@ impl Context<EvalState> {
         })
     }
 
-    /// Forces the evaluation of the given value.
-    ///
-    /// The value's kind is guaranteed to not be [`ValueKind::Thunk`] after
-    /// a successful call to this method.
-    #[inline]
-    pub(crate) fn force(&mut self, value: NonNull<sys::Value>) -> Result<()> {
-        unsafe {
-            // TODO: this shouldn't be infallible.
-            cpp::force_value(self.state.inner.as_ptr(), value.as_ptr());
-        }
-        Ok(())
-    }
-
     /// Creates a new [`AttrsetBuilder`] with the given capacity.
     #[inline]
     pub(crate) fn make_attrset_builder(

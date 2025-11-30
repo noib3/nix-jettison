@@ -246,8 +246,11 @@ impl Callable for NixLambda<'_> {
 
 impl<'a> TryFromValue<NixValue<'a>> for NixLambda<'a> {
     #[inline]
-    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
-        ctx.force(value.as_ptr())?;
+    fn try_from_value(
+        mut value: NixValue<'a>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        value.force_inline(ctx)?;
 
         match value.kind() {
             ValueKind::Function => Ok(Self { inner: value }),
