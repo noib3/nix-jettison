@@ -166,26 +166,14 @@ impl<V: Values> Value for LiteralList<V> {
         ValueKind::List
     }
 
-    unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
     #[inline]
-    unsafe fn write_with_namespace(
+    unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe {
-            List::borrow(self)
-                .into_value()
-                .write_with_namespace(dest, namespace, ctx)
-        }
+        unsafe { List::borrow(self).into_value().write(dest, namespace, ctx) }
     }
 }
 
@@ -195,16 +183,8 @@ impl<L: ValueIterator> Value for ListValue<L> {
         ValueKind::List
     }
 
-    unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
     #[inline]
-    unsafe fn write_with_namespace(
+    unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
         mut namespace: impl Namespace,
@@ -217,9 +197,7 @@ impl<L: ValueIterator> Value for ListValue<L> {
 
         impl<N: Namespace> FnOnceValue<Result<()>, &mut Context> for WriteValue<N> {
             fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
-                unsafe {
-                    value.write_with_namespace(self.dest, self.namespace, ctx)
-                }
+                unsafe { value.write(self.dest, self.namespace, ctx) }
             }
         }
 

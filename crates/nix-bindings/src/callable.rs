@@ -35,18 +35,19 @@ pub trait Callable {
         let dest_ptr = ctx.alloc_value()?;
         let arg_ptr = ctx.alloc_value()?;
 
-        let res = (unsafe { arg.write(arg_ptr, ctx) }).and_then(|()| {
-            ctx.with_raw(|ctx| {
-                unsafe {
-                    sys::init_apply(
-                        ctx,
-                        dest_ptr.as_ptr(),
-                        self.value().as_raw(),
-                        arg_ptr.as_ptr(),
-                    )
-                };
-            })
-        });
+        let res =
+            (unsafe { arg.write_no_primop(arg_ptr, ctx) }).and_then(|()| {
+                ctx.with_raw(|ctx| {
+                    unsafe {
+                        sys::init_apply(
+                            ctx,
+                            dest_ptr.as_ptr(),
+                            self.value().as_raw(),
+                            arg_ptr.as_ptr(),
+                        )
+                    };
+                })
+            });
 
         // Free the argument once we're done with it.
         ctx.with_raw(|ctx| unsafe {
@@ -115,7 +116,7 @@ pub trait Callable {
             impl FnOnceValue<Result<()>> for WriteArg<'_> {
                 #[inline]
                 fn call(self, value: impl Value, _: ()) -> Result<()> {
-                    unsafe { value.write(self.dest, self.ctx) }
+                    unsafe { value.write_no_primop(self.dest, self.ctx) }
                 }
             }
             for (arg_idx, arg_ptr) in args_slice.iter_mut().enumerate() {

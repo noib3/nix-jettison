@@ -10,7 +10,7 @@ use core::ptr::{self, NonNull};
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::error::{Result, ToError, TryFromI64Error, TypeMismatchError};
-use crate::namespace::Namespace;
+use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, PrimOp};
 use crate::primop::PrimOpImpl;
 
@@ -25,24 +25,53 @@ pub trait Value {
     ///
     /// The caller must ensure that the `dest` points to a value that has been
     /// allocated but *not* yet initialized.
-    #[doc(hidden)]
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()>;
 
     /// TODO: docs.
-    #[doc(hidden)]
-    #[inline]
-    unsafe fn write_with_namespace(
+    ///
+    /// # Safety
+    ///
+    /// Panics if the call graph for [`Self::write`](Value::write) contains a
+    /// call to [`PrimOp`]'s implementation of [`Value::write`](Value::write).
+    ///
+    /// # Safety
+    ///
+    /// Same as [`write`](Value::write).
+    unsafe fn write_no_primop(
         &self,
         dest: NonNull<sys::Value>,
-        #[expect(unused_variables)] namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        debug_assert_ne!(self.kind(), ValueKind::Attrset);
-        unsafe { self.write(dest, ctx) }
+        #[derive(Copy, Clone)]
+        struct EmptyNamespace;
+
+        impl Namespace for EmptyNamespace {
+            #[inline(always)]
+            fn push(self, _: &CStr) -> impl PoppableNamespace<Self> {
+                self
+            }
+            #[track_caller]
+            fn display(self) -> Cow<'static, CStr> {
+                panic!(
+                    "attempted to write a PrimOp within a call to \
+                     Value::write_no_primop()"
+                )
+            }
+        }
+
+        impl PoppableNamespace<Self> for EmptyNamespace {
+            #[inline(always)]
+            fn pop(self) -> Self {
+                self
+            }
+        }
+
+        unsafe { self.write(dest, EmptyNamespace, ctx) }
     }
 
     /// TODO: docs.
@@ -67,21 +96,10 @@ pub trait Value {
             unsafe fn write(
                 &self,
                 dest: NonNull<sys::Value>,
-                ctx: &mut Context,
-            ) -> Result<()> {
-                unsafe { self.inner.write(dest, ctx) }
-            }
-
-            #[inline]
-            unsafe fn write_with_namespace(
-                &self,
-                dest: NonNull<sys::Value>,
                 namespace: impl Namespace,
                 ctx: &mut Context,
             ) -> Result<()> {
-                unsafe {
-                    self.inner.write_with_namespace(dest, namespace, ctx)
-                }
+                unsafe { self.inner.write(dest, namespace, ctx) }
             }
         }
 
@@ -243,6 +261,7 @@ impl Value for Null {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        _: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         ctx.with_raw(|ctx| unsafe {
@@ -261,6 +280,7 @@ impl Value for bool {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        _: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         ctx.with_raw(|ctx| unsafe {
@@ -281,6 +301,7 @@ macro_rules! impl_value_for_int {
             unsafe fn write(
                 &self,
                 dest: NonNull<sys::Value>,
+                _: impl Namespace,
                 ctx: &mut Context,
             ) -> Result<()> {
                 ctx.with_raw(|ctx| unsafe {
@@ -318,6 +339,7 @@ macro_rules! impl_value_for_float {
             unsafe fn write(
                 &self,
                 dest: NonNull<sys::Value>,
+                _: impl Namespace,
                 ctx: &mut Context,
             ) -> Result<()> {
                 ctx.with_raw(|ctx| unsafe {
@@ -341,6 +363,7 @@ impl Value for &CStr {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        _: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         ctx.with_raw(|ctx| unsafe {
@@ -359,47 +382,50 @@ impl Value for CString {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.as_c_str().write(dest, ctx) }
+        unsafe { self.as_c_str().write(dest, namespace, ctx) }
     }
 }
 
 impl Value for str {
-    #[inline]
+    #[inline(always)]
     fn kind(&self) -> ValueKind {
         ValueKind::String
     }
 
-    #[inline]
+    #[inline(always)]
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         let string = CString::new(self).map_err(|err| ctx.make_error(err))?;
-        unsafe { string.write(dest, ctx) }
+        unsafe { string.write(dest, namespace, ctx) }
     }
 }
 
 impl Value for &str {
-    #[inline]
+    #[inline(always)]
     fn kind(&self) -> ValueKind {
         ValueKind::String
     }
 
-    #[inline]
+    #[inline(always)]
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { (*self).write(dest, ctx) }
+        unsafe { (*self).write(dest, namespace, ctx) }
     }
 }
 
 impl Value for alloc::string::String {
-    #[inline]
+    #[inline(always)]
     fn kind(&self) -> ValueKind {
         ValueKind::String
     }
@@ -408,9 +434,10 @@ impl Value for alloc::string::String {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.as_str().write(dest, ctx) }
+        unsafe { self.as_str().write(dest, namespace, ctx) }
     }
 }
 
@@ -426,24 +453,13 @@ impl<T: Value> Value for Option<T> {
     #[inline]
     unsafe fn write(
         &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
-    #[inline]
-    unsafe fn write_with_namespace(
-        &self,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         match self {
-            Some(value) => unsafe {
-                value.write_with_namespace(dest, namespace, ctx)
-            },
-            None => unsafe { Null.write(dest, ctx) },
+            Some(value) => unsafe { value.write(dest, namespace, ctx) },
+            None => unsafe { Null.write(dest, namespace, ctx) },
         }
     }
 }
@@ -456,15 +472,6 @@ impl<P: PrimOp> Value for P {
 
     #[inline]
     unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
-    #[inline]
-    unsafe fn write_with_namespace(
         &self,
         dest: NonNull<sys::Value>,
         namespace: impl Namespace,
@@ -485,6 +492,7 @@ impl Value for std::path::Path {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        _: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         let bytes = self.as_os_str().as_encoded_bytes();
@@ -511,9 +519,10 @@ impl Value for &std::path::Path {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { (*self).write(dest, ctx) }
+        unsafe { (*self).write(dest, namespace, ctx) }
     }
 }
 
@@ -541,9 +550,10 @@ impl Value for std::path::PathBuf {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.as_path().write(dest, ctx) }
+        unsafe { self.as_path().write(dest, namespace, ctx) }
     }
 }
 
@@ -590,6 +600,7 @@ impl Value for NixValue<'_> {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        _: impl Namespace,
         _: &mut Context,
     ) -> Result<()> {
         // 'nix_copy_value' errors when:
@@ -643,9 +654,10 @@ impl<T: Value + ?Sized + ToOwned> Value for Cow<'_, T> {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.deref().write(dest, ctx) }
+        unsafe { self.deref().write(dest, namespace, ctx) }
     }
 }
 

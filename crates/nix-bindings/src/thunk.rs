@@ -6,6 +6,7 @@ use nix_bindings_sys as sys;
 
 use crate::context::Context;
 use crate::error::Result;
+use crate::namespace::Namespace;
 use crate::value::{NixValue, TryFromValue, Value, ValueKind};
 
 /// TODO: docs.
@@ -62,11 +63,16 @@ impl<V: Value> Value for Thunk<'_, V> {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
         match &self.state {
-            ThunkState::Unevaluated(v) => unsafe { v.write(dest, ctx) },
-            ThunkState::Evaluated(v) => unsafe { v.write(dest, ctx) },
+            ThunkState::Unevaluated(v) => unsafe {
+                v.write(dest, namespace, ctx)
+            },
+            ThunkState::Evaluated(v) => unsafe {
+                v.write(dest, namespace, ctx)
+            },
         }
     }
 }

@@ -266,9 +266,10 @@ impl Value for NixAttrset<'_> {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.inner.write(dest, ctx) }
+        unsafe { self.inner.write(dest, namespace, ctx) }
     }
 }
 
@@ -318,16 +319,8 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
         ValueKind::Attrset
     }
 
-    unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
     #[inline]
-    unsafe fn write_with_namespace(
+    unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
         mut namespace: impl Namespace,
@@ -341,13 +334,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
 
         impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, N> {
             fn call(self, value: impl Value, _: ()) -> Result<()> {
-                unsafe {
-                    value.write_with_namespace(
-                        self.dest,
-                        self.namespace,
-                        self.ctx,
-                    )
-                }
+                unsafe { value.write(self.dest, self.namespace, self.ctx) }
             }
         }
 
@@ -400,15 +387,6 @@ where
 
     #[inline]
     unsafe fn write(
-        &self,
-        _: NonNull<sys::Value>,
-        _: &mut Context,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
-    #[inline]
-    unsafe fn write_with_namespace(
         &self,
         _dest: NonNull<sys::Value>,
         _namespace: impl Namespace,

@@ -255,7 +255,7 @@ impl<F: Function> PrimOpImpl for F {
         let mut try_block = || unsafe {
             let args = <Self as Function>::Args::from_raw(args_list, ctx)?;
             let val = Self::call(args, ctx).try_into_value(ctx)?;
-            val.write_with_namespace(ret, namespace, ctx)
+            val.write(ret, namespace, ctx)
         };
 
         // Errors are handled by setting the `Context::inner` field, so we
