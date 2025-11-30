@@ -2,7 +2,7 @@
 
 use crate::attrset::NixAttrset;
 use crate::context::Context;
-use crate::prelude::NixFunction;
+use crate::prelude::NixLambda;
 
 /// TODO: docs.
 pub struct Builtins<'eval> {
@@ -12,7 +12,7 @@ pub struct Builtins<'eval> {
 impl<'eval> Builtins<'eval> {
     /// Returns a handle to the `builtins.fetchGit` function.
     #[inline]
-    pub fn fetch_git(&self, ctx: &mut Context) -> NixFunction<'eval> {
+    pub fn fetch_git(&self, ctx: &mut Context) -> NixLambda<'eval> {
         self.inner
             .get(c"fetchGit", ctx)
             .expect("builtins.fetchGit exists and it's a function")

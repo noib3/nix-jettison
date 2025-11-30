@@ -20,15 +20,13 @@ use crate::value::{
 };
 
 /// TODO: docs.
-#[derive(Copy, Clone)]
-pub struct NixFunction<'value> {
-    inner: NixValue<'value>,
-}
+pub trait Callable {
+    /// TODO: docs.
+    fn value(&self) -> NixValue<'_>;
 
-impl<'value> NixFunction<'value> {
     /// TODO: docs.
     #[inline]
-    pub fn call<T: TryFromValue<NixValue<'static>>>(
+    fn call<T: TryFromValue<NixValue<'static>>>(
         &self,
         arg: impl Value,
         ctx: &mut Context,
@@ -42,7 +40,7 @@ impl<'value> NixFunction<'value> {
                     sys::init_apply(
                         ctx,
                         dest_ptr.as_ptr(),
-                        self.inner.as_raw(),
+                        self.value().as_raw(),
                         arg_ptr.as_ptr(),
                     )
                 };
@@ -78,7 +76,7 @@ impl<'value> NixFunction<'value> {
     #[inline]
     #[track_caller]
     #[allow(clippy::too_many_lines)]
-    pub fn call_multi<T: TryFromValue<NixValue<'static>>>(
+    fn call_multi<T: TryFromValue<NixValue<'static>>>(
         &self,
         args: impl Values,
         ctx: &mut Context,
@@ -95,7 +93,7 @@ impl<'value> NixFunction<'value> {
 
         assert!(
             args_len >= 2,
-            "NixFunction::call_multi() requires at least 2 arguments"
+            "Callable::call_multi() requires at least 2 arguments"
         );
 
         let dest_ptr = ctx.alloc_value()?;
@@ -133,7 +131,7 @@ impl<'value> NixFunction<'value> {
                 sys::value_call_multi(
                     ctx,
                     state.as_ptr(),
-                    self.inner.as_raw(),
+                    self.value().as_raw(),
                     args_slice.len(),
                     args_slice.as_mut_ptr(),
                     dest_ptr.as_ptr(),
@@ -159,10 +157,10 @@ impl<'value> NixFunction<'value> {
         // SAFETY: `value_call_multi` has initialized the value at `dest_ptr`.
         let value = unsafe { NixValue::new(dest_ptr) };
 
-        let function = NixFunction::try_from_value(value, ctx)?;
+        let lambda = NixLambda::try_from_value(value, ctx)?;
 
-        struct LazyCallLastArg<'function, 'ctx, Ret> {
-            function: NixFunction<'function>,
+        struct LazyCallLastArg<'lambda, 'ctx, Ret> {
+            lambda: NixLambda<'lambda>,
             ctx: &'ctx mut Context,
             ret: PhantomData<Ret>,
         }
@@ -178,18 +176,31 @@ impl<'value> NixFunction<'value> {
                 value: impl Value,
                 _: (),
             ) -> Result<Thunk<'static, Ret>> {
-                self.function.call::<Ret>(value, self.ctx)
+                self.lambda.call::<Ret>(value, self.ctx)
             }
         }
 
         args.with_value(
             args_len - 1 as c_uint,
-            LazyCallLastArg::<T> { function, ctx, ret: PhantomData },
+            LazyCallLastArg::<T> { lambda, ctx, ret: PhantomData },
         )
     }
 }
 
-impl<'a> TryFromValue<NixValue<'a>> for NixFunction<'a> {
+/// TODO: docs.
+#[derive(Copy, Clone)]
+pub struct NixLambda<'value> {
+    inner: NixValue<'value>,
+}
+
+impl Callable for NixLambda<'_> {
+    #[inline]
+    fn value(&self) -> NixValue<'_> {
+        self.inner
+    }
+}
+
+impl<'a> TryFromValue<NixValue<'a>> for NixLambda<'a> {
     #[inline]
     fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
         ctx.force(value.as_ptr())?;

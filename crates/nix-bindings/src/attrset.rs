@@ -239,7 +239,7 @@ impl Attrset for NixAttrset<'_> {
     #[inline]
     fn len(&self, _: &mut Context) -> c_uint {
         // 'nix_get_attrs_size' errors when the value pointer is null or when
-        // the value is not initizialized, but having a ValuePointer guarantees
+        // the value is not initizialized, but having a NixValue guarantees
         // neither of those can happen, so we can use a null context.
         unsafe { sys::get_attrs_size(ptr::null_mut(), self.inner.as_raw()) }
     }

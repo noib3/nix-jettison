@@ -80,9 +80,9 @@ pub(crate) struct GitSource<'lock> {
 
 /// The functions that will have to be called to create the vendor directory.
 struct CreateVendorDirFuns<'pkgs> {
-    link_farm: NixFunction<'pkgs>,
-    fetchurl: NixFunction<'pkgs>,
-    fetch_git: NixFunction<'static>,
+    link_farm: NixLambda<'pkgs>,
+    fetchurl: NixLambda<'pkgs>,
+    fetch_git: NixLambda<'static>,
 }
 
 impl VendorDeps {

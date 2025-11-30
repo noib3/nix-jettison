@@ -11,7 +11,7 @@ pub mod builtins;
 pub mod context;
 mod entry;
 pub mod error;
-pub mod function;
+pub mod callable;
 pub mod list;
 mod namespace;
 pub mod primop;
@@ -33,7 +33,7 @@ pub mod prelude {
     pub use crate::attrset::*;
     pub use crate::context::*;
     pub use crate::error::*;
-    pub use crate::function::*;
+    pub use crate::callable::*;
     pub use crate::list::*;
     pub use crate::primop::*;
     pub use crate::thunk::*;

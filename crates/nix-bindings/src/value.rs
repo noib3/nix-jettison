@@ -558,8 +558,8 @@ impl Value for NixValue<'_> {
     #[inline]
     fn kind(&self) -> ValueKind {
         // 'nix_get_type' errors when the value pointer is null or when the
-        // value is not initizialized, but having a ValuePointer guarantees
-        // neither of those can happen, so we can use a null context.
+        // value is not initizialized, but having a NixValue guarantees neither
+        // of those can happen, so we can use a null context.
         let r#type = unsafe { sys::get_type(ptr::null_mut(), self.as_raw()) };
 
         match r#type {
@@ -591,10 +591,10 @@ impl Value for NixValue<'_> {
         // 3. the source pointer is null;
         // 4. the source value is not initialized.
         //
-        // Having a ValuePointer guarantees that (3) and (4) cannot happen,
-        // having a NonNull destination pointer guarantees that (1) cannot
-        // happen, and the API contract for this method guarantees that (2)
-        // cannot happen, so we can use a null context.
+        // Having a NixValue guarantees that (3) and (4) cannot happen, having
+        // a NonNull destination pointer guarantees that (1) cannot happen, and
+        // the API contract for this method guarantees that (2) cannot happen,
+        // so we can use a null context.
         unsafe {
             sys::copy_value(ptr::null_mut(), dest.as_ptr(), self.as_raw());
         };
