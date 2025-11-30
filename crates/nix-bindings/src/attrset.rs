@@ -465,6 +465,23 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
 mod keys_impls {
     use super::*;
 
+    impl<Key: AsRef<Utf8CStr>> Keys for Key {
+        const LEN: c_uint = 1;
+
+        #[track_caller]
+        #[inline]
+        fn with_key<'a, T: 'a>(
+            &'a self,
+            key_idx: c_uint,
+            fun: impl FnOnceKey<'a, T>,
+        ) -> T {
+            match key_idx {
+                0 => fun.call(self),
+                other => panic_tuple_index_oob(other, <Self as Keys>::LEN),
+            }
+        }
+    }
+
     macro_rules! count {
         () => { 0 };
         ($x:tt $($xs:tt)*) => { 1 + count!($($xs)*) };
