@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use core::ptr;
 use core::ptr::NonNull;
 
-use nix_bindings_sys as sys;
+use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::attrset::NixAttrset;
 use crate::context::Context;
@@ -130,7 +130,7 @@ pub trait Callable {
 
         let res = try_write_args().and_then(|()| {
             ctx.with_raw_and_state(|ctx, state| unsafe {
-                sys::value_call_multi(
+                cpp::value_call_multi(
                     ctx,
                     state.as_ptr(),
                     self.value().as_raw(),

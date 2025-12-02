@@ -1,5 +1,6 @@
 #include "nix/expr/primops.hh"
 #include "nix/expr/eval.hh"
+#include "nix_api_util_internal.h"
 
 using namespace nix;
 
@@ -65,4 +66,21 @@ extern "C" void force_value(EvalState* state, Value* value) {
 
 extern "C" void init_path_string(EvalState* state, Value* value, const char* str) {
     value->mkPath(state->rootPath(nix::CanonPath(str)));
+}
+
+extern "C" nix_err value_call_multi(
+    nix_c_context* context,
+    EvalState* state,
+    Value* fn,
+    size_t nargs,
+    Value** args,
+    Value* result
+) {
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        state->callFunction(*fn, {args, nargs}, *result, nix::noPos);
+        state->forceValue(*result, nix::noPos);
+    }
+    NIXC_CATCH_ERRS
 }

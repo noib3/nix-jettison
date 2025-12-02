@@ -8,7 +8,14 @@
 
 use core::ffi::c_char;
 
-use nix_bindings_sys::{BindingsBuilder, EvalState, ListBuilder, Value};
+use nix_bindings_sys::{
+    BindingsBuilder,
+    EvalState,
+    ListBuilder,
+    Value,
+    c_context,
+    err,
+};
 
 // Attrsets.
 unsafe extern "C" {
@@ -104,4 +111,16 @@ unsafe extern "C" {
         value: *mut Value,
         path_str: *const c_char,
     );
+
+    /// Call a Nix function with multiple arguments.
+    ///
+    /// This is what `nix_value_call_multi` SHOULD do, but it segfaults.
+    pub fn value_call_multi(
+        context: *mut c_context,
+        state: *mut EvalState,
+        fn_: *mut Value,
+        nargs: usize,
+        args: *mut *mut Value,
+        result: *mut Value,
+    ) -> err;
 }
