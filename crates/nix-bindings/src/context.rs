@@ -355,7 +355,7 @@ impl ContextInner {
         let ret = fun(self, primop_ptr);
 
         self.with_raw(|ctx| unsafe {
-            sys::gc_decref(ctx, primop_ptr.as_ptr().cast())
+            sys::gc_decref(ctx, primop_ptr.as_ptr().cast());
         })?;
 
         Result::Ok(ret)
