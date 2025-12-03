@@ -124,13 +124,15 @@ pub trait Attrset {
 
 /// TODO: docs.
 pub trait Pairs {
-    /// TODO: docs.
-    fn advance(&mut self, context: &mut Context);
+    /// Advances the iterator to the next key-value pair, returning `false`
+    /// if there are no more pairs.
+    #[must_use]
+    fn advance(&mut self, context: &mut Context) -> bool;
 
-    /// TODO: docs.
+    /// Returns the key of the current key-value pair.
     fn key(&self, ctx: &mut Context) -> &CStr;
 
-    /// TODO: docs.
+    /// Calls the given function with the value of the current key-value pair.
     fn with_value<'ctx, 'eval, T>(
         &self,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
@@ -212,8 +214,7 @@ struct MergePairs<'a, L, R, Lp, Rp> {
     left_pairs: Lp,
     right_pairs: Rp,
     is_current_key_conflicting: bool,
-    num_advanced_left: c_uint,
-    left_len: c_uint,
+    is_left_exhausted: bool,
 }
 
 impl<'a> NixAttrset<'a> {
@@ -305,39 +306,27 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
     fn init_conflicts(&self, ctx: &mut Context) -> Vec<CString> {
         let mut conflicts = Vec::new();
 
-        let left_len = self.left.len(ctx);
-        let right_len = self.right.len(ctx);
-
-        if left_len <= right_len {
+        if self.left.len(ctx) <= self.right.len(ctx) {
             let mut left_pairs = self.left.pairs(ctx);
 
-            for _ in 0..left_len {
+            while left_pairs.advance(ctx) {
                 let key = left_pairs.key(ctx);
                 if self.right.contains_key(key, ctx) {
                     conflicts.push(key.to_owned());
                 }
-                left_pairs.advance(ctx);
             }
         } else {
             let mut right_pairs = self.right.pairs(ctx);
 
-            for _ in 0..right_len {
+            while right_pairs.advance(ctx) {
                 let key = right_pairs.key(ctx);
                 if self.left.contains_key(key, ctx) {
                     conflicts.push(key.to_owned());
                 }
-                right_pairs.advance(ctx);
             }
         }
 
         conflicts
-    }
-}
-
-impl<'a, L, R, Lp, Rp> MergePairs<'a, L, R, Lp, Rp> {
-    #[inline]
-    fn is_left_exhausted(&self) -> bool {
-        self.num_advanced_left == self.left_len
     }
 }
 
@@ -491,16 +480,12 @@ impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
         &'this self,
         ctx: &mut Context<'eval>,
     ) -> impl Pairs + use<'this, 'eval, L, R> {
-        let left_pairs = self.left.pairs(ctx);
-        let left_len = self.left.len(ctx);
         MergePairs {
             merge: self,
-            is_current_key_conflicting: left_len > 0
-                && self.is_conflicting(left_pairs.key(ctx), ctx),
-            left_pairs,
+            left_pairs: self.left.pairs(ctx),
             right_pairs: self.right.pairs(ctx),
-            num_advanced_left: 0,
-            left_len,
+            is_current_key_conflicting: false,
+            is_left_exhausted: false,
         }
     }
 
@@ -574,7 +559,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
         let mut pairs = attrset.pairs(ctx);
         let mut builder = ctx.make_attrset_builder(len as usize)?;
 
-        for _ in 0..len {
+        while pairs.advance(builder.ctx()) {
             let key = pairs.key(builder.ctx());
             let new_namespace = namespace.push(key);
             builder.insert(key, |dest, ctx| {
@@ -584,7 +569,6 @@ impl<T: Attrset> Value for AttrsetValue<T> {
                 )
             })?;
             namespace = new_namespace.pop();
-            pairs.advance(builder.ctx());
         }
 
         builder.build(dest)
@@ -593,9 +577,13 @@ impl<T: Attrset> Value for AttrsetValue<T> {
 
 impl Pairs for NixAttrsetPairs<'_, '_> {
     #[inline]
-    fn advance(&mut self, _: &mut Context) {
+    fn advance(&mut self, _: &mut Context) -> bool {
+        if self.num_attrs_left == 0 {
+            return false;
+        }
         self.num_attrs_left -= 1;
         unsafe { cpp::attr_iter_advance(self.iterator.as_ptr()) };
+        true
     }
 
     #[track_caller]
@@ -642,8 +630,9 @@ where
     V: Values,
 {
     #[inline]
-    fn advance(&mut self, _: &mut Context) {
+    fn advance(&mut self, _: &mut Context) -> bool {
         self.current_idx += 1;
+        self.current_idx < K::LEN
     }
 
     #[inline]
@@ -671,28 +660,33 @@ where
     Rp: Pairs,
 {
     #[inline]
-    fn advance(&mut self, ctx: &mut Context) {
-        if self.is_left_exhausted() {
+    fn advance(&mut self, ctx: &mut Context) -> bool {
+        if self.is_left_exhausted {
             // Skip all the conflicting keys in the right attrset since they've
             // already been used while iterating over the left attrset.
-            loop {
-                self.right_pairs.advance(ctx);
+            while self.right_pairs.advance(ctx) {
                 let key = self.right_pairs.key(ctx);
                 if !self.merge.is_conflicting(key, ctx) {
-                    return;
+                    return true;
                 }
             }
+            return false;
         }
 
-        self.left_pairs.advance(ctx);
+        self.is_left_exhausted = !self.left_pairs.advance(ctx);
+
+        if self.is_left_exhausted {
+            return self.advance(ctx);
+        }
+
         let key = self.left_pairs.key(ctx);
         self.is_current_key_conflicting = self.merge.is_conflicting(key, ctx);
-        self.num_advanced_left += 1;
+        true
     }
 
     #[inline]
     fn key(&self, ctx: &mut Context) -> &CStr {
-        if !self.is_left_exhausted() {
+        if !self.is_left_exhausted {
             self.left_pairs.key(ctx)
         } else {
             self.right_pairs.key(ctx)
@@ -711,7 +705,7 @@ where
             let key = self.left_pairs.key(ctx);
             let out = self.merge.right.with_value(key, fun, ctx);
             out.expect("key is conflicting, so it must exist in right attrset")
-        } else if !self.is_left_exhausted() {
+        } else if !self.is_left_exhausted {
             self.left_pairs.with_value(fun, ctx)
         } else {
             self.right_pairs.with_value(fun, ctx)
@@ -777,7 +771,7 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
 #[cfg(feature = "either")]
 impl<L: Pairs, R: Pairs> Pairs for either::Either<L, R> {
     #[inline]
-    fn advance(&mut self, ctx: &mut Context) {
+    fn advance(&mut self, ctx: &mut Context) -> bool {
         match self {
             Self::Left(l) => l.advance(ctx),
             Self::Right(r) => r.advance(ctx),
