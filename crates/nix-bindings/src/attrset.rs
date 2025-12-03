@@ -11,7 +11,6 @@ use core::{fmt, ptr};
 pub use nix_bindings_macros::attrset;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
-use crate::context::AttrsetBuilder;
 use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
@@ -23,7 +22,10 @@ pub trait Attrset {
     fn len(&self, ctx: &mut Context) -> c_uint;
 
     /// Returns the number of attributes in this attribute set.
-    fn pairs(&self) -> impl Pairs;
+    fn pairs<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> impl Pairs + use<'this, Self>;
 
     /// TODO: docs.
     fn with_value<'ctx, 'eval, T>(
@@ -52,8 +54,11 @@ pub trait Attrset {
             }
 
             #[inline]
-            fn pairs(&self) -> impl Pairs {
-                self.inner.pairs()
+            fn pairs<'this>(
+                &'this self,
+                ctx: &mut Context,
+            ) -> impl Pairs + use<'this, T> {
+                self.inner.pairs(ctx)
             }
 
             #[inline]
@@ -117,10 +122,16 @@ pub trait Attrset {
 /// TODO: docs.
 pub trait Pairs {
     /// TODO: docs.
-    fn with_next_key_value<'this, T: 'this, Ctx>(
-        &'this mut self,
-        fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
-        ctx: Ctx,
+    fn advance(&mut self, context: &mut Context);
+
+    /// TODO: docs.
+    fn key(&self, ctx: &mut Context) -> &CStr;
+
+    /// TODO: docs.
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T;
 }
 
@@ -179,9 +190,14 @@ pub struct MissingAttributeError<'a, Attrset> {
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
 struct AttrsetValue<T>(T);
 
-/// A newtype wrapper that implements [`Value`] for every [`Attrset`].
-struct MergePairs<'a, M> {
-    _merge: &'a M,
+/// The type returned by [`Merge::pairs()`].
+struct MergePairs<'a, L, R, Lp, Rp> {
+    merge: &'a Merge<L, R>,
+    left_pairs: Lp,
+    right_pairs: Rp,
+    is_current_key_conflicting: bool,
+    num_advanced_left: c_uint,
+    left_len: c_uint,
 }
 
 impl<'a> NixAttrset<'a> {
@@ -262,60 +278,50 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
         self.conflicts.get_or_init(|| self.init_conflicts(ctx))
     }
 
+    /// Returns whether the given key is conflicting.
+    #[inline]
+    fn is_conflicting(&self, key: &CStr, ctx: &mut Context) -> bool {
+        let conflicts = self.conflicts(ctx);
+        conflicts.binary_search_by_key(&key, |c| &**c).is_ok()
+    }
+
     #[inline]
     fn init_conflicts(&self, ctx: &mut Context) -> Vec<CString> {
-        struct PushConflict<'a, 'b, S> {
-            conflicts: &'a mut Vec<CString>,
-            set: &'b S,
-        }
-
-        impl<S: Attrset> FnOnceValue<(), (&CStr, &mut Context<'_>)>
-            for PushConflict<'_, '_, S>
-        {
-            #[inline]
-            fn call(
-                self,
-                _: impl Value,
-                (key, ctx): (&CStr, &mut Context<'_>),
-            ) {
-                if self.set.contains_key(key, ctx) {
-                    self.conflicts.push(key.to_owned());
-                }
-            }
-        }
-
         let mut conflicts = Vec::new();
 
         let left_len = self.left.len(ctx);
         let right_len = self.right.len(ctx);
 
         if left_len <= right_len {
-            let mut left_pairs = self.left.pairs();
+            let mut left_pairs = self.left.pairs(ctx);
 
             for _ in 0..left_len {
-                left_pairs.with_next_key_value(
-                    PushConflict {
-                        conflicts: &mut conflicts,
-                        set: &self.right,
-                    },
-                    ctx,
-                );
+                let key = left_pairs.key(ctx);
+                if self.right.contains_key(key, ctx) {
+                    conflicts.push(key.to_owned());
+                }
+                left_pairs.advance(ctx);
             }
         } else {
-            let mut right_pairs = self.right.pairs();
+            let mut right_pairs = self.right.pairs(ctx);
 
             for _ in 0..right_len {
-                right_pairs.with_next_key_value(
-                    PushConflict {
-                        conflicts: &mut conflicts,
-                        set: &self.left,
-                    },
-                    ctx,
-                );
+                let key = right_pairs.key(ctx);
+                if self.left.contains_key(key, ctx) {
+                    conflicts.push(key.to_owned());
+                }
+                right_pairs.advance(ctx);
             }
         }
 
         conflicts
+    }
+}
+
+impl<'a, L, R, Lp, Rp> MergePairs<'a, L, R, Lp, Rp> {
+    #[inline]
+    fn is_left_exhausted(&self) -> bool {
+        self.num_advanced_left == self.left_len
     }
 }
 
@@ -337,7 +343,10 @@ impl Attrset for NixAttrset<'_> {
     }
 
     #[inline]
-    fn pairs(&self) -> impl Pairs {
+    fn pairs<'this>(
+        &'this self,
+        _ctx: &mut Context,
+    ) -> impl Pairs + use<'this> {
         TodoPairs
     }
 
@@ -402,7 +411,10 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     }
 
     #[inline]
-    fn pairs(&self) -> impl Pairs {
+    fn pairs<'this>(
+        &'this self,
+        _ctx: &mut Context,
+    ) -> impl Pairs + use<'this, K, V> {
         TodoPairs
     }
 
@@ -445,8 +457,21 @@ impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
     }
 
     #[inline]
-    fn pairs(&self) -> impl Pairs {
-        MergePairs { _merge: self }
+    fn pairs<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> impl Pairs + use<'this, L, R> {
+        let left_pairs = self.left.pairs(ctx);
+        let left_len = self.left.len(ctx);
+        MergePairs {
+            merge: self,
+            is_current_key_conflicting: left_len > 0
+                && self.is_conflicting(left_pairs.key(ctx), ctx),
+            left_pairs,
+            right_pairs: self.right.pairs(ctx),
+            num_advanced_left: 0,
+            left_len,
+        }
     }
 
     #[inline]
@@ -499,45 +524,37 @@ impl<T: Attrset> Value for AttrsetValue<T> {
         mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        struct InsertPair<'a, 'ctx, 'eval, 'ns, N> {
-            builder: &'a mut AttrsetBuilder<'ctx, 'eval>,
-            namespace: &'ns mut N,
+        struct WriteValue<N> {
+            dest: NonNull<sys::Value>,
+            namespace: N,
         }
 
-        impl<N: Namespace> FnOnceValue<Result<()>, (&CStr, ())>
-            for InsertPair<'_, '_, '_, '_, N>
+        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>>
+            for WriteValue<N>
         {
             #[inline]
-            fn call(
-                self,
-                value: impl Value,
-                (key, ()): (&CStr, ()),
-            ) -> Result<()> {
-                let new_namespace = self.namespace.push(key);
-                self.builder.insert(key, |dest, ctx| unsafe {
-                    value.write(dest, new_namespace, ctx)
-                })?;
-                *self.namespace = new_namespace.pop();
-                Ok(())
+            fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
+                unsafe { value.write(self.dest, self.namespace, ctx) }
             }
         }
 
         let Self(attrset) = self;
-
         let len = attrset.len(ctx);
 
-        let mut pairs = attrset.pairs();
-
+        let mut pairs = attrset.pairs(ctx);
         let mut builder = ctx.make_attrset_builder(len as usize)?;
 
         for _ in 0..len {
-            pairs.with_next_key_value(
-                InsertPair {
-                    builder: &mut builder,
-                    namespace: &mut namespace,
-                },
-                (),
-            )?;
+            let key = pairs.key(builder.ctx());
+            let new_namespace = namespace.push(key);
+            builder.insert(key, |dest, ctx| {
+                pairs.with_value(
+                    WriteValue { dest, namespace: new_namespace },
+                    ctx,
+                )
+            })?;
+            namespace = new_namespace.pop();
+            pairs.advance(builder.ctx());
         }
 
         builder.build(dest)
@@ -548,23 +565,78 @@ struct TodoPairs;
 
 impl Pairs for TodoPairs {
     #[inline]
-    fn with_next_key_value<'this, T: 'this, Ctx>(
-        &'this mut self,
-        _fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
-        _ctx: Ctx,
+    fn advance(&mut self, _ctx: &mut Context) {
+        todo!()
+    }
+
+    #[inline]
+    fn key(&self, _ctx: &mut Context) -> &CStr {
+        todo!()
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        _ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        todo!();
+        todo!()
     }
 }
 
-impl<L: Attrset, R: Attrset> Pairs for MergePairs<'_, Merge<L, R>> {
+impl<L, R, Lp, Rp> Pairs for MergePairs<'_, L, R, Lp, Rp>
+where
+    L: Attrset,
+    R: Attrset,
+    Lp: Pairs,
+    Rp: Pairs,
+{
     #[inline]
-    fn with_next_key_value<'this, T: 'this, Ctx>(
-        &'this mut self,
-        _fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
-        _ctx: Ctx,
+    fn advance(&mut self, ctx: &mut Context) {
+        if self.is_left_exhausted() {
+            // Skip all the conflicting keys in the right attrset since they've
+            // already been used while iterating over the left attrset.
+            loop {
+                self.right_pairs.advance(ctx);
+                let key = self.right_pairs.key(ctx);
+                if !self.merge.is_conflicting(key, ctx) {
+                    return;
+                }
+            }
+        }
+
+        self.left_pairs.advance(ctx);
+        let key = self.left_pairs.key(ctx);
+        self.is_current_key_conflicting = self.merge.is_conflicting(key, ctx);
+        self.num_advanced_left += 1;
+    }
+
+    #[inline]
+    fn key(&self, ctx: &mut Context) -> &CStr {
+        if !self.is_left_exhausted() {
+            self.left_pairs.key(ctx)
+        } else {
+            self.right_pairs.key(ctx)
+        }
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        todo!();
+        // If we're currently at a conflicting key, use the value from the
+        // right attrset.
+        if self.is_current_key_conflicting {
+            let key = self.left_pairs.key(ctx);
+            let out = self.merge.right.with_value(key, fun, ctx);
+            out.expect("key is conflicting, so it must exist in right attrset")
+        } else if !self.is_left_exhausted() {
+            self.left_pairs.with_value(fun, ctx)
+        } else {
+            self.right_pairs.with_value(fun, ctx)
+        }
     }
 }
 
@@ -599,10 +671,13 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     }
 
     #[inline]
-    fn pairs(&self) -> impl Pairs {
+    fn pairs<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> impl Pairs + use<'this, L, R> {
         match self {
-            Self::Left(l) => either::Either::Left(l.pairs()),
-            Self::Right(r) => either::Either::Right(r.pairs()),
+            Self::Left(l) => either::Either::Left(l.pairs(ctx)),
+            Self::Right(r) => either::Either::Right(r.pairs(ctx)),
         }
     }
 
@@ -623,14 +698,30 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
 #[cfg(feature = "either")]
 impl<L: Pairs, R: Pairs> Pairs for either::Either<L, R> {
     #[inline]
-    fn with_next_key_value<'this, T: 'this, Ctx>(
-        &'this mut self,
-        fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
-        ctx: Ctx,
+    fn advance(&mut self, ctx: &mut Context) {
+        match self {
+            Self::Left(l) => l.advance(ctx),
+            Self::Right(r) => r.advance(ctx),
+        }
+    }
+
+    #[inline]
+    fn key(&self, ctx: &mut Context) -> &CStr {
+        match self {
+            Self::Left(l) => l.key(ctx),
+            Self::Right(r) => r.key(ctx),
+        }
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T {
         match self {
-            Self::Left(l) => l.with_next_key_value(fun, ctx),
-            Self::Right(r) => r.with_next_key_value(fun, ctx),
+            Self::Left(l) => l.with_value(fun, ctx),
+            Self::Right(r) => r.with_value(fun, ctx),
         }
     }
 }
