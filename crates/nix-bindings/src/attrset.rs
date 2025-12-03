@@ -881,6 +881,7 @@ mod keys_impls {
     impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13, K14, K15);
     impl_keys!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12, K13, K14, K15, K16);
 
+    #[track_caller]
     #[inline(never)]
     fn panic_tuple_index_oob(idx: c_uint, len: c_uint) -> ! {
         panic!("{len}-tuple received out of bounds index: {idx}")

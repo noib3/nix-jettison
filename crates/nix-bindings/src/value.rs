@@ -924,6 +924,7 @@ mod values_impls {
     impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15);
     impl_values!(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16);
 
+    #[track_caller]
     #[inline(never)]
     fn panic_tuple_index_oob(idx: c_uint, len: c_uint) -> ! {
         panic!("{len}-tuple received out of bounds index: {idx}")
