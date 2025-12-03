@@ -202,6 +202,9 @@ struct MergeConflicts {
     /// Same as [`by_key`](Self::by_key), but keyed by index on the [`Merge`]
     /// attrset instead of by conflicting keys.
     by_idx: Vec<(c_uint, c_uint)>,
+
+    /// The length of the left attrset of [`Merge`].
+    left_len: c_uint,
 }
 
 /// A simple `Either` type to avoid making `either` a non-optional dependency.
@@ -301,33 +304,50 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
 
 impl MergeConflicts {
     #[inline]
-    fn convert_idx(&self, _idx: c_uint) -> Either<c_uint, c_uint> {
-        // let idx = self.by_idx.partition_point(|(elem, _)| *elem < idx);
-        // self.by_key.get(idx).map(|(_, idx)| *idx)
-        todo!();
+    fn convert_idx(&self, attrset_idx: c_uint) -> Either<c_uint, c_uint> {
+        let binary_search = self
+            .by_idx
+            .binary_search_by_key(&attrset_idx, |(probe, _)| *probe);
+
+        let num_conflicts_before_idx = match binary_search {
+            Ok(idx) => return Either::Right(self.by_idx[idx].1),
+            Err(idx) => idx as c_uint,
+        };
+
+        if attrset_idx < self.left_len {
+            return Either::Left(attrset_idx);
+        }
+
+        Either::Right(attrset_idx - self.left_len + num_conflicts_before_idx)
     }
 
     /// Returne the index in the *right* attrset for the given conflicting key,
     /// or `None` if the key is not conflicting.
     #[inline]
     fn get(&self, key: &CStr) -> Option<c_uint> {
-        let idx = self.by_key.partition_point(|(elem, _)| &**elem < key);
-        self.by_key.get(idx).map(|(_, idx)| *idx)
+        self.by_key
+            .binary_search_by_key(&key, |(elem, _)| &**elem)
+            .ok()
+            .map(|idx| self.by_key[idx].1)
     }
 
     #[inline]
     fn len(&self) -> c_uint {
         debug_assert_eq!(self.by_key.len(), self.by_idx.len());
-        self.by_key.len() as c_uint
+        self.by_idx.len() as c_uint
     }
 
     #[inline]
     fn new(
-        _left: &impl Attrset,
+        left: &impl Attrset,
         _right: &impl Attrset,
-        _ctx: &mut Context,
+        ctx: &mut Context,
     ) -> Self {
-        todo!();
+        let by_key = Vec::new();
+        let by_idx = Vec::new();
+        let left_len = left.len(ctx);
+
+        Self { by_key, by_idx, left_len }
     }
 }
 
