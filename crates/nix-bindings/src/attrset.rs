@@ -21,7 +21,8 @@ pub trait Attrset {
     /// Returns the number of attributes in this attribute set.
     fn len(&self, ctx: &mut Context) -> c_uint;
 
-    /// Returns the number of attributes in this attribute set.
+    /// Returns a [`Pairs`] implementation that can be used to iterate
+    /// over the key-value pairs in this attribute set.
     fn pairs<'this>(
         &'this self,
         ctx: &mut Context,
@@ -189,6 +190,12 @@ pub struct MissingAttributeError<'a, Attrset> {
 
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
 struct AttrsetValue<T>(T);
+
+/// The type returned by [`LiteralAttrset::pairs()`].
+struct LiteralAttrsetPairs<'a, K, V> {
+    attrset: &'a LiteralAttrset<K, V>,
+    current_idx: c_uint,
+}
 
 /// The type returned by [`Merge::pairs()`].
 struct MergePairs<'a, L, R, Lp, Rp> {
@@ -413,9 +420,9 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
     fn pairs<'this>(
         &'this self,
-        _ctx: &mut Context,
+        _: &mut Context,
     ) -> impl Pairs + use<'this, K, V> {
-        TodoPairs
+        LiteralAttrsetPairs { attrset: self, current_idx: 0 }
     }
 
     #[inline]
@@ -581,6 +588,33 @@ impl Pairs for TodoPairs {
         _ctx: &'ctx mut Context<'eval>,
     ) -> T {
         todo!()
+    }
+}
+
+impl<K, V> Pairs for LiteralAttrsetPairs<'_, K, V>
+where
+    K: Keys,
+    V: Values,
+{
+    #[inline]
+    fn advance(&mut self, _: &mut Context) {
+        self.current_idx += 1;
+    }
+
+    #[inline]
+    fn key(&self, _: &mut Context) -> &CStr {
+        self.attrset.get_key(self.current_idx)
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        self.attrset
+            .values
+            .with_value(self.current_idx, fun.map_ctx(move |()| ctx))
     }
 }
 
