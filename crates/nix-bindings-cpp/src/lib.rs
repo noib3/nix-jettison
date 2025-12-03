@@ -17,6 +17,13 @@ use nix_bindings_sys::{
     err,
 };
 
+/// Opaque type representing an attribute set iterator.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AttrIterator {
+    _unused: [u8; 0],
+}
+
 // Attrsets.
 unsafe extern "C" {
     /// Create a bindings builder with the specified capacity.
@@ -50,6 +57,42 @@ unsafe extern "C" {
         state: *mut EvalState,
         name: *const c_char,
     ) -> *mut Value;
+}
+
+// Attribute set iterator.
+unsafe extern "C" {
+    /// Creates an iterator over an attribute set.
+    ///
+    /// Call [`attr_iter_destroy`] to free the iterator when done.
+    pub fn attr_iter_create(
+        value: *const Value,
+        state: *mut EvalState,
+    ) -> *mut AttrIterator;
+
+    /// Gets the key name of the current attribute.
+    ///
+    /// # Safety
+    ///
+    /// The iterator must not have been advanced past the end.
+    pub fn attr_iter_key(iter: *const AttrIterator) -> *const c_char;
+
+    /// Gets the value of the current attribute.
+    ///
+    /// # Safety
+    ///
+    /// The iterator must not have been advanced past the end.
+    pub fn attr_iter_value(iter: *const AttrIterator) -> *mut Value;
+
+    /// Advances the iterator to the next attribute.
+    ///
+    /// # Safety
+    ///
+    /// The caller is responsible for ensuring the iterator is not advanced
+    /// past the end by checking the length of the attribute set.
+    pub fn attr_iter_advance(iter: *mut AttrIterator);
+
+    /// Destroys the iterator and free its memory.
+    pub fn attr_iter_destroy(iter: *mut AttrIterator);
 }
 
 // Builtins.

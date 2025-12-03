@@ -30,6 +30,40 @@ extern "C" nix::Value* get_attr_byname_lazy(const nix::Value* value, nix::EvalSt
     return attr->value;
 }
 
+// Attrset iterator.
+
+struct AttrIterator {
+    nix::Bindings::const_iterator current;
+    const nix::SymbolTable* symbols;
+};
+
+extern "C" AttrIterator* attr_iter_create(
+    const nix::Value* value,
+    nix::EvalState* state
+) {
+    const nix::Bindings* bindings = value->attrs();
+    return new AttrIterator{
+        bindings->begin(),
+        &state->symbols
+    };
+}
+
+extern "C" const char* attr_iter_key(const AttrIterator* iter) {
+    return (*iter->symbols)[iter->current->name].c_str();
+}
+
+extern "C" nix::Value* attr_iter_value(const AttrIterator* iter) {
+    return iter->current->value;
+}
+
+extern "C" void attr_iter_advance(AttrIterator* iter) {
+    ++iter->current;
+}
+
+extern "C" void attr_iter_destroy(AttrIterator* iter) {
+    delete iter;
+}
+
 // Builtins.
 
 extern "C" nix::Value* get_builtins(nix::EvalState* state) {

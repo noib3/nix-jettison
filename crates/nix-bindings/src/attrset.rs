@@ -5,12 +5,14 @@ use alloc::ffi::CString;
 use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::ffi::{CStr, c_uint};
+use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::{fmt, ptr};
 
 pub use nix_bindings_macros::attrset;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
+use crate::context::EvalState;
 use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
@@ -23,10 +25,10 @@ pub trait Attrset {
 
     /// Returns a [`Pairs`] implementation that can be used to iterate
     /// over the key-value pairs in this attribute set.
-    fn pairs<'this>(
+    fn pairs<'this, 'eval>(
         &'this self,
-        ctx: &mut Context,
-    ) -> impl Pairs + use<'this, Self>;
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval, Self>;
 
     /// TODO: docs.
     fn with_value<'ctx, 'eval, T>(
@@ -55,10 +57,10 @@ pub trait Attrset {
             }
 
             #[inline]
-            fn pairs<'this>(
+            fn pairs<'this, 'eval>(
                 &'this self,
-                ctx: &mut Context,
-            ) -> impl Pairs + use<'this, T> {
+                ctx: &mut Context<'eval>,
+            ) -> impl Pairs + use<'this, 'eval, T> {
                 self.inner.pairs(ctx)
             }
 
@@ -191,13 +193,20 @@ pub struct MissingAttributeError<'a, Attrset> {
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
 struct AttrsetValue<T>(T);
 
-/// The type returned by [`LiteralAttrset::pairs()`].
+/// The [`Pairs`] implementation returned by [`NixAttrset::pairs()`].
+struct NixAttrsetPairs<'set, 'eval> {
+    iterator: NonNull<cpp::AttrIterator>,
+    num_attrs_left: c_uint,
+    _lifetimes: PhantomData<(NixAttrset<'set>, EvalState<'eval>)>,
+}
+
+/// The [`Pairs`] implementation returned by [`LiteralAttrset::pairs()`].
 struct LiteralAttrsetPairs<'a, K, V> {
     attrset: &'a LiteralAttrset<K, V>,
     current_idx: c_uint,
 }
 
-/// The type returned by [`Merge::pairs()`].
+/// The [`Pairs`] implementation returned by [`Merge::pairs()`].
 struct MergePairs<'a, L, R, Lp, Rp> {
     merge: &'a Merge<L, R>,
     left_pairs: Lp,
@@ -350,11 +359,25 @@ impl Attrset for NixAttrset<'_> {
     }
 
     #[inline]
-    fn pairs<'this>(
+    fn pairs<'this, 'eval>(
         &'this self,
-        _ctx: &mut Context,
-    ) -> impl Pairs + use<'this> {
-        TodoPairs
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval> {
+        let iter_raw = unsafe {
+            cpp::attr_iter_create(
+                self.inner.as_raw(),
+                ctx.state_mut().as_ptr(),
+            )
+        };
+
+        let iterator =
+            NonNull::new(iter_raw).expect("failed to create attr iterator");
+
+        NixAttrsetPairs::<'this, 'eval> {
+            iterator,
+            num_attrs_left: self.len(ctx),
+            _lifetimes: PhantomData,
+        }
     }
 
     #[inline]
@@ -464,10 +487,10 @@ impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
     }
 
     #[inline]
-    fn pairs<'this>(
+    fn pairs<'this, 'eval>(
         &'this self,
-        ctx: &mut Context,
-    ) -> impl Pairs + use<'this, L, R> {
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval, L, R> {
         let left_pairs = self.left.pairs(ctx);
         let left_len = self.left.len(ctx);
         MergePairs {
@@ -568,26 +591,48 @@ impl<T: Attrset> Value for AttrsetValue<T> {
     }
 }
 
-struct TodoPairs;
-
-impl Pairs for TodoPairs {
+impl Pairs for NixAttrsetPairs<'_, '_> {
     #[inline]
-    fn advance(&mut self, _ctx: &mut Context) {
-        todo!()
+    fn advance(&mut self, _: &mut Context) {
+        self.num_attrs_left -= 1;
+        unsafe { cpp::attr_iter_advance(self.iterator.as_ptr()) };
     }
 
+    #[track_caller]
     #[inline]
-    fn key(&self, _ctx: &mut Context) -> &CStr {
-        todo!()
+    fn key(&self, _: &mut Context) -> &CStr {
+        assert!(self.num_attrs_left > 0);
+        let key_ptr = unsafe { cpp::attr_iter_key(self.iterator.as_ptr()) };
+        // SAFETY: Nix guarantees that the key pointer is valid as long as
+        // the iterator is valid.
+        unsafe { CStr::from_ptr(key_ptr) }
     }
 
     #[inline]
     fn with_value<'ctx, 'eval, T>(
         &self,
-        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        _ctx: &'ctx mut Context<'eval>,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        todo!()
+        assert!(self.num_attrs_left > 0);
+
+        let value_raw =
+            unsafe { cpp::attr_iter_value(self.iterator.as_ptr()) };
+
+        let value_ptr =
+            NonNull::new(value_raw).expect("value pointer is null");
+
+        // SAFETY: the value returned by Nix is initialized.
+        let value = unsafe { NixValue::new(value_ptr) };
+
+        fun.call(value, ctx)
+    }
+}
+
+impl Drop for NixAttrsetPairs<'_, '_> {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe { cpp::attr_iter_destroy(self.iterator.as_ptr()) };
     }
 }
 
@@ -705,10 +750,10 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     }
 
     #[inline]
-    fn pairs<'this>(
+    fn pairs<'this, 'eval>(
         &'this self,
-        ctx: &mut Context,
-    ) -> impl Pairs + use<'this, L, R> {
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval, L, R> {
         match self {
             Self::Left(l) => either::Either::Left(l.pairs(ctx)),
             Self::Right(r) => either::Either::Right(r.pairs(ctx)),
