@@ -219,7 +219,20 @@ impl EvalState<'_> {
     }
 }
 
-impl AttrsetBuilder<'_, '_> {
+impl<'eval> AttrsetBuilder<'_, 'eval> {
+    #[inline]
+    pub(crate) fn build(self, dest: NonNull<sys::Value>) -> Result<()> {
+        unsafe {
+            cpp::make_attrs(dest.as_ptr(), self.inner.as_ptr());
+            Ok(())
+        }
+    }
+
+    #[inline]
+    pub(crate) fn ctx(&mut self) -> &mut Context<'eval> {
+        self.context
+    }
+
     #[inline]
     pub(crate) fn insert(
         &mut self,
@@ -237,14 +250,6 @@ impl AttrsetBuilder<'_, '_> {
                 dest_ptr.as_ptr(),
             );
 
-            Ok(())
-        }
-    }
-
-    #[inline]
-    pub(crate) fn build(self, dest: NonNull<sys::Value>) -> Result<()> {
-        unsafe {
-            cpp::make_attrs(dest.as_ptr(), self.inner.as_ptr());
             Ok(())
         }
     }

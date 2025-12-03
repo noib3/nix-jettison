@@ -116,6 +116,15 @@ pub trait Attrset {
         self
     }
 
+    /// TODO: docs.
+    #[inline]
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+    {
+        AttrsetValue(self)
+    }
+
     /// Returns whether this attribute set is empty.
     #[inline(always)]
     fn is_empty(&self, ctx: &mut Context) -> bool {
@@ -183,6 +192,9 @@ pub struct MissingAttributeError<'a, Attrset> {
     /// The name of the missing attribute.
     pub attr: &'a CStr,
 }
+
+/// A newtype wrapper that implements [`Value`] for every [`Attrset`].
+struct AttrsetValue<T>(T);
 
 impl<'a> NixAttrset<'a> {
     /// TODO: docs.
@@ -268,11 +280,19 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
 impl<L: Attrset, R: Attrset> Merge<L, R> {
     #[inline]
     fn conflicts(&self, _ctx: &mut Context) -> &[(c_uint, c_uint)] {
-        self.conflicts.get_or_init(Vec::new)
+        self.conflicts.get_or_init(|| todo!())
     }
 }
 
 impl Attrset for NixAttrset<'_> {
+    #[inline]
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+    {
+        self
+    }
+
     #[inline]
     fn key_of_idx(&self, _idx: c_uint, _ctx: &mut Context) -> &CStr {
         todo!()
@@ -392,38 +412,12 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
-        mut namespace: impl Namespace,
+        namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        struct WriteValue<'ctx, 'eval, N> {
-            dest: NonNull<sys::Value>,
-            namespace: N,
-            ctx: &'ctx mut Context<'eval>,
+        unsafe {
+            Attrset::borrow(self).into_value().write(dest, namespace, ctx)
         }
-
-        impl<N: Namespace> FnOnceValue<Result<()>> for WriteValue<'_, '_, N> {
-            fn call(self, value: impl Value, _: ()) -> Result<()> {
-                unsafe { value.write(self.dest, self.namespace, self.ctx) }
-            }
-        }
-
-        let len = self.len(ctx);
-
-        let mut builder = ctx.make_attrset_builder(len as usize)?;
-
-        for idx in 0..len {
-            let key = self.get_key(idx);
-            let new_namespace = namespace.push(key);
-            builder.insert(key, |dest, ctx| {
-                self.values.with_value(
-                    idx,
-                    WriteValue { dest, namespace: new_namespace, ctx },
-                )
-            })?;
-            namespace = new_namespace.pop();
-        }
-
-        builder.build(dest)
     }
 }
 
@@ -472,11 +466,63 @@ where
     #[inline]
     unsafe fn write(
         &self,
-        _dest: NonNull<sys::Value>,
-        _namespace: impl Namespace,
-        _ctx: &mut Context,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
     ) -> Result<()> {
-        todo!();
+        unsafe {
+            Attrset::borrow(self).into_value().write(dest, namespace, ctx)
+        }
+    }
+}
+
+impl<T: Attrset> Value for AttrsetValue<T> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        mut namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        struct WriteValue<N> {
+            dest: NonNull<sys::Value>,
+            namespace: N,
+        }
+
+        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>>
+            for WriteValue<N>
+        {
+            #[inline]
+            fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
+                unsafe { value.write(self.dest, self.namespace, ctx) }
+            }
+        }
+
+        let Self(attrset) = self;
+
+        let len = attrset.len(ctx);
+
+        let mut builder = ctx.make_attrset_builder(len as usize)?;
+
+        for idx in 0..len {
+            let key = attrset.key_of_idx(idx, builder.ctx());
+            let new_namespace = namespace.push(key);
+            builder.insert(key, |dest, ctx| {
+                attrset.with_value_at_idx(
+                    idx,
+                    WriteValue { dest, namespace: new_namespace },
+                    ctx,
+                )
+            })?;
+            namespace = new_namespace.pop();
+        }
+
+        builder.build(dest)
     }
 }
 

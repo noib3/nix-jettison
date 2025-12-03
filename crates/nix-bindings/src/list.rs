@@ -186,6 +186,7 @@ impl<L: ValueIterator> Value for ListValue<L> {
         impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>>
             for WriteValue<N>
         {
+            #[inline]
             fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
                 unsafe { value.write(self.dest, self.namespace, ctx) }
             }
