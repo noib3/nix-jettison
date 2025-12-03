@@ -177,9 +177,7 @@ pub struct LiteralAttrset<Keys, Values> {
 pub struct Merge<Left, Right> {
     left: Left,
     right: Right,
-    /// For keys that exist in both attribute sets, maps the index of the key
-    /// in `right` to the index of the corresponding key in `left`.
-    conflicts: OnceCell<Vec<(c_uint, c_uint)>>,
+    conflicts: OnceCell<MergeConflicts>,
 }
 
 /// The type of error returned when an expected attribute is missing from
@@ -195,6 +193,22 @@ pub struct MissingAttributeError<'a, Attrset> {
 
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
 struct AttrsetValue<T>(T);
+
+struct MergeConflicts {
+    /// Sorted vec as a map from the name of a conflicting attrset key to the
+    /// corresponding index in the *right* attrset of [`Merge`].
+    by_key: Vec<(CString, c_uint)>,
+
+    /// Same as [`by_key`](Self::by_key), but keyed by index on the [`Merge`]
+    /// attrset instead of by conflicting keys.
+    by_idx: Vec<(c_uint, c_uint)>,
+}
+
+/// A simple `Either` type to avoid making `either` a non-optional dependency.
+enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
 
 impl<'a> NixAttrset<'a> {
     /// TODO: docs.
@@ -279,8 +293,41 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
 
 impl<L: Attrset, R: Attrset> Merge<L, R> {
     #[inline]
-    fn conflicts(&self, _ctx: &mut Context) -> &[(c_uint, c_uint)] {
-        self.conflicts.get_or_init(|| todo!())
+    fn conflicts(&self, ctx: &mut Context) -> &MergeConflicts {
+        self.conflicts
+            .get_or_init(|| MergeConflicts::new(&self.left, &self.right, ctx))
+    }
+}
+
+impl MergeConflicts {
+    #[inline]
+    fn convert_idx(&self, _idx: c_uint) -> Either<c_uint, c_uint> {
+        // let idx = self.by_idx.partition_point(|(elem, _)| *elem < idx);
+        // self.by_key.get(idx).map(|(_, idx)| *idx)
+        todo!();
+    }
+
+    /// Returne the index in the *right* attrset for the given conflicting key,
+    /// or `None` if the key is not conflicting.
+    #[inline]
+    fn get(&self, key: &CStr) -> Option<c_uint> {
+        let idx = self.by_key.partition_point(|(elem, _)| &**elem < key);
+        self.by_key.get(idx).map(|(_, idx)| *idx)
+    }
+
+    #[inline]
+    fn len(&self) -> c_uint {
+        debug_assert_eq!(self.by_key.len(), self.by_idx.len());
+        self.by_key.len() as c_uint
+    }
+
+    #[inline]
+    fn new(
+        _left: &impl Attrset,
+        _right: &impl Attrset,
+        _ctx: &mut Context,
+    ) -> Self {
+        todo!();
     }
 }
 
@@ -423,8 +470,11 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
 
 impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
     #[inline]
-    fn key_of_idx(&self, _idx: c_uint, _ctx: &mut Context) -> &CStr {
-        todo!()
+    fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr {
+        match self.conflicts(ctx).convert_idx(idx) {
+            Either::Left(idx) => self.left.key_of_idx(idx, ctx),
+            Either::Right(idx) => self.right.key_of_idx(idx, ctx),
+        }
     }
 
     #[inline]
@@ -436,21 +486,30 @@ impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
     #[inline]
     fn with_value_at_idx<'ctx, 'eval, T>(
         &self,
-        _idx: c_uint,
-        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        _ctx: &'ctx mut Context<'eval>,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        todo!()
+        match self.conflicts(ctx).convert_idx(idx) {
+            Either::Left(idx) => self.left.with_value_at_idx(idx, fun, ctx),
+            Either::Right(idx) => self.right.with_value_at_idx(idx, fun, ctx),
+        }
     }
 
     #[inline]
     fn with_value_at_key<'ctx, 'eval, T>(
         &self,
-        _key: &CStr,
-        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        _ctx: &'ctx mut Context<'eval>,
+        key: &CStr,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        todo!()
+        if let Some(right_idx) = self.conflicts(ctx).get(key) {
+            Some(self.right.with_value_at_idx(right_idx, fun, ctx))
+        } else if self.left.contains_key(key, ctx) {
+            self.left.with_value_at_key(key, fun, ctx)
+        } else {
+            self.right.with_value_at_key(key, fun, ctx)
+        }
     }
 }
 
