@@ -11,6 +11,7 @@ use core::{fmt, ptr};
 pub use nix_bindings_macros::attrset;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
+use crate::context::AttrsetBuilder;
 use crate::error::{ErrorKind, ToError, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
@@ -18,32 +19,14 @@ use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait Attrset {
-    /// Returns the key at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the index is out of bounds (i.e. greater than or equal to
-    /// [`len`](Attrset::len)).
-    fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr;
-
     /// Returns the number of attributes in this attribute set.
     fn len(&self, ctx: &mut Context) -> c_uint;
 
-    /// TODO: docs.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the index is out of bounds (i.e. greater than or equal to
-    /// [`len`](Attrset::len)).
-    fn with_value_at_idx<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        ctx: &'ctx mut Context<'eval>,
-    ) -> T;
+    /// Returns the number of attributes in this attribute set.
+    fn pairs(&self) -> impl Pairs;
 
     /// TODO: docs.
-    fn with_value_at_key<'ctx, 'eval, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         key: &CStr,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
@@ -64,33 +47,23 @@ pub trait Attrset {
             }
 
             #[inline]
-            fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr {
-                self.inner.key_of_idx(idx, ctx)
-            }
-
-            #[inline]
             fn len(&self, ctx: &mut Context) -> c_uint {
                 self.inner.len(ctx)
             }
 
             #[inline]
-            fn with_value_at_idx<'ctx, 'eval, V>(
-                &self,
-                idx: c_uint,
-                fun: impl FnOnceValue<V, &'ctx mut Context<'eval>>,
-                ctx: &'ctx mut Context<'eval>,
-            ) -> V {
-                self.inner.with_value_at_idx(idx, fun, ctx)
+            fn pairs(&self) -> impl Pairs {
+                self.inner.pairs()
             }
 
             #[inline]
-            fn with_value_at_key<'ctx, 'eval, V>(
+            fn with_value<'ctx, 'eval, U>(
                 &self,
                 key: &CStr,
-                fun: impl FnOnceValue<V, &'ctx mut Context<'eval>>,
+                fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
                 ctx: &'ctx mut Context<'eval>,
-            ) -> Option<V> {
-                self.inner.with_value_at_key(key, fun, ctx)
+            ) -> Option<U> {
+                self.inner.with_value(key, fun, ctx)
             }
         }
 
@@ -104,7 +77,7 @@ pub trait Attrset {
         impl FnOnceValue<(), &mut Context<'_>> for NoOp {
             fn call(self, _: impl Value, _: &mut Context) {}
         }
-        self.with_value_at_key(key, NoOp, ctx).is_some()
+        self.with_value(key, NoOp, ctx).is_some()
     }
 
     /// TODO: docs.
@@ -139,6 +112,16 @@ pub trait Attrset {
     {
         Merge { left: self, right: other, conflicts: OnceCell::new() }
     }
+}
+
+/// TODO: docs.
+pub trait Pairs {
+    /// TODO: docs.
+    fn with_next_key_value<'this, T: 'this, Ctx>(
+        &'this mut self,
+        fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
+        ctx: Ctx,
+    ) -> T;
 }
 
 /// TODO: docs.
@@ -177,7 +160,9 @@ pub struct LiteralAttrset<Keys, Values> {
 pub struct Merge<Left, Right> {
     left: Left,
     right: Right,
-    conflicts: OnceCell<MergeConflicts>,
+    /// The conflicting keys between `left` and `right`, sorted in ascending
+    /// order.
+    conflicts: OnceCell<Vec<CString>>,
 }
 
 /// The type of error returned when an expected attribute is missing from
@@ -194,23 +179,9 @@ pub struct MissingAttributeError<'a, Attrset> {
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
 struct AttrsetValue<T>(T);
 
-struct MergeConflicts {
-    /// Sorted vec as a map from the name of a conflicting attrset key to the
-    /// corresponding index in the *right* attrset of [`Merge`].
-    by_key: Vec<(CString, c_uint)>,
-
-    /// Same as [`by_key`](Self::by_key), but keyed by index on the [`Merge`]
-    /// attrset instead of by conflicting keys.
-    by_idx: Vec<(c_uint, c_uint)>,
-
-    /// The length of the left attrset of [`Merge`].
-    left_len: c_uint,
-}
-
-/// A simple `Either` type to avoid making `either` a non-optional dependency.
-enum Either<L, R> {
-    Left(L),
-    Right(R),
+/// A newtype wrapper that implements [`Value`] for every [`Attrset`].
+struct MergePairs<'a, M> {
+    _merge: &'a M,
 }
 
 impl<'a> NixAttrset<'a> {
@@ -273,15 +244,6 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
         Self { keys, values }
     }
 
-    /// Returns the index of the attribute with the given key, or `None` if no
-    /// such key exists.
-    ///
-    /// If an index is returned, it is guaranteed to be less than `self.len()`.
-    #[inline]
-    fn idx_of_key(&self, key: &CStr) -> Option<c_uint> {
-        (0..V::LEN).find(|idx| self.get_key(*idx) == key)
-    }
-
     #[inline]
     fn get_key(&self, idx: c_uint) -> &CStr {
         struct GetKey;
@@ -296,58 +258,64 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
 
 impl<L: Attrset, R: Attrset> Merge<L, R> {
     #[inline]
-    fn conflicts(&self, ctx: &mut Context) -> &MergeConflicts {
-        self.conflicts
-            .get_or_init(|| MergeConflicts::new(&self.left, &self.right, ctx))
+    fn conflicts(&self, ctx: &mut Context) -> &[CString] {
+        self.conflicts.get_or_init(|| self.init_conflicts(ctx))
     }
-}
 
-impl MergeConflicts {
     #[inline]
-    fn convert_idx(&self, attrset_idx: c_uint) -> Either<c_uint, c_uint> {
-        let binary_search = self
-            .by_idx
-            .binary_search_by_key(&attrset_idx, |(probe, _)| *probe);
-
-        let num_conflicts_before_idx = match binary_search {
-            Ok(idx) => return Either::Right(self.by_idx[idx].1),
-            Err(idx) => idx as c_uint,
-        };
-
-        if attrset_idx < self.left_len {
-            return Either::Left(attrset_idx);
+    fn init_conflicts(&self, ctx: &mut Context) -> Vec<CString> {
+        struct PushConflict<'a, 'b, S> {
+            conflicts: &'a mut Vec<CString>,
+            set: &'b S,
         }
 
-        Either::Right(attrset_idx - self.left_len + num_conflicts_before_idx)
-    }
+        impl<S: Attrset> FnOnceValue<(), (&CStr, &mut Context<'_>)>
+            for PushConflict<'_, '_, S>
+        {
+            #[inline]
+            fn call(
+                self,
+                _: impl Value,
+                (key, ctx): (&CStr, &mut Context<'_>),
+            ) {
+                if self.set.contains_key(key, ctx) {
+                    self.conflicts.push(key.to_owned());
+                }
+            }
+        }
 
-    /// Returne the index in the *right* attrset for the given conflicting key,
-    /// or `None` if the key is not conflicting.
-    #[inline]
-    fn get(&self, key: &CStr) -> Option<c_uint> {
-        self.by_key
-            .binary_search_by_key(&key, |(elem, _)| &**elem)
-            .ok()
-            .map(|idx| self.by_key[idx].1)
-    }
+        let mut conflicts = Vec::new();
 
-    #[inline]
-    fn len(&self) -> c_uint {
-        debug_assert_eq!(self.by_key.len(), self.by_idx.len());
-        self.by_idx.len() as c_uint
-    }
+        let left_len = self.left.len(ctx);
+        let right_len = self.right.len(ctx);
 
-    #[inline]
-    fn new(
-        left: &impl Attrset,
-        _right: &impl Attrset,
-        ctx: &mut Context,
-    ) -> Self {
-        let by_key = Vec::new();
-        let by_idx = Vec::new();
-        let left_len = left.len(ctx);
+        if left_len <= right_len {
+            let mut left_pairs = self.left.pairs();
 
-        Self { by_key, by_idx, left_len }
+            for _ in 0..left_len {
+                left_pairs.with_next_key_value(
+                    PushConflict {
+                        conflicts: &mut conflicts,
+                        set: &self.right,
+                    },
+                    ctx,
+                );
+            }
+        } else {
+            let mut right_pairs = self.right.pairs();
+
+            for _ in 0..right_len {
+                right_pairs.with_next_key_value(
+                    PushConflict {
+                        conflicts: &mut conflicts,
+                        set: &self.left,
+                    },
+                    ctx,
+                );
+            }
+        }
+
+        conflicts
     }
 }
 
@@ -361,11 +329,6 @@ impl Attrset for NixAttrset<'_> {
     }
 
     #[inline]
-    fn key_of_idx(&self, _idx: c_uint, _ctx: &mut Context) -> &CStr {
-        todo!()
-    }
-
-    #[inline]
     fn len(&self, _: &mut Context) -> c_uint {
         // 'nix_get_attrs_size' errors when the value pointer is null or when
         // the value is not initizialized, but having a NixValue guarantees
@@ -374,17 +337,12 @@ impl Attrset for NixAttrset<'_> {
     }
 
     #[inline]
-    fn with_value_at_idx<'ctx, 'eval, T>(
-        &self,
-        _idx: c_uint,
-        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        _ctx: &'ctx mut Context<'eval>,
-    ) -> T {
-        todo!()
+    fn pairs(&self) -> impl Pairs {
+        TodoPairs
     }
 
     #[inline]
-    fn with_value_at_key<'ctx, 'eval, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         key: &CStr,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
@@ -438,34 +396,25 @@ impl<'a> From<NixAttrset<'a>> for NixValue<'a> {
 
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
-    fn key_of_idx(&self, idx: c_uint, _: &mut Context) -> &CStr {
-        self.get_key(idx)
-    }
-
-    #[inline]
     fn len(&self, _: &mut Context) -> c_uint {
         debug_assert_eq!(K::LEN, V::LEN);
         K::LEN
     }
 
     #[inline]
-    fn with_value_at_idx<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        ctx: &'ctx mut Context<'eval>,
-    ) -> T {
-        self.values.with_value(idx, fun.map_ctx(move |()| ctx))
+    fn pairs(&self) -> impl Pairs {
+        TodoPairs
     }
 
     #[inline]
-    fn with_value_at_key<'ctx, 'eval, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         key: &CStr,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        self.idx_of_key(key).map(|idx| self.with_value_at_idx(idx, fun, ctx))
+        let idx = (0..K::LEN).find(|&idx| self.get_key(idx) == key)?;
+        Some(self.values.with_value(idx, fun.map_ctx(move |()| ctx)))
     }
 }
 
@@ -490,45 +439,27 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
 
 impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
     #[inline]
-    fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr {
-        match self.conflicts(ctx).convert_idx(idx) {
-            Either::Left(idx) => self.left.key_of_idx(idx, ctx),
-            Either::Right(idx) => self.right.key_of_idx(idx, ctx),
-        }
-    }
-
-    #[inline]
     fn len(&self, ctx: &mut Context) -> c_uint {
         self.left.len(ctx) + self.right.len(ctx)
             - self.conflicts(ctx).len() as c_uint
     }
 
     #[inline]
-    fn with_value_at_idx<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        ctx: &'ctx mut Context<'eval>,
-    ) -> T {
-        match self.conflicts(ctx).convert_idx(idx) {
-            Either::Left(idx) => self.left.with_value_at_idx(idx, fun, ctx),
-            Either::Right(idx) => self.right.with_value_at_idx(idx, fun, ctx),
-        }
+    fn pairs(&self) -> impl Pairs {
+        MergePairs { _merge: self }
     }
 
     #[inline]
-    fn with_value_at_key<'ctx, 'eval, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         key: &CStr,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        if let Some(right_idx) = self.conflicts(ctx).get(key) {
-            Some(self.right.with_value_at_idx(right_idx, fun, ctx))
-        } else if self.left.contains_key(key, ctx) {
-            self.left.with_value_at_key(key, fun, ctx)
+        if self.right.contains_key(key, ctx) {
+            self.right.with_value(key, fun, ctx)
         } else {
-            self.right.with_value_at_key(key, fun, ctx)
+            self.left.with_value(key, fun, ctx)
         }
     }
 }
@@ -568,17 +499,26 @@ impl<T: Attrset> Value for AttrsetValue<T> {
         mut namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        struct WriteValue<N> {
-            dest: NonNull<sys::Value>,
-            namespace: N,
+        struct InsertPair<'a, 'ctx, 'eval, 'ns, N> {
+            builder: &'a mut AttrsetBuilder<'ctx, 'eval>,
+            namespace: &'ns mut N,
         }
 
-        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>>
-            for WriteValue<N>
+        impl<N: Namespace> FnOnceValue<Result<()>, (&CStr, ())>
+            for InsertPair<'_, '_, '_, '_, N>
         {
             #[inline]
-            fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
-                unsafe { value.write(self.dest, self.namespace, ctx) }
+            fn call(
+                self,
+                value: impl Value,
+                (key, ()): (&CStr, ()),
+            ) -> Result<()> {
+                let new_namespace = self.namespace.push(key);
+                self.builder.insert(key, |dest, ctx| unsafe {
+                    value.write(dest, new_namespace, ctx)
+                })?;
+                *self.namespace = new_namespace.pop();
+                Ok(())
             }
         }
 
@@ -586,22 +526,45 @@ impl<T: Attrset> Value for AttrsetValue<T> {
 
         let len = attrset.len(ctx);
 
+        let mut pairs = attrset.pairs();
+
         let mut builder = ctx.make_attrset_builder(len as usize)?;
 
-        for idx in 0..len {
-            let key = attrset.key_of_idx(idx, builder.ctx());
-            let new_namespace = namespace.push(key);
-            builder.insert(key, |dest, ctx| {
-                attrset.with_value_at_idx(
-                    idx,
-                    WriteValue { dest, namespace: new_namespace },
-                    ctx,
-                )
-            })?;
-            namespace = new_namespace.pop();
+        for _ in 0..len {
+            pairs.with_next_key_value(
+                InsertPair {
+                    builder: &mut builder,
+                    namespace: &mut namespace,
+                },
+                (),
+            )?;
         }
 
         builder.build(dest)
+    }
+}
+
+struct TodoPairs;
+
+impl Pairs for TodoPairs {
+    #[inline]
+    fn with_next_key_value<'this, T: 'this, Ctx>(
+        &'this mut self,
+        _fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
+        _ctx: Ctx,
+    ) -> T {
+        todo!();
+    }
+}
+
+impl<L: Attrset, R: Attrset> Pairs for MergePairs<'_, Merge<L, R>> {
+    #[inline]
+    fn with_next_key_value<'this, T: 'this, Ctx>(
+        &'this mut self,
+        _fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
+        _ctx: Ctx,
+    ) -> T {
+        todo!();
     }
 }
 
@@ -628,14 +591,6 @@ impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
 #[cfg(feature = "either")]
 impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     #[inline]
-    fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr {
-        match self {
-            Self::Left(l) => l.key_of_idx(idx, ctx),
-            Self::Right(r) => r.key_of_idx(idx, ctx),
-        }
-    }
-
-    #[inline]
     fn len(&self, ctx: &mut Context) -> c_uint {
         match self {
             Self::Left(l) => l.len(ctx),
@@ -644,28 +599,38 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     }
 
     #[inline]
-    fn with_value_at_idx<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        ctx: &'ctx mut Context<'eval>,
-    ) -> T {
+    fn pairs(&self) -> impl Pairs {
         match self {
-            Self::Left(l) => l.with_value_at_idx(idx, fun, ctx),
-            Self::Right(r) => r.with_value_at_idx(idx, fun, ctx),
+            Self::Left(l) => either::Either::Left(l.pairs()),
+            Self::Right(r) => either::Either::Right(r.pairs()),
         }
     }
 
     #[inline]
-    fn with_value_at_key<'ctx, 'eval, T>(
+    fn with_value<'ctx, 'eval, T>(
         &self,
         key: &CStr,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
         match self {
-            Self::Left(l) => l.with_value_at_key(key, fun, ctx),
-            Self::Right(r) => r.with_value_at_key(key, fun, ctx),
+            Self::Left(l) => l.with_value(key, fun, ctx),
+            Self::Right(r) => r.with_value(key, fun, ctx),
+        }
+    }
+}
+
+#[cfg(feature = "either")]
+impl<L: Pairs, R: Pairs> Pairs for either::Either<L, R> {
+    #[inline]
+    fn with_next_key_value<'this, T: 'this, Ctx>(
+        &'this mut self,
+        fun: impl FnOnceValue<T, (&'this CStr, Ctx)>,
+        ctx: Ctx,
+    ) -> T {
+        match self {
+            Self::Left(l) => l.with_next_key_value(fun, ctx),
+            Self::Right(r) => r.with_next_key_value(fun, ctx),
         }
     }
 }

@@ -229,11 +229,6 @@ impl<'eval> AttrsetBuilder<'_, 'eval> {
     }
 
     #[inline]
-    pub(crate) fn ctx(&mut self) -> &mut Context<'eval> {
-        self.context
-    }
-
-    #[inline]
     pub(crate) fn insert(
         &mut self,
         key: &CStr,
