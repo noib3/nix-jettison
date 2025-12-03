@@ -18,15 +18,36 @@ use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait Attrset {
+    /// Returns the key at the given index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of bounds (i.e. greater than or equal to
+    /// [`len`](Attrset::len)).
+    fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr;
+
     /// Returns the number of attributes in this attribute set.
     fn len(&self, ctx: &mut Context) -> c_uint;
 
     /// TODO: docs.
-    fn with_value<T>(
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of bounds (i.e. greater than or equal to
+    /// [`len`](Attrset::len)).
+    fn with_value_at_idx<'ctx, 'eval, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T;
+
+    /// TODO: docs.
+    fn with_value_at_key<'ctx, 'eval, T>(
         &self,
         key: &CStr,
-        fun: impl FnOnceValue<T>,
-        ctx: &mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> Option<T>;
 
     /// Returns an [`Attrset`] implementation that borrows from `self`.
@@ -43,18 +64,33 @@ pub trait Attrset {
             }
 
             #[inline]
+            fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr {
+                self.inner.key_of_idx(idx, ctx)
+            }
+
+            #[inline]
             fn len(&self, ctx: &mut Context) -> c_uint {
                 self.inner.len(ctx)
             }
 
             #[inline]
-            fn with_value<V>(
+            fn with_value_at_idx<'ctx, 'eval, V>(
+                &self,
+                idx: c_uint,
+                fun: impl FnOnceValue<V, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
+            ) -> V {
+                self.inner.with_value_at_idx(idx, fun, ctx)
+            }
+
+            #[inline]
+            fn with_value_at_key<'ctx, 'eval, V>(
                 &self,
                 key: &CStr,
-                fun: impl FnOnceValue<V>,
-                ctx: &mut Context,
+                fun: impl FnOnceValue<V, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
             ) -> Option<V> {
-                self.inner.with_value(key, fun, ctx)
+                self.inner.with_value_at_key(key, fun, ctx)
             }
         }
 
@@ -65,10 +101,10 @@ pub trait Attrset {
     #[inline(always)]
     fn contains_key(&self, key: &CStr, ctx: &mut Context) -> bool {
         struct NoOp;
-        impl FnOnceValue<()> for NoOp {
-            fn call(self, _: impl Value, _: ()) {}
+        impl FnOnceValue<(), &mut Context<'_>> for NoOp {
+            fn call(self, _: impl Value, _: &mut Context) {}
         }
-        self.with_value(key, NoOp, ctx).is_some()
+        self.with_value_at_key(key, NoOp, ctx).is_some()
     }
 
     /// TODO: docs.
@@ -180,11 +216,11 @@ impl<'a> NixAttrset<'a> {
     }
 
     #[inline]
-    fn with_attr_inner<T: 'a>(
+    fn with_attr_inner<'ctx, 'eval, T: 'a>(
         self,
         key: &CStr,
-        fun: impl FnOnce(NixValue<'a>, &mut Context) -> T,
-        ctx: &mut Context,
+        fun: impl FnOnce(NixValue<'a>, &'ctx mut Context<'eval>) -> T,
+        ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
         let value_raw = unsafe {
             cpp::get_attr_byname_lazy(
@@ -213,7 +249,7 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     ///
     /// If an index is returned, it is guaranteed to be less than `self.len()`.
     #[inline]
-    fn get_idx_of_key(&self, key: &CStr) -> Option<c_uint> {
+    fn idx_of_key(&self, key: &CStr) -> Option<c_uint> {
         (0..V::LEN).find(|idx| self.get_key(*idx) == key)
     }
 
@@ -238,6 +274,11 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
 
 impl Attrset for NixAttrset<'_> {
     #[inline]
+    fn key_of_idx(&self, _idx: c_uint, _ctx: &mut Context) -> &CStr {
+        todo!()
+    }
+
+    #[inline]
     fn len(&self, _: &mut Context) -> c_uint {
         // 'nix_get_attrs_size' errors when the value pointer is null or when
         // the value is not initizialized, but having a NixValue guarantees
@@ -246,13 +287,23 @@ impl Attrset for NixAttrset<'_> {
     }
 
     #[inline]
-    fn with_value<T>(
+    fn with_value_at_idx<'ctx, 'eval, T>(
+        &self,
+        _idx: c_uint,
+        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        _ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        todo!()
+    }
+
+    #[inline]
+    fn with_value_at_key<'ctx, 'eval, T>(
         &self,
         key: &CStr,
-        fun: impl FnOnceValue<T>,
-        ctx: &mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        self.with_attr_inner(key, |value, _| fun.call(value, ()), ctx)
+        self.with_attr_inner(key, |value, ctx| fun.call(value, ctx), ctx)
     }
 }
 
@@ -300,19 +351,34 @@ impl<'a> From<NixAttrset<'a>> for NixValue<'a> {
 
 impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
     #[inline]
+    fn key_of_idx(&self, idx: c_uint, _: &mut Context) -> &CStr {
+        self.get_key(idx)
+    }
+
+    #[inline]
     fn len(&self, _: &mut Context) -> c_uint {
         debug_assert_eq!(K::LEN, V::LEN);
         K::LEN
     }
 
     #[inline]
-    fn with_value<T>(
+    fn with_value_at_idx<'ctx, 'eval, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        self.values.with_value(idx, fun.map_ctx(move |()| ctx))
+    }
+
+    #[inline]
+    fn with_value_at_key<'ctx, 'eval, T>(
         &self,
         key: &CStr,
-        fun: impl FnOnceValue<T>,
-        _: &mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        self.get_idx_of_key(key).map(|idx| self.values.with_value(idx, fun))
+        self.idx_of_key(key).map(|idx| self.with_value_at_idx(idx, fun, ctx))
     }
 }
 
@@ -363,19 +429,34 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
 
 impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
     #[inline]
+    fn key_of_idx(&self, _idx: c_uint, _ctx: &mut Context) -> &CStr {
+        todo!()
+    }
+
+    #[inline]
     fn len(&self, ctx: &mut Context) -> c_uint {
         self.left.len(ctx) + self.right.len(ctx)
             - self.conflicts(ctx).len() as c_uint
     }
 
     #[inline]
-    fn with_value<T>(
+    fn with_value_at_idx<'ctx, 'eval, T>(
+        &self,
+        _idx: c_uint,
+        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        _ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        todo!()
+    }
+
+    #[inline]
+    fn with_value_at_key<'ctx, 'eval, T>(
         &self,
         _key: &CStr,
-        _fun: impl FnOnceValue<T>,
-        _ctx: &mut Context,
+        _fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        _ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        todo!();
+        todo!()
     }
 }
 
@@ -422,6 +503,14 @@ impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
 #[cfg(feature = "either")]
 impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     #[inline]
+    fn key_of_idx(&self, idx: c_uint, ctx: &mut Context) -> &CStr {
+        match self {
+            Self::Left(l) => l.key_of_idx(idx, ctx),
+            Self::Right(r) => r.key_of_idx(idx, ctx),
+        }
+    }
+
+    #[inline]
     fn len(&self, ctx: &mut Context) -> c_uint {
         match self {
             Self::Left(l) => l.len(ctx),
@@ -430,15 +519,28 @@ impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     }
 
     #[inline]
-    fn with_value<T>(
+    fn with_value_at_idx<'ctx, 'eval, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        match self {
+            Self::Left(l) => l.with_value_at_idx(idx, fun, ctx),
+            Self::Right(r) => r.with_value_at_idx(idx, fun, ctx),
+        }
+    }
+
+    #[inline]
+    fn with_value_at_key<'ctx, 'eval, T>(
         &self,
         key: &CStr,
-        fun: impl FnOnceValue<T>,
-        ctx: &mut Context,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
         match self {
-            Self::Left(l) => l.with_value(key, fun, ctx),
-            Self::Right(r) => r.with_value(key, fun, ctx),
+            Self::Left(l) => l.with_value_at_key(key, fun, ctx),
+            Self::Right(r) => r.with_value_at_key(key, fun, ctx),
         }
     }
 }

@@ -178,6 +178,35 @@ pub trait Values {
 pub trait FnOnceValue<T, Ctx = ()> {
     /// Calls the function with the given value.
     fn call(self, value: impl Value, ctx: Ctx) -> T;
+
+    /// TODO: docs.
+    #[inline]
+    fn map_ctx<NewCtx>(
+        self,
+        map: impl FnOnce(NewCtx) -> Ctx,
+    ) -> impl FnOnceValue<T, NewCtx>
+    where
+        Self: Sized,
+    {
+        struct Mapped<Inner, Map> {
+            inner: Inner,
+            map: Map,
+        }
+
+        impl<T, Inner, Map, OldCtx, NewCtx> FnOnceValue<T, NewCtx>
+            for Mapped<Inner, Map>
+        where
+            Inner: FnOnceValue<T, OldCtx>,
+            Map: FnOnce(NewCtx) -> OldCtx,
+        {
+            #[inline]
+            fn call(self, value: impl Value, ctx: NewCtx) -> T {
+                self.inner.call(value, (self.map)(ctx))
+            }
+        }
+
+        Mapped { inner: self, map }
+    }
 }
 
 /// TODO: docs.

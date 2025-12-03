@@ -16,6 +16,17 @@ use crate::value::{FnOnceValue, Values};
 
 /// TODO: docs.
 pub trait List {
+    /// Returns the number of elements in this list.
+    fn len(&self) -> c_uint;
+
+    /// TODO: docs.
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T;
+
     /// Returns a [`List`] implementation that borrows from `self`.
     #[inline]
     fn borrow(&self) -> impl List {
@@ -26,7 +37,7 @@ pub trait List {
         impl<T: List + ?Sized> List for BorrowedList<'_, T> {
             #[inline]
             fn borrow(&self) -> impl List {
-                BorrowedList { inner: self.inner }
+                Self { inner: self.inner }
             }
 
             #[inline]
@@ -47,9 +58,6 @@ pub trait List {
 
         BorrowedList { inner: self }
     }
-
-    /// Returns the number of elements in this list.
-    fn len(&self) -> c_uint;
 
     /// TODO: docs.
     #[inline(always)]
@@ -74,14 +82,6 @@ pub trait List {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// TODO: docs.
-    fn with_value<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
-        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-        ctx: &'ctx mut Context<'eval>,
-    ) -> T;
 }
 
 /// An extension trait for iterators of [`Value`]s.
@@ -144,19 +144,7 @@ impl<V: Values> List for LiteralList<V> {
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        struct MapFnOnceValue<'ctx, 'eval, F> {
-            ctx: &'ctx mut Context<'eval>,
-            fun: F,
-        }
-        impl<'ctx, 'eval, F, T> FnOnceValue<T> for MapFnOnceValue<'ctx, 'eval, F>
-        where
-            F: FnOnceValue<T, &'ctx mut Context<'eval>>,
-        {
-            fn call(self, value: impl Value, _: ()) -> T {
-                self.fun.call(value, self.ctx)
-            }
-        }
-        self.values.with_value(idx, MapFnOnceValue { ctx, fun })
+        self.values.with_value(idx, fun.map_ctx(move |()| ctx))
     }
 }
 
