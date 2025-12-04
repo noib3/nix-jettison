@@ -5,6 +5,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use cargo::core::Package;
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
@@ -41,6 +42,12 @@ pub(crate) enum VendorDepsError {
 #[derive(Debug, derive_more::Display)]
 #[display("{_0}")]
 pub(crate) enum ParseCargoLockError {}
+
+/// TODO: docs.
+pub(crate) struct VendorDir {
+    derivation: NixDerivation<'static>,
+    out_path: PathBuf,
+}
 
 /// TODO: docs.
 #[derive(Debug, Copy, Clone)]
@@ -86,12 +93,24 @@ struct CreateVendorDirFuns<'pkgs, 'builtins> {
     fetch_git: NixLambda<'builtins>,
 }
 
-impl VendorDeps {
-    fn create_vendor_dir<'a>(
+impl VendorDir {
+    pub(crate) fn get_package_src(&self, pkg: &Package) -> PathBuf {
+        let dir_name = Self::dir_name(
+            pkg.name().as_str(),
+            pkg.version().to_string().as_str(),
+        );
+        self.out_path.join(dir_name)
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.out_path
+    }
+
+    fn create<'a>(
         funs: CreateVendorDirFuns,
         deps: impl Iterator<Item = Dependency<'a>>,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+    ) -> Result<Self, NixError> {
         let mut links = Vec::new();
 
         for dep in deps {
@@ -127,22 +146,91 @@ impl VendorDeps {
             };
 
             links.push(attrset! {
-                name: format!("{name}-{version}"),
+                name: Self::dir_name(name, version),
                 path: source_path,
             });
         }
 
-        funs.link_farm.call_multi(
-            (c"vendored-deps", links.into_list().into_value()),
-            ctx,
-        )
+        let derivation = funs
+            .link_farm
+            .call_multi::<NixDerivation>(
+                (c"vendored-deps", links.into_list().into_value()),
+                ctx,
+            )?
+            .force(ctx)?;
+
+        let out_path = derivation.out_path(ctx)?;
+
+        Ok(Self { out_path, derivation })
     }
 
-    fn parse_lockfile(
-        _cargo_lock: &str,
-    ) -> Result<impl Iterator<Item = Dependency<'_>>, ParseCargoLockError>
-    {
-        Ok([
+    fn dir_name(pkg_name: &str, pkg_version: &str) -> String {
+        format!("{pkg_name}-{pkg_version}")
+    }
+}
+
+impl Function for VendorDeps {
+    type Args<'a> = VendorDepsArgs<'a>;
+
+    fn call<'a: 'a>(
+        args: Self::Args<'a>,
+        ctx: &mut Context,
+    ) -> Result<VendorDir, VendorDepsError> {
+        let cargo_lock = match fs::read_to_string(&args.cargo_lock) {
+            Ok(contents) => contents,
+            Err(err) => {
+                return Err(VendorDepsError::ReadCargoLock {
+                    path: args.cargo_lock.into_owned(),
+                    err,
+                });
+            },
+        };
+
+        let deps = match parse_lockfile(&cargo_lock) {
+            Ok(deps) => deps,
+            Err(err) => {
+                return Err(VendorDepsError::ParseCargoLock {
+                    path: args.cargo_lock.into_owned(),
+                    err,
+                });
+            },
+        };
+
+        let funs = CreateVendorDirFuns {
+            link_farm: args.pkgs.get(c"linkFarm", ctx)?,
+            fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
+            fetch_git: ctx.builtins().fetch_git(ctx),
+        };
+
+        VendorDir::create(funs, deps, ctx).map_err(Into::into)
+    }
+}
+
+impl TryIntoValue for VendorDir {
+    fn try_into_value(
+        self,
+        _: &mut Context,
+    ) -> Result<impl Value + use<>, NixError> {
+        Ok(self.derivation)
+    }
+}
+
+impl ToError for VendorDepsError {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        CString::new(self.to_string())
+            .expect("the Display impl doesn't contain any NUL bytes")
+            .into()
+    }
+}
+
+fn parse_lockfile(
+    _cargo_lock: &str,
+) -> Result<impl Iterator<Item = Dependency<'_>>, ParseCargoLockError> {
+    Ok([
             Dependency {
                 name: "abs-path",
                 version: "0.1.0",
@@ -168,56 +256,4 @@ impl VendorDeps {
             },
         ]
         .into_iter())
-    }
-}
-
-impl Function for VendorDeps {
-    type Args<'a> = VendorDepsArgs<'a>;
-
-    fn call<'a: 'a>(
-        args: Self::Args<'a>,
-        ctx: &mut Context,
-    ) -> Result<NixDerivation<'static>, VendorDepsError> {
-        let cargo_lock = match fs::read_to_string(&args.cargo_lock) {
-            Ok(contents) => contents,
-            Err(err) => {
-                return Err(VendorDepsError::ReadCargoLock {
-                    path: args.cargo_lock.into_owned(),
-                    err,
-                });
-            },
-        };
-
-        let deps = match Self::parse_lockfile(&cargo_lock) {
-            Ok(deps) => deps,
-            Err(err) => {
-                return Err(VendorDepsError::ParseCargoLock {
-                    path: args.cargo_lock.into_owned(),
-                    err,
-                });
-            },
-        };
-
-        let funs = CreateVendorDirFuns {
-            link_farm: args.pkgs.get(c"linkFarm", ctx)?,
-            fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
-            fetch_git: ctx.builtins().fetch_git(ctx),
-        };
-
-        Self::create_vendor_dir(funs, deps, ctx)?
-            .force(ctx)
-            .map_err(Into::into)
-    }
-}
-
-impl ToError for VendorDepsError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
-    }
-
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        CString::new(self.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes")
-            .into()
-    }
 }

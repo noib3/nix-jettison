@@ -1,6 +1,7 @@
 use core::ffi::CStr;
 use core::result::Result;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -8,11 +9,24 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{PackageIdSpec, Shell, Workspace};
+use cargo::core::{
+    Package,
+    PackageId,
+    PackageIdSpec,
+    Resolve,
+    Shell,
+    Workspace,
+};
+use cargo::ops::WorkspaceResolve;
 use cargo::{GlobalContext, ops};
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::vendor_deps::{VendorDeps, VendorDepsArgs, VendorDepsError};
+use crate::vendor_deps::{
+    VendorDeps,
+    VendorDepsArgs,
+    VendorDepsError,
+    VendorDir,
+};
 
 /// Builds a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -59,6 +73,10 @@ pub(crate) enum BuildPackageError {
 
     /// Vendoring the dependencies failed.
     VendorDeps(#[from] VendorDepsError),
+}
+
+struct BuildGraph {
+    crates: HashMap<PackageId, Thunk<'static, NixDerivation<'static>>>,
 }
 
 impl BuildPackage {
@@ -114,6 +132,73 @@ impl BuildPackageArgs<'_> {
     }
 }
 
+impl BuildGraph {
+    fn new(
+        root_pkg_name: &str,
+        ws_resolve: WorkspaceResolve<'_>,
+        _ctx: &mut Context,
+    ) -> Result<Self, NixError> {
+        let _root_id = ws_resolve
+            .targeted_resolve
+            .iter()
+            .find(|id| id.name().as_str() == root_pkg_name)
+            .expect("root package not found in workspace resolve");
+
+        todo!();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_rust_crate(
+        resolve: &Resolve,
+        package: &Package,
+        deps: &[Thunk<'static, NixDerivation<'static>>],
+        build_deps: &[Thunk<'static, NixDerivation<'static>>],
+        vendor_dir: &VendorDir,
+        pkgs: NixAttrset,
+        ctx: &mut Context,
+    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+        let pkg_id = package.package_id();
+
+        let src = if pkg_id.source_id().is_path() {
+            Cow::Borrowed(package.root())
+        } else {
+            Cow::Owned(vendor_dir.get_package_src(package))
+        };
+
+        let features = resolve
+            .features(pkg_id)
+            .iter()
+            .map(|feature| feature.as_str())
+            .into_value();
+
+        let custom_lib_name = package.targets().iter().find_map(|target| {
+            if !target.is_lib() {
+                None
+            } else {
+                (pkg_id.name() != target.name()).then(|| target.name())
+            }
+        });
+
+        let args = attrset! {
+            crateName: pkg_id.name().as_str(),
+            version: pkg_id.version().to_string(),
+            src: src,
+            dependencies: deps.into_value(),
+            features: features,
+            edition: package.manifest().edition().to_string(),
+            procMacro: package.proc_macro(),
+        }
+        .merge(custom_lib_name.map(|name| attrset! { libName: name }))
+        .merge((!build_deps.is_empty()).then(|| {
+            attrset! {
+                buildDependencies: build_deps.into_value(),
+            }
+        }));
+
+        pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?.call(args, ctx)
+    }
+}
+
 impl Function for BuildPackage {
     type Args<'a> = BuildPackageArgs<'a>;
 
@@ -128,8 +213,7 @@ impl Function for BuildPackage {
 
         let vendor_dir = <VendorDeps as Function>::call(vendor_args, ctx)?;
 
-        let cargo_config =
-            Self::generate_cargo_config(&vendor_dir.out_path(ctx)?);
+        let cargo_config = Self::generate_cargo_config(vendor_dir.path());
 
         let cargo_home = args
             .pkgs
@@ -154,7 +238,7 @@ impl Function for BuildPackage {
             &mut target_data,
             &[target],
             &args.features(ctx)?,
-            &[PackageIdSpec::new(args.package.to_owned())],
+            &[PackageIdSpec::new(args.package.clone())],
             HasDevUnits::No,
             ForceAllTargets::No,
             true,
