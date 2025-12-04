@@ -8,10 +8,10 @@ extern crate alloc;
 
 pub mod attrset;
 pub mod builtins;
+pub mod callable;
 pub mod context;
 mod entry;
 pub mod error;
-pub mod callable;
 pub mod list;
 mod namespace;
 pub mod primop;
@@ -31,9 +31,9 @@ pub mod prelude {
 
     pub use crate::Utf8CStr;
     pub use crate::attrset::*;
+    pub use crate::callable::*;
     pub use crate::context::*;
     pub use crate::error::*;
-    pub use crate::callable::*;
     pub use crate::list::*;
     pub use crate::primop::*;
     pub use crate::thunk::*;

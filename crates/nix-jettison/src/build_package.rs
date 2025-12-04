@@ -20,6 +20,7 @@ pub(crate) struct BuildPackage;
 
 #[derive(nix_bindings::Args, nix_bindings::TryFromValue)]
 #[args(flatten, name = "args")]
+#[try_from(rename_all = "camelCase")]
 pub(crate) struct BuildPackageArgs<'a> {
     pkgs: NixAttrset<'a>,
     src: &'a Path,

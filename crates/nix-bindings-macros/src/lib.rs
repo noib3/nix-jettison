@@ -50,7 +50,7 @@ pub fn primop(input: TokenStream) -> TokenStream {
 }
 
 /// TODO: docs
-#[proc_macro_derive(TryFromValue)]
+#[proc_macro_derive(TryFromValue, attributes(try_from))]
 pub fn try_from_value(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
     try_from_value::expand(input)
