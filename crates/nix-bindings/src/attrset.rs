@@ -566,6 +566,37 @@ where
     }
 }
 
+impl<A: Attrset> Attrset for Option<A> {
+    #[inline]
+    fn len(&self, ctx: &mut Context) -> c_uint {
+        match self {
+            Some(attrset) => attrset.len(ctx),
+            None => 0,
+        }
+    }
+
+    #[inline]
+    fn pairs<'this, 'eval>(
+        &'this self,
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval, A> {
+        self.as_ref().map(|attrset| attrset.pairs(ctx))
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        key: &CStr,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> Option<T> {
+        match self {
+            Some(attrset) => attrset.with_value(key, fun, ctx),
+            None => None,
+        }
+    }
+}
+
 impl<'a> TryFromValue<NixValue<'a>> for NixDerivation<'a> {
     #[inline]
     fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
@@ -835,6 +866,43 @@ where
             self.left_pairs.with_value(fun, ctx)
         } else {
             self.right_pairs.with_value(fun, ctx)
+        }
+    }
+}
+
+impl<T: Pairs> Pairs for Option<T> {
+    #[inline]
+    fn advance(&mut self, ctx: &mut Context) {
+        if let Some(pairs) = self {
+            pairs.advance(ctx);
+        }
+    }
+
+    #[inline]
+    fn is_exhausted(&self) -> bool {
+        match self {
+            Some(pairs) => pairs.is_exhausted(),
+            None => true,
+        }
+    }
+
+    #[inline]
+    fn key(&self, ctx: &mut Context) -> &CStr {
+        match self {
+            Some(pairs) => pairs.key(ctx),
+            None => panic!("attempted to get key from exhausted pairs"),
+        }
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, U>(
+        &self,
+        fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> U {
+        match self {
+            Some(pairs) => pairs.with_value(fun, ctx),
+            None => panic!("attempted to get value from exhausted pairs"),
         }
     }
 }
