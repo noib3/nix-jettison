@@ -116,6 +116,15 @@ pub trait Value {
 }
 
 /// TODO: docs.
+pub trait BoolValue: Value + Sized {
+    /// # Safety
+    ///
+    /// This method should only be called after a successful call to
+    /// [`kind`](Value::kind) returns [`ValueKind::Bool`].
+    unsafe fn into_bool(self, ctx: &mut Context) -> Result<bool>;
+}
+
+/// TODO: docs.
 pub trait IntValue: Value + Sized {
     /// # Safety
     ///
@@ -659,6 +668,13 @@ impl Value for NixValue<'_> {
     }
 }
 
+impl BoolValue for NixValue<'_> {
+    #[inline]
+    unsafe fn into_bool(self, _: &mut Context) -> Result<bool> {
+        Ok(unsafe { sys::get_bool(ptr::null_mut(), self.as_raw()) })
+    }
+}
+
 impl IntValue for NixValue<'_> {
     #[inline]
     unsafe fn into_int(self, _: &mut Context) -> Result<i64> {
@@ -748,6 +764,22 @@ macro_rules! impl_try_from_value_for_self {
 }
 
 impl_try_from_value_for_self!(NixValue<'_>);
+
+impl<V: BoolValue> TryFromValue<V> for bool {
+    #[inline]
+    fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
+        value.force_inline(ctx)?;
+
+        match value.kind() {
+            // SAFETY: the value's kind is a boolean.
+            ValueKind::Bool => unsafe { value.into_bool(ctx) },
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::Bool,
+                found: other,
+            })),
+        }
+    }
+}
 
 impl<V: IntValue> TryFromValue<V> for i64 {
     #[inline]
