@@ -5,14 +5,15 @@ use alloc::string::ToString;
 use core::cell::Cell;
 use core::ffi::c_uint;
 use core::ops::Deref;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 
 pub use nix_bindings_macros::list;
 use nix_bindings_sys as sys;
 
+use crate::error::TypeMismatchError;
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Value, ValueKind};
-use crate::value::{FnOnceValue, Values};
+use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait List {
@@ -93,6 +94,12 @@ pub trait IteratorExt: IntoIterator<Item: Value> {
         Self::IntoIter: ExactSizeIterator + Clone;
 }
 
+/// TODO: docs.
+#[derive(Copy, Clone)]
+pub struct NixList<'value> {
+    inner: NixValue<'value>,
+}
+
 /// The list type produced by the [`list!`] macro.
 pub struct LiteralList<Values> {
     values: Values,
@@ -114,11 +121,120 @@ trait ValueIterator {
 /// A newtype wrapper that implements [`Value`] for every [`ValueIterator`].
 struct ListValue<T>(T);
 
+impl<'a> NixList<'a> {
+    /// TODO: docs.
+    #[inline]
+    pub fn get<T: TryFromValue<NixValue<'a>> + 'a>(
+        self,
+        idx: c_uint,
+        ctx: &mut Context,
+    ) -> Result<T> {
+        self.with_value_inner(
+            idx,
+            |value, ctx| T::try_from_value(value, ctx),
+            ctx,
+        )
+    }
+
+    #[inline]
+    fn with_value_inner<'ctx, 'eval, T: 'a>(
+        self,
+        idx: c_uint,
+        fun: impl FnOnce(NixValue<'a>, &'ctx mut Context<'eval>) -> T,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        let value_raw = unsafe {
+            sys::get_list_byidx_lazy(
+                ptr::null_mut(),
+                self.inner.as_raw(),
+                ctx.state_mut().as_ptr(),
+                idx,
+            )
+        };
+
+        let value_ptr =
+            NonNull::new(value_raw).expect("Nix returned null value");
+
+        // SAFETY: the value returned by Nix is initialized.
+        fun(unsafe { NixValue::new(value_ptr) }, ctx)
+    }
+}
+
 impl<Values> LiteralList<Values> {
     /// Creates a new `LiteralList`.
     #[inline]
     pub fn new(values: Values) -> Self {
         Self { values }
+    }
+}
+
+impl List for NixList<'_> {
+    #[inline]
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+    {
+        self
+    }
+
+    #[inline]
+    fn len(&self) -> c_uint {
+        // 'nix_get_list_size' errors when the value pointer is null or when
+        // the value is not initizialized, but having a NixValue guarantees
+        // neither of those can happen, so we can use a null context.
+        unsafe { sys::get_list_size(ptr::null_mut(), self.inner.as_raw()) }
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        self.with_value_inner(idx, |value, ctx| fun.call(value, ctx), ctx)
+    }
+}
+
+impl Value for NixList<'_> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.inner.write(dest, namespace, ctx) }
+    }
+}
+
+impl<'a> TryFromValue<NixValue<'a>> for NixList<'a> {
+    #[inline]
+    fn try_from_value(
+        mut value: NixValue<'a>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        value.force_inline(ctx)?;
+
+        match value.kind() {
+            ValueKind::List => Ok(Self { inner: value }),
+            other => Err(ctx.make_error(TypeMismatchError {
+                expected: ValueKind::List,
+                found: other,
+            })),
+        }
+    }
+}
+
+impl<'a> From<NixList<'a>> for NixValue<'a> {
+    #[inline]
+    fn from(list: NixList<'a>) -> Self {
+        list.inner
     }
 }
 

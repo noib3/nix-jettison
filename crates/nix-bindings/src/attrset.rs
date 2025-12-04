@@ -257,7 +257,7 @@ impl<'a> NixAttrset<'a> {
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<Option<T>> {
-        self.with_attr_inner(
+        self.with_value_inner(
             key,
             |value, ctx| T::try_from_value(value, ctx),
             ctx,
@@ -266,7 +266,7 @@ impl<'a> NixAttrset<'a> {
     }
 
     #[inline]
-    fn with_attr_inner<'ctx, 'eval, T: 'a>(
+    fn with_value_inner<'ctx, 'eval, T: 'a>(
         self,
         key: &CStr,
         fun: impl FnOnce(NixValue<'a>, &'ctx mut Context<'eval>) -> T,
@@ -410,7 +410,7 @@ impl Attrset for NixAttrset<'_> {
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        self.with_attr_inner(key, |value, ctx| fun.call(value, ctx), ctx)
+        self.with_value_inner(key, |value, ctx| fun.call(value, ctx), ctx)
     }
 }
 
