@@ -189,7 +189,9 @@ pub trait Values {
         }
         #[cfg(not(nightly))]
         {
-            (0..(Self::LEN as usize)).map(constructor).collect::<Vec<T>>()
+            (0..(Self::LEN as usize))
+                .map(constructor)
+                .collect::<alloc::vec::Vec<T>>()
         }
     }
 }
@@ -857,7 +859,7 @@ macro_rules! impl_try_from_string_value {
 impl_try_from_string_value!(&CStr);
 impl_try_from_string_value!(&str);
 impl_try_from_string_value!(CString);
-impl_try_from_string_value!(String);
+impl_try_from_string_value!(alloc::string::String);
 
 #[cfg(all(unix, feature = "std"))]
 impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>
