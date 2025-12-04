@@ -69,25 +69,23 @@ impl Function for BuildPackage {
             cargo_lock: args.src.join("Cargo.lock").into(),
         };
 
-        let vendor_dir_drv = <VendorDeps as Function>::call(vendor_args, ctx)?;
-        let vendor_dir = vendor_dir_drv.get::<String>(c"outPath", ctx)?;
-        let cargo_config = Self::generate_cargo_config(Path::new(&vendor_dir));
+        let vendor_dir = <VendorDeps as Function>::call(vendor_args, ctx)?;
 
-        let cargo_home_drv = args
+        let cargo_config =
+            Self::generate_cargo_config(&vendor_dir.out_path(ctx)?);
+
+        let cargo_home = args
             .pkgs
             .get::<NixLambda>(c"writeTextDir", ctx)?
-            .call_multi::<NixAttrset>(("config.toml", cargo_config), ctx)?
+            .call_multi::<NixDerivation>(("config.toml", cargo_config), ctx)?
             .force(ctx)?;
-
-        let cargo_home_path =
-            cargo_home_drv.get::<&Path>(c"outPath", ctx)?.to_owned();
 
         let cwd = env::current_dir()
             .context("couldn't get the current directory of the process")
             .map_err(BuildPackageError::Cwd)?;
 
         let global_ctx =
-            GlobalContext::new(Shell::new(), cwd, cargo_home_path);
+            GlobalContext::new(Shell::new(), cwd, cargo_home.out_path(ctx)?);
 
         let manifest_path = args.src.join("Cargo.toml");
 

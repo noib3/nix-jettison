@@ -2,10 +2,12 @@
 
 use alloc::borrow::Cow;
 use alloc::ffi::CString;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::ffi::{CStr, c_uint};
 use core::marker::PhantomData;
+use core::ops::Deref;
 use core::ptr::NonNull;
 use core::{fmt, ptr};
 
@@ -191,6 +193,12 @@ pub struct Merge<Left, Right> {
     conflicts: OnceCell<Vec<CString>>,
 }
 
+/// TODO: docs.
+#[derive(Copy, Clone)]
+pub struct NixDerivation<'attr> {
+    inner: NixAttrset<'attr>,
+}
+
 /// The type of error returned when an expected attribute is missing from
 /// an [`Attrset`].
 #[derive(Debug)]
@@ -338,6 +346,21 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
         }
 
         conflicts
+    }
+}
+
+impl NixDerivation<'_> {
+    /// Returns the output path of this derivation.
+    #[cfg(feature = "std")]
+    #[inline]
+    pub fn out_path(&self, ctx: &mut Context) -> Result<std::path::PathBuf> {
+        self.out_path_as_string(ctx).map(Into::into)
+    }
+
+    /// Returns the output path of this derivation as a string.
+    #[inline]
+    pub fn out_path_as_string(&self, ctx: &mut Context) -> Result<String> {
+        self.inner.get(c"outPath", ctx)
     }
 }
 
@@ -535,6 +558,79 @@ where
         unsafe {
             Attrset::borrow(self).into_value().write(dest, namespace, ctx)
         }
+    }
+}
+
+impl<'a> TryFromValue<NixValue<'a>> for NixDerivation<'a> {
+    #[inline]
+    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
+        NixAttrset::try_from_value(value, ctx)
+            .and_then(|attrset| Self::try_from_value(attrset, ctx))
+    }
+}
+
+impl<'a> TryFromValue<NixAttrset<'a>> for NixDerivation<'a> {
+    #[inline]
+    fn try_from_value(
+        attrset: NixAttrset<'a>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        if attrset.get::<CString>(c"type", ctx)? == c"derivation" {
+            Ok(Self { inner: attrset })
+        } else {
+            Err(ctx.make_error((ErrorKind::Nix, c"not a derivation")))
+        }
+    }
+}
+
+impl Attrset for NixDerivation<'_> {
+    #[inline(always)]
+    fn len(&self, ctx: &mut Context) -> c_uint {
+        self.inner.len(ctx)
+    }
+
+    #[inline(always)]
+    fn pairs<'this, 'eval>(
+        &'this self,
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval> {
+        self.inner.pairs(ctx)
+    }
+
+    #[inline(always)]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        key: &CStr,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> Option<T> {
+        Attrset::with_value(&self.inner, key, fun, ctx)
+    }
+}
+
+impl Value for NixDerivation<'_> {
+    #[inline(always)]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline(always)]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.inner.write(dest, namespace, ctx) }
+    }
+}
+
+impl<'a> Deref for NixDerivation<'a> {
+    type Target = NixAttrset<'a>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 

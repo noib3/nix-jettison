@@ -90,7 +90,7 @@ impl VendorDeps {
         funs: CreateVendorDirFuns,
         deps: impl Iterator<Item = Dependency<'a>>,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, NixAttrset<'static>>, NixError> {
+    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
         let mut links = Vec::new();
 
         for dep in deps {
@@ -176,7 +176,7 @@ impl Function for VendorDeps {
     fn call<'a: 'a>(
         args: Self::Args<'a>,
         ctx: &mut Context,
-    ) -> Result<NixAttrset<'static>, VendorDepsError> {
+    ) -> Result<NixDerivation<'static>, VendorDepsError> {
         let cargo_lock = match fs::read_to_string(&args.cargo_lock) {
             Ok(contents) => contents,
             Err(err) => {

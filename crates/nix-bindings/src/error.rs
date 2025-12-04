@@ -171,6 +171,18 @@ impl<Int> fmt::Display for TryFromI64Error<Int> {
 
 impl<Int> core::error::Error for TryFromI64Error<Int> {}
 
+impl ToError for core::convert::Infallible {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        unreachable!()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        unreachable!()
+    }
+}
+
 impl ToError for TypeMismatchError {
     #[inline]
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
