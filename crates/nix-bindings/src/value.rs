@@ -2,10 +2,11 @@
 
 use alloc::borrow::{Cow, ToOwned};
 use alloc::ffi::CString;
-use core::ffi::{CStr, c_uint};
+use core::ffi::{CStr, c_char, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
+use core::slice;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
@@ -121,6 +122,18 @@ pub trait IntValue: Value + Sized {
     /// This method should only be called after a successful call to
     /// [`kind`](Value::kind) returns [`ValueKind::Int`].
     unsafe fn into_int(self, ctx: &mut Context) -> Result<i64>;
+}
+
+/// TODO: docs.
+pub trait StringValue: Value + Sized {
+    /// TODO: docs.
+    type String;
+
+    /// # Safety
+    ///
+    /// This method should only be called after a successful call to
+    /// [`kind`](Value::kind) returns [`ValueKind::String`].
+    unsafe fn into_string(self, ctx: &mut Context) -> Result<Self::String>;
 }
 
 /// TODO: docs.
@@ -653,6 +666,43 @@ impl IntValue for NixValue<'_> {
     }
 }
 
+impl<'a> StringValue for NixValue<'a> {
+    type String = CString;
+
+    #[inline]
+    unsafe fn into_string(self, ctx: &mut Context) -> Result<Self::String> {
+        unsafe extern "C" fn get_string_callback(
+            start: *const c_char,
+            n: c_uint,
+            user_data: *mut c_void,
+        ) {
+            let num_bytes_including_nul = n + 1;
+            let bytes = unsafe {
+                slice::from_raw_parts(
+                    start as *const u8,
+                    num_bytes_including_nul as usize,
+                )
+            };
+            let cstr = unsafe { CStr::from_bytes_with_nul_unchecked(bytes) };
+            let buffer = unsafe { &mut *(user_data as *mut CString) };
+            *buffer = cstr.to_owned();
+        }
+
+        let mut cstring = CString::default();
+
+        ctx.with_raw(|ctx| unsafe {
+            sys::get_string(
+                ctx,
+                self.as_raw(),
+                Some(get_string_callback),
+                &mut cstring as *mut CString as *mut c_void,
+            );
+        })?;
+
+        Ok(cstring)
+    }
+}
+
 impl<'a> PathValue for NixValue<'a> {
     type Path = &'a CStr;
 
@@ -742,6 +792,40 @@ impl_try_from_value_for_int!(u32);
 impl_try_from_value_for_int!(u64);
 impl_try_from_value_for_int!(u128);
 impl_try_from_value_for_int!(usize);
+
+macro_rules! impl_try_from_string_value {
+    ($ty:ty) => {
+        impl<V: StringValue> TryFromValue<V> for $ty
+        where
+            V::String: TryInto<Self, Error: ToError>,
+        {
+            #[inline]
+            fn try_from_value(
+                mut value: V,
+                ctx: &mut Context,
+            ) -> Result<Self> {
+                value.force_inline(ctx)?;
+
+                match value.kind() {
+                    ValueKind::String => {
+                        // SAFETY: the value's kind is a string.
+                        let string = unsafe { value.into_string(ctx)? };
+                        string.try_into().map_err(|err| ctx.make_error(err))
+                    },
+                    other => Err(ctx.make_error(TypeMismatchError {
+                        expected: ValueKind::String,
+                        found: other,
+                    })),
+                }
+            }
+        }
+    };
+}
+
+impl_try_from_string_value!(&CStr);
+impl_try_from_string_value!(&str);
+impl_try_from_string_value!(CString);
+impl_try_from_string_value!(String);
 
 #[cfg(all(unix, feature = "std"))]
 impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>

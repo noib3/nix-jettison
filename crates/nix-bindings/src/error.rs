@@ -197,6 +197,31 @@ impl ToError for alloc::ffi::NulError {
     }
 }
 
+impl ToError for alloc::ffi::IntoStringError {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        c"C string contained non-utf8 bytes".into()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+}
+
+impl ToError for core::str::Utf8Error {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+}
+
 impl<Int> ToError for TryFromI64Error<Int> {
     #[inline]
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
