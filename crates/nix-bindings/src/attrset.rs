@@ -323,13 +323,18 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
     fn init_conflicts(&self, ctx: &mut Context) -> Vec<CString> {
         let mut conflicts = Vec::new();
 
+        let mut insert = |key: CString| match conflicts.binary_search(&key) {
+            Ok(_) => panic!("attrset contains duplicate key {key:?}"),
+            Err(idx) => conflicts.insert(idx, key),
+        };
+
         if self.left.len(ctx) <= self.right.len(ctx) {
             let mut left_pairs = self.left.pairs(ctx);
 
             while !left_pairs.is_exhausted() {
                 let key = left_pairs.key(ctx);
                 if self.right.contains_key(key, ctx) {
-                    conflicts.push(key.to_owned());
+                    insert(key.to_owned());
                 }
                 left_pairs.advance(ctx);
             }
@@ -339,7 +344,7 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
             while !right_pairs.is_exhausted() {
                 let key = right_pairs.key(ctx);
                 if self.left.contains_key(key, ctx) {
-                    conflicts.push(key.to_owned());
+                    insert(key.to_owned());
                 }
                 right_pairs.advance(ctx);
             }
