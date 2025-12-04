@@ -14,6 +14,7 @@ pub(crate) struct VendorDeps;
 
 #[derive(nix_bindings::Args, nix_bindings::TryFromValue)]
 #[args(flatten, name = "args")]
+#[try_from(rename_all = "camelCase")]
 pub(crate) struct VendorDepsArgs<'a> {
     pub(crate) pkgs: NixAttrset<'a>,
     pub(crate) cargo_lock: Cow<'a, Path>,

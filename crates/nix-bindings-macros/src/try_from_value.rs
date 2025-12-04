@@ -20,7 +20,7 @@ const MACRO_NAME: &str = "TryFromValue";
 
 #[inline]
 pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
-    let attrs = Attributes::parse(&input.attrs)?;
+    let attrs = Attributes::parse(&input.attrs, AttributePosition::Struct)?;
     let fields = named_fields(&input)?;
 
     let attrset = Ident::new("__attrset", Span::call_site());
@@ -86,23 +86,25 @@ fn named_fields(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
 }
 
 fn try_from_attrset_impl(
-    attrs: &Attributes,
+    struct_attrs: &Attributes,
     fields: &FieldsNamed,
     attrset: &Ident,
     ctx: &Ident,
 ) -> syn::Result<impl ToTokens> {
-    let fields_list = fields
-        .named
-        .iter()
-        .map(|field| field.ident.as_ref().expect("fields are named"))
-        .collect::<Punctuated<_, Comma>>();
+    let mut field_names = Punctuated::<_, Comma>::new();
+    let mut field_initializers = TokenStream::new();
 
-    let mut fields_initializers = TokenStream::new();
+    for field in fields.named.iter() {
+        let field_attrs =
+            Attributes::parse(&field.attrs, AttributePosition::Field)?;
 
-    for field in &fields_list {
-        let mut key_name_str = field.to_string();
+        let attrs = struct_attrs.combine(field_attrs);
 
-        if let Some(rename) = &attrs.rename_all {
+        let field_name = field.ident.as_ref().expect("fields are named");
+
+        let mut key_name_str = field_name.to_string();
+
+        if let Some(rename) = &attrs.rename {
             rename.apply(&mut key_name_str);
         }
 
@@ -115,28 +117,56 @@ fn try_from_attrset_impl(
             })
             .map(|name| Literal::c_string(&name))?;
 
-        fields_initializers.extend(quote! {
-            let #field = #attrset.get(#key_name, #ctx)?;
-        })
+        field_names.push(field_name);
+
+        field_initializers.extend(if attrs.default {
+            quote! {
+                let #field_name = #attrset.get_opt(#key_name, #ctx)?
+                    .unwrap_or_default();
+            }
+        } else {
+            quote! {
+                let #field_name = #attrset.get(#key_name, #ctx)?;
+            }
+        });
     }
 
     Ok(quote! {
-        #fields_initializers
-        Ok(Self { #fields_list })
+        #field_initializers
+        Ok(Self { #field_names })
     })
 }
 
+#[derive(Copy, Clone)]
 struct Attributes {
-    rename_all: Option<RenameAll>,
+    rename: Option<Rename>,
+    default: bool,
 }
 
-enum RenameAll {
+#[derive(Copy, Clone)]
+enum AttributePosition {
+    Field,
+    Struct,
+}
+
+#[derive(Copy, Clone)]
+enum Rename {
     CamelCase,
 }
 
 impl Attributes {
-    fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
-        let mut this = Self { rename_all: None };
+    fn combine(self, other: Self) -> Self {
+        Self {
+            rename: other.rename.or(self.rename),
+            default: self.default || other.default,
+        }
+    }
+
+    fn parse(
+        attrs: &[Attribute],
+        pos: AttributePosition,
+    ) -> syn::Result<Self> {
+        let mut this = Self { rename: None, default: false };
 
         for attr in attrs {
             if !attr.path().is_ident("try_from") {
@@ -145,11 +175,36 @@ impl Attributes {
 
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("rename_all") {
-                    this.rename_all = Some(RenameAll::parse(meta)?);
-                    Ok(())
+                    match pos {
+                        AttributePosition::Struct => {
+                            this.rename = Some(Rename::parse(meta)?);
+                        },
+                        AttributePosition::Field => {
+                            return Err(meta.error(
+                                "`rename_all` attribute is only allowed on \
+                                 structs",
+                            ));
+                        },
+                    }
+                } else if meta.path.is_ident("rename") {
+                    match pos {
+                        AttributePosition::Struct => {
+                            return Err(meta.error(
+                                "`rename` attribute is only allowed on \
+                                 struct fields",
+                            ));
+                        },
+                        AttributePosition::Field => {
+                            this.rename = Some(Rename::parse(meta)?);
+                        },
+                    }
+                } else if meta.path.is_ident("default") {
+                    this.default = true;
                 } else {
-                    Err(meta.error("unsupported attribute"))
+                    return Err(meta.error("unsupported attribute"));
                 }
+
+                Ok(())
             })?;
         }
 
@@ -157,8 +212,8 @@ impl Attributes {
     }
 }
 
-impl RenameAll {
-    fn apply(&self, field_name: &mut String) {
+impl Rename {
+    fn apply(self, field_name: &mut String) {
         match self {
             Self::CamelCase => to_camel_case(field_name),
         }

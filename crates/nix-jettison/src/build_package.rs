@@ -25,7 +25,9 @@ pub(crate) struct BuildPackageArgs<'a> {
     pkgs: NixAttrset<'a>,
     src: &'a Path,
     package: String,
+    #[try_from(default)]
     all_features: bool,
+    #[try_from(default)]
     no_default_features: bool,
 }
 
