@@ -237,7 +237,7 @@ struct MergePairs<'a, L, R, Lp, Rp> {
 impl<'a> NixAttrset<'a> {
     /// TODO: docs.
     #[inline]
-    pub fn get<T: TryFromValue<NixValue<'a>> + 'a>(
+    pub fn get<T: TryFromValue<NixValue<'a>>>(
         self,
         key: &CStr,
         ctx: &mut Context,
@@ -252,7 +252,7 @@ impl<'a> NixAttrset<'a> {
 
     /// TODO: docs.
     #[inline]
-    pub fn get_opt<T: TryFromValue<NixValue<'a>> + 'a>(
+    pub fn get_opt<T: TryFromValue<NixValue<'a>>>(
         self,
         key: &CStr,
         ctx: &mut Context,
@@ -266,7 +266,7 @@ impl<'a> NixAttrset<'a> {
     }
 
     #[inline]
-    fn with_value_inner<'ctx, 'eval, T: 'a>(
+    fn with_value_inner<'ctx, 'eval, T>(
         self,
         key: &CStr,
         fun: impl FnOnce(NixValue<'a>, &'ctx mut Context<'eval>) -> T,

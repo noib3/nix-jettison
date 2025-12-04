@@ -25,6 +25,7 @@ pub(crate) struct BuildPackageArgs<'a> {
     pkgs: NixAttrset<'a>,
     src: &'a Path,
     package: String,
+    features: Vec<String>,
     #[try_from(default)]
     all_features: bool,
     #[try_from(default)]
@@ -105,7 +106,7 @@ impl BuildPackageArgs<'_> {
         _ctx: &mut Context,
     ) -> Result<CliFeatures, BuildPackageError> {
         CliFeatures::from_command_line(
-            &[],
+            &self.features,
             self.all_features,
             !self.no_default_features,
         )

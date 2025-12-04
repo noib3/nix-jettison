@@ -124,7 +124,7 @@ struct ListValue<T>(T);
 impl<'a> NixList<'a> {
     /// TODO: docs.
     #[inline]
-    pub fn get<T: TryFromValue<NixValue<'a>> + 'a>(
+    pub fn get<T: TryFromValue<NixValue<'a>>>(
         self,
         idx: c_uint,
         ctx: &mut Context,
@@ -137,7 +137,7 @@ impl<'a> NixList<'a> {
     }
 
     #[inline]
-    fn with_value_inner<'ctx, 'eval, T: 'a>(
+    fn with_value_inner<'ctx, 'eval, T>(
         self,
         idx: c_uint,
         fun: impl FnOnce(NixValue<'a>, &'ctx mut Context<'eval>) -> T,

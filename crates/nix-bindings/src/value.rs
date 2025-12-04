@@ -2,6 +2,7 @@
 
 use alloc::borrow::{Cow, ToOwned};
 use alloc::ffi::CString;
+use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_uint, c_void};
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -11,6 +12,7 @@ use core::slice;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::error::{Result, ToError, TryFromI64Error, TypeMismatchError};
+use crate::list::{List, NixList};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, PrimOp};
 use crate::primop::PrimOpImpl;
@@ -189,9 +191,7 @@ pub trait Values {
         }
         #[cfg(not(nightly))]
         {
-            (0..(Self::LEN as usize))
-                .map(constructor)
-                .collect::<alloc::vec::Vec<T>>()
+            (0..(Self::LEN as usize)).map(constructor).collect::<Vec<T>>()
         }
     }
 }
@@ -860,6 +860,27 @@ impl_try_from_string_value!(&CStr);
 impl_try_from_string_value!(&str);
 impl_try_from_string_value!(CString);
 impl_try_from_string_value!(alloc::string::String);
+
+impl<'a, T> TryFromValue<NixList<'a>> for Vec<T>
+where
+    T: TryFromValue<NixValue<'a>>,
+{
+    #[inline]
+    fn try_from_value(list: NixList<'a>, ctx: &mut Context) -> Result<Self> {
+        (0..list.len()).map(|idx| list.get(idx, ctx)).collect()
+    }
+}
+
+impl<'a, T> TryFromValue<NixValue<'a>> for Vec<T>
+where
+    T: TryFromValue<NixValue<'a>>,
+{
+    #[inline]
+    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
+        NixList::try_from_value(value, ctx)
+            .and_then(|list| Self::try_from_value(list, ctx))
+    }
+}
 
 #[cfg(all(unix, feature = "std"))]
 impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>
