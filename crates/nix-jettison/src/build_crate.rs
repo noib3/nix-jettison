@@ -2,8 +2,11 @@ use std::path::Path;
 
 use cargo::core::compiler::CrateType;
 use compact_str::CompactString;
-use nix_bindings::prelude::{Attrset, NixAttrset, NixDerivation};
+use either::Either;
+use nix_bindings::prelude::{Attrset, NixAttrset, NixDerivation, Value};
 use semver::Version;
+
+use crate::vendor_deps::VendorDir;
 
 /// The arguments accepted by [`pkgs.buildRustCrate`][buildRustCrate].
 ///
@@ -19,6 +22,7 @@ pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
 #[attrset(rename_all = "camelCase")]
 pub(crate) struct MandatoryBuildCrateArgs<'src> {
     pub(crate) crate_name: CompactString,
+    #[attrset(with_value = |this| this.src_value())]
     pub(crate) src: CrateSource<'src>,
     pub(crate) version: Version,
 }
@@ -27,11 +31,7 @@ pub(crate) struct MandatoryBuildCrateArgs<'src> {
 pub(crate) enum CrateSource<'src> {
     /// The crate is a 3rd-party dependency which has been vendored under the
     /// given directory.
-    Vendored {
-        /// An absolute path in the Nix store pointing to the directory
-        /// containing the vendored dependencies.
-        vendor_dir: &'src Path,
-    },
+    Vendored { vendor_dir: &'src VendorDir },
 
     /// The crate source is in the workspace of the root package being built.
     Workspace {
@@ -138,18 +138,6 @@ pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) rust: Option<NixDerivation<'a>>,
 }
 
-impl<'src, Dep> From<MandatoryBuildCrateArgs<'src>>
-    for BuildCrateArgs<'_, 'src, Dep>
-{
-    fn from(mandatory: MandatoryBuildCrateArgs<'src>) -> Self {
-        Self {
-            mandatory,
-            optional: OptionalBuildCrateArgs::default(),
-            global: GlobalBuildCrateArgs::default(),
-        }
-    }
-}
-
 impl<Dep> BuildCrateArgs<'_, '_, Dep>
 where
     OptionalBuildCrateArgs<Dep>: Attrset,
@@ -161,6 +149,33 @@ where
                 .borrow()
                 .concat(self.optional.borrow())
                 .concat(self.global.borrow())
+        }
+    }
+}
+
+impl MandatoryBuildCrateArgs<'_> {
+    fn src_value(&self) -> impl Value {
+        match &self.src {
+            CrateSource::Vendored { vendor_dir } => Either::Left(
+                vendor_dir
+                    .get_package_src(self.crate_name.as_str(), &self.version),
+            ),
+
+            CrateSource::Workspace { workspace_root, path_in_workspace } => {
+                Either::Right(workspace_root.join(path_in_workspace.as_str()))
+            },
+        }
+    }
+}
+
+impl<'src, Dep> From<MandatoryBuildCrateArgs<'src>>
+    for BuildCrateArgs<'_, 'src, Dep>
+{
+    fn from(mandatory: MandatoryBuildCrateArgs<'src>) -> Self {
+        Self {
+            mandatory,
+            optional: OptionalBuildCrateArgs::default(),
+            global: GlobalBuildCrateArgs::default(),
         }
     }
 }

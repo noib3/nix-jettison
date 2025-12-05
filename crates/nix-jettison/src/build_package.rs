@@ -159,11 +159,15 @@ impl BuildGraph {
     ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
         let pkg_id = package.package_id();
 
-        let src = if pkg_id.source_id().is_path() {
-            Cow::Borrowed(package.root())
-        } else {
-            Cow::Owned(vendor_dir.get_package_src(package))
-        };
+        let src =
+            if pkg_id.source_id().is_path() {
+                Cow::Borrowed(package.root())
+            } else {
+                Cow::Owned(vendor_dir.get_package_src(
+                    package.name().as_str(),
+                    package.version(),
+                ))
+            };
 
         let features = resolve
             .features(pkg_id)
@@ -179,10 +183,13 @@ impl BuildGraph {
             }
         });
 
+        // See https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/default.nix#L232-L251
+        // for the list of arguments processed by `buildRustCrate`.
         let args = attrset! {
+            src: src,
+            release: true,
             crateName: pkg_id.name().as_str(),
             version: pkg_id.version().to_string(),
-            src: src,
             dependencies: deps.into_value(),
             features: features,
             edition: package.manifest().edition().to_string(),

@@ -1,13 +1,14 @@
 use core::ffi::CStr;
+use core::fmt::Display;
 use core::result::Result;
 use std::borrow::Cow;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use cargo::core::Package;
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
+use semver::Version;
 
 /// Vendors the dependencies of a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -94,11 +95,12 @@ struct CreateVendorDirFuns<'pkgs, 'builtins> {
 }
 
 impl VendorDir {
-    pub(crate) fn get_package_src(&self, pkg: &Package) -> PathBuf {
-        let dir_name = Self::dir_name(
-            pkg.name().as_str(),
-            pkg.version().to_string().as_str(),
-        );
+    pub(crate) fn get_package_src(
+        &self,
+        pkg_name: &str,
+        pkg_version: &Version,
+    ) -> PathBuf {
+        let dir_name = Self::dir_name(pkg_name, pkg_version);
         self.out_path.join(dir_name)
     }
 
@@ -164,7 +166,7 @@ impl VendorDir {
         Ok(Self { out_path, derivation })
     }
 
-    fn dir_name(pkg_name: &str, pkg_version: &str) -> String {
+    fn dir_name(pkg_name: &str, pkg_version: impl Display) -> String {
         format!("{pkg_name}-{pkg_version}")
     }
 }
