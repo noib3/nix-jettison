@@ -2,7 +2,7 @@ use std::path::Path;
 
 use cargo::core::compiler::CrateType;
 use compact_str::CompactString;
-use nix_bindings::prelude::{NixAttrset, NixDerivation};
+use nix_bindings::prelude::{Attrset, NixAttrset, NixDerivation};
 use semver::Version;
 
 /// The arguments accepted by [`pkgs.buildRustCrate`][buildRustCrate].
@@ -14,7 +14,7 @@ pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
     pub(crate) global: GlobalBuildCrateArgs<'global>,
 }
 
-/// The mandatory,, crate-specific arguments accepted by `pkgs.buildRustCrate`.
+/// The mandatory, crate-specific arguments accepted by `pkgs.buildRustCrate`.
 #[derive(nix_bindings::Attrset)]
 #[attrset(rename_all = "camelCase")]
 pub(crate) struct MandatoryBuildCrateArgs<'src> {
@@ -23,7 +23,7 @@ pub(crate) struct MandatoryBuildCrateArgs<'src> {
     pub(crate) version: Version,
 }
 
-/// The source path of a crate being built.
+/// The path to a crate's source directory.
 pub(crate) enum CrateSource<'src> {
     /// The crate is a 3rd-party dependency which has been vendored under the
     /// given directory.
@@ -47,7 +47,7 @@ pub(crate) enum CrateSource<'src> {
 }
 
 /// The optional, crate-specific arguments accepted by `pkgs.buildRustCrate`.
-#[derive(Default, nix_bindings::Attrset)]
+#[derive(cauchy::Default, nix_bindings::Attrset)]
 #[attrset(rename_all = "camelCase")]
 pub(crate) struct OptionalBuildCrateArgs<Dep> {
     #[attrset(skip_if = Vec::is_empty)]
@@ -56,7 +56,7 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) build: Option<String>,
 
-    #[attrset(skip_if = Option::is_none)]
+    #[attrset(skip_if = Vec::is_empty)]
     pub(crate) build_dependencies: Vec<Dep>,
 
     /// This is derived state which can be specified in Cargo profiles (for
@@ -136,4 +136,31 @@ pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) crate_overrides: Option<NixAttrset<'a>>,
     pub(crate) release: Option<bool>,
     pub(crate) rust: Option<NixDerivation<'a>>,
+}
+
+impl<'src, Dep> From<MandatoryBuildCrateArgs<'src>>
+    for BuildCrateArgs<'_, 'src, Dep>
+{
+    fn from(mandatory: MandatoryBuildCrateArgs<'src>) -> Self {
+        Self {
+            mandatory,
+            optional: OptionalBuildCrateArgs::default(),
+            global: GlobalBuildCrateArgs::default(),
+        }
+    }
+}
+
+impl<Dep> BuildCrateArgs<'_, '_, Dep>
+where
+    OptionalBuildCrateArgs<Dep>: Attrset,
+{
+    pub(crate) fn to_attrset(&self) -> impl Attrset {
+        // SAFETY: the three inner attrsets don't contain any overlapping keys.
+        unsafe {
+            self.mandatory
+                .borrow()
+                .concat(self.optional.borrow())
+                .concat(self.global.borrow())
+        }
+    }
 }
