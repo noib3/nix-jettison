@@ -6,6 +6,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use compact_str::{CompactString, format_compact};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 use semver::Version;
@@ -166,8 +167,8 @@ impl VendorDir {
         Ok(Self { out_path, derivation })
     }
 
-    fn dir_name(pkg_name: &str, pkg_version: impl Display) -> String {
-        format!("{pkg_name}-{pkg_version}")
+    fn dir_name(pkg_name: &str, pkg_version: impl Display) -> CompactString {
+        format_compact!("{pkg_name}-{pkg_version}")
     }
 }
 

@@ -737,6 +737,24 @@ impl PathValue for std::path::PathBuf {
     }
 }
 
+#[cfg(feature = "compact_str")]
+impl Value for compact_str::CompactString {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.as_str().write(dest, namespace, ctx) }
+    }
+}
+
 #[cfg(feature = "either")]
 impl<L: Value, R: Value> Value for either::Either<L, R> {
     #[inline]
