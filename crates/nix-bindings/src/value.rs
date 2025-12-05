@@ -317,6 +317,129 @@ impl Value for Null {
     }
 }
 
+impl Value for NixValue<'_> {
+    #[inline]
+    fn force_inline(&mut self, ctx: &mut Context) -> Result<()> {
+        // TODO: this shouldn't be infallible.
+        unsafe { cpp::force_value(ctx.state_mut().as_ptr(), self.as_raw()) };
+        Ok(())
+    }
+
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        // 'nix_get_type' errors when the value pointer is null or when the
+        // value is not initizialized, but having a NixValue guarantees neither
+        // of those can happen, so we can use a null context.
+        let r#type = unsafe { sys::get_type(ptr::null_mut(), self.as_raw()) };
+
+        match r#type {
+            sys::ValueType_NIX_TYPE_ATTRS => ValueKind::Attrset,
+            sys::ValueType_NIX_TYPE_BOOL => ValueKind::Bool,
+            sys::ValueType_NIX_TYPE_EXTERNAL => ValueKind::External,
+            sys::ValueType_NIX_TYPE_FLOAT => ValueKind::Float,
+            sys::ValueType_NIX_TYPE_FUNCTION => ValueKind::Function,
+            sys::ValueType_NIX_TYPE_INT => ValueKind::Int,
+            sys::ValueType_NIX_TYPE_LIST => ValueKind::List,
+            sys::ValueType_NIX_TYPE_NULL => ValueKind::Null,
+            sys::ValueType_NIX_TYPE_PATH => ValueKind::Path,
+            sys::ValueType_NIX_TYPE_STRING => ValueKind::String,
+            sys::ValueType_NIX_TYPE_THUNK => ValueKind::Thunk,
+            other => unreachable!("invalid ValueType: {other}"),
+        }
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        _: impl Namespace,
+        _: &mut Context,
+    ) -> Result<()> {
+        // 'nix_copy_value' errors when:
+        //
+        // 1. the destination pointer is null;
+        // 2. the destination value is already initialized;
+        // 3. the source pointer is null;
+        // 4. the source value is not initialized.
+        //
+        // Having a NixValue guarantees that (3) and (4) cannot happen, having
+        // a NonNull destination pointer guarantees that (1) cannot happen, and
+        // the API contract for this method guarantees that (2) cannot happen,
+        // so we can use a null context.
+        unsafe {
+            sys::copy_value(ptr::null_mut(), dest.as_ptr(), self.as_raw());
+        };
+        Ok(())
+    }
+}
+
+impl BoolValue for NixValue<'_> {
+    #[inline]
+    unsafe fn into_bool(self, _: &mut Context) -> Result<bool> {
+        Ok(unsafe { sys::get_bool(ptr::null_mut(), self.as_raw()) })
+    }
+}
+
+impl IntValue for NixValue<'_> {
+    #[inline]
+    unsafe fn into_int(self, _: &mut Context) -> Result<i64> {
+        Ok(unsafe { sys::get_int(ptr::null_mut(), self.as_raw()) })
+    }
+}
+
+impl<'a> StringValue for NixValue<'a> {
+    type String = CString;
+
+    #[inline]
+    unsafe fn into_string(self, ctx: &mut Context) -> Result<Self::String> {
+        unsafe extern "C" fn get_string_callback(
+            start: *const c_char,
+            n: c_uint,
+            user_data: *mut c_void,
+        ) {
+            let num_bytes_including_nul = n + 1;
+            let bytes = unsafe {
+                slice::from_raw_parts(
+                    start as *const u8,
+                    num_bytes_including_nul as usize,
+                )
+            };
+            let cstr = unsafe { CStr::from_bytes_with_nul_unchecked(bytes) };
+            let buffer = unsafe { &mut *(user_data as *mut CString) };
+            *buffer = cstr.to_owned();
+        }
+
+        let mut cstring = CString::default();
+
+        ctx.with_raw(|ctx| unsafe {
+            sys::get_string(
+                ctx,
+                self.as_raw(),
+                Some(get_string_callback),
+                &mut cstring as *mut CString as *mut c_void,
+            );
+        })?;
+
+        Ok(cstring)
+    }
+}
+
+impl<'a> PathValue for NixValue<'a> {
+    type Path = &'a CStr;
+
+    #[inline]
+    unsafe fn into_path_string(self, _: &mut Context) -> Result<Self::Path> {
+        let cstr_ptr =
+            unsafe { sys::get_path_string(ptr::null_mut(), self.as_raw()) };
+
+        // SAFETY: the [docs] guarantee that the returned pointer is
+        // valid for as long as the value is alive.
+        //
+        // [docs]: https://hydra.nixos.org/build/313564006/download/1/html/group__value__extract.html#ga3420055c22accfd07cc5537210d748a9
+        Ok(unsafe { CStr::from_ptr(cstr_ptr) })
+    }
+}
+
 impl Value for bool {
     #[inline]
     fn kind(&self) -> ValueKind {
@@ -614,34 +737,13 @@ impl PathValue for std::path::PathBuf {
     }
 }
 
-impl Value for NixValue<'_> {
-    #[inline]
-    fn force_inline(&mut self, ctx: &mut Context) -> Result<()> {
-        // TODO: this shouldn't be infallible.
-        unsafe { cpp::force_value(ctx.state_mut().as_ptr(), self.as_raw()) };
-        Ok(())
-    }
-
+#[cfg(feature = "either")]
+impl<L: Value, R: Value> Value for either::Either<L, R> {
     #[inline]
     fn kind(&self) -> ValueKind {
-        // 'nix_get_type' errors when the value pointer is null or when the
-        // value is not initizialized, but having a NixValue guarantees neither
-        // of those can happen, so we can use a null context.
-        let r#type = unsafe { sys::get_type(ptr::null_mut(), self.as_raw()) };
-
-        match r#type {
-            sys::ValueType_NIX_TYPE_ATTRS => ValueKind::Attrset,
-            sys::ValueType_NIX_TYPE_BOOL => ValueKind::Bool,
-            sys::ValueType_NIX_TYPE_EXTERNAL => ValueKind::External,
-            sys::ValueType_NIX_TYPE_FLOAT => ValueKind::Float,
-            sys::ValueType_NIX_TYPE_FUNCTION => ValueKind::Function,
-            sys::ValueType_NIX_TYPE_INT => ValueKind::Int,
-            sys::ValueType_NIX_TYPE_LIST => ValueKind::List,
-            sys::ValueType_NIX_TYPE_NULL => ValueKind::Null,
-            sys::ValueType_NIX_TYPE_PATH => ValueKind::Path,
-            sys::ValueType_NIX_TYPE_STRING => ValueKind::String,
-            sys::ValueType_NIX_TYPE_THUNK => ValueKind::Thunk,
-            other => unreachable!("invalid ValueType: {other}"),
+        match self {
+            Self::Left(left) => left.kind(),
+            Self::Right(right) => right.kind(),
         }
     }
 
@@ -649,91 +751,13 @@ impl Value for NixValue<'_> {
     unsafe fn write(
         &self,
         dest: NonNull<sys::Value>,
-        _: impl Namespace,
-        _: &mut Context,
+        namespace: impl Namespace,
+        ctx: &mut Context,
     ) -> Result<()> {
-        // 'nix_copy_value' errors when:
-        //
-        // 1. the destination pointer is null;
-        // 2. the destination value is already initialized;
-        // 3. the source pointer is null;
-        // 4. the source value is not initialized.
-        //
-        // Having a NixValue guarantees that (3) and (4) cannot happen, having
-        // a NonNull destination pointer guarantees that (1) cannot happen, and
-        // the API contract for this method guarantees that (2) cannot happen,
-        // so we can use a null context.
-        unsafe {
-            sys::copy_value(ptr::null_mut(), dest.as_ptr(), self.as_raw());
-        };
-        Ok(())
-    }
-}
-
-impl BoolValue for NixValue<'_> {
-    #[inline]
-    unsafe fn into_bool(self, _: &mut Context) -> Result<bool> {
-        Ok(unsafe { sys::get_bool(ptr::null_mut(), self.as_raw()) })
-    }
-}
-
-impl IntValue for NixValue<'_> {
-    #[inline]
-    unsafe fn into_int(self, _: &mut Context) -> Result<i64> {
-        Ok(unsafe { sys::get_int(ptr::null_mut(), self.as_raw()) })
-    }
-}
-
-impl<'a> StringValue for NixValue<'a> {
-    type String = CString;
-
-    #[inline]
-    unsafe fn into_string(self, ctx: &mut Context) -> Result<Self::String> {
-        unsafe extern "C" fn get_string_callback(
-            start: *const c_char,
-            n: c_uint,
-            user_data: *mut c_void,
-        ) {
-            let num_bytes_including_nul = n + 1;
-            let bytes = unsafe {
-                slice::from_raw_parts(
-                    start as *const u8,
-                    num_bytes_including_nul as usize,
-                )
-            };
-            let cstr = unsafe { CStr::from_bytes_with_nul_unchecked(bytes) };
-            let buffer = unsafe { &mut *(user_data as *mut CString) };
-            *buffer = cstr.to_owned();
+        match self {
+            Self::Left(left) => unsafe { left.write(dest, namespace, ctx) },
+            Self::Right(right) => unsafe { right.write(dest, namespace, ctx) },
         }
-
-        let mut cstring = CString::default();
-
-        ctx.with_raw(|ctx| unsafe {
-            sys::get_string(
-                ctx,
-                self.as_raw(),
-                Some(get_string_callback),
-                &mut cstring as *mut CString as *mut c_void,
-            );
-        })?;
-
-        Ok(cstring)
-    }
-}
-
-impl<'a> PathValue for NixValue<'a> {
-    type Path = &'a CStr;
-
-    #[inline]
-    unsafe fn into_path_string(self, _: &mut Context) -> Result<Self::Path> {
-        let cstr_ptr =
-            unsafe { sys::get_path_string(ptr::null_mut(), self.as_raw()) };
-
-        // SAFETY: the [docs] guarantee that the returned pointer is
-        // valid for as long as the value is alive.
-        //
-        // [docs]: https://hydra.nixos.org/build/313564006/download/1/html/group__value__extract.html#ga3420055c22accfd07cc5537210d748a9
-        Ok(unsafe { CStr::from_ptr(cstr_ptr) })
     }
 }
 
