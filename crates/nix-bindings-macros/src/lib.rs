@@ -2,6 +2,7 @@
 
 mod args;
 mod attrset;
+mod attrset_derive;
 mod entry;
 mod list;
 mod primop;
@@ -21,6 +22,15 @@ pub fn args(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn attrset(input: TokenStream) -> TokenStream {
     attrset::expand(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// TODO: docs
+#[proc_macro_derive(Attrset, attributes(attrset))]
+pub fn attrset_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    attrset_derive::expand(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
