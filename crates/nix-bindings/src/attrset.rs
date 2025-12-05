@@ -81,6 +81,20 @@ pub trait Attrset {
     }
 
     /// TODO: docs.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that there are no overlapping keys between
+    /// `self` and `other`.
+    #[inline(always)]
+    unsafe fn concat<T: Attrset>(self, other: T) -> Concat<Self, T>
+    where
+        Self: Sized,
+    {
+        Concat { left: self, right: other }
+    }
+
+    /// TODO: docs.
     #[inline(always)]
     fn contains_key(&self, key: &CStr, ctx: &mut Context) -> bool {
         struct NoOp;
@@ -183,6 +197,13 @@ pub struct LiteralAttrset<Keys, Values> {
     values: Values,
 }
 
+/// The attribute set type created by [`concat`](Attrset::concat)enating two
+/// attribute sets.
+pub struct Concat<Left, Right> {
+    left: Left,
+    right: Right,
+}
+
 /// The attribute set type created by [`merge`](Attrset::merge)ing two
 /// attribute sets.
 pub struct Merge<Left, Right> {
@@ -224,6 +245,12 @@ struct NixAttrsetPairs<'set, 'eval> {
 struct LiteralAttrsetPairs<'a, K, V> {
     attrset: &'a LiteralAttrset<K, V>,
     current_idx: c_uint,
+}
+
+/// The [`Pairs`] implementation returned by [`Concat::pairs()`].
+struct ConcatPairs<Lp, Rp> {
+    left_pairs: Lp,
+    right_pairs: Rp,
 }
 
 /// The [`Pairs`] implementation returned by [`Merge::pairs()`].
@@ -489,6 +516,60 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
 }
 
 impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe {
+            Attrset::borrow(self).into_value().write(dest, namespace, ctx)
+        }
+    }
+}
+
+impl<L: Attrset, R: Attrset> Attrset for Concat<L, R> {
+    #[inline]
+    fn len(&self, ctx: &mut Context) -> c_uint {
+        self.left.len(ctx) + self.right.len(ctx)
+    }
+
+    #[inline]
+    fn pairs<'this, 'eval>(
+        &'this self,
+        ctx: &mut Context<'eval>,
+    ) -> impl Pairs + use<'this, 'eval, L, R> {
+        ConcatPairs {
+            left_pairs: self.left.pairs(ctx),
+            right_pairs: self.right.pairs(ctx),
+        }
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        key: &CStr,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> Option<T> {
+        if self.left.contains_key(key, ctx) {
+            self.left.with_value(key, fun, ctx)
+        } else {
+            self.right.with_value(key, fun, ctx)
+        }
+    }
+}
+
+impl<L, R> Value for Concat<L, R>
+where
+    Self: Attrset,
+{
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::Attrset
@@ -863,6 +944,48 @@ where
             let out = self.merge.right.with_value(key, fun, ctx);
             out.expect("key is conflicting, so it must exist in right attrset")
         } else if !self.left_pairs.is_exhausted() {
+            self.left_pairs.with_value(fun, ctx)
+        } else {
+            self.right_pairs.with_value(fun, ctx)
+        }
+    }
+}
+
+impl<Lp, Rp> Pairs for ConcatPairs<Lp, Rp>
+where
+    Lp: Pairs,
+    Rp: Pairs,
+{
+    #[inline]
+    fn advance(&mut self, ctx: &mut Context) {
+        if !self.left_pairs.is_exhausted() {
+            self.left_pairs.advance(ctx);
+        } else {
+            self.right_pairs.advance(ctx);
+        }
+    }
+
+    #[inline]
+    fn is_exhausted(&self) -> bool {
+        self.left_pairs.is_exhausted() && self.right_pairs.is_exhausted()
+    }
+
+    #[inline]
+    fn key(&self, ctx: &mut Context) -> &CStr {
+        if !self.left_pairs.is_exhausted() {
+            self.left_pairs.key(ctx)
+        } else {
+            self.right_pairs.key(ctx)
+        }
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        if !self.left_pairs.is_exhausted() {
             self.left_pairs.with_value(fun, ctx)
         } else {
             self.right_pairs.with_value(fun, ctx)
