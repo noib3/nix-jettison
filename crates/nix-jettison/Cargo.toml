@@ -13,9 +13,11 @@ crate-type = ["cdylib"]
 anyhow = { workspace = true }
 cargo = { workspace = true, default-features = true }
 cauchy = { workspace = true }
+compact_str = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
 nix-bindings = { workspace = true, features = ["either", "std"] }
+semver = { workspace = true }
 
 [lints]
 workspace = true
