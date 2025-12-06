@@ -17,6 +17,7 @@ use crate::build_crate::{
     BuildCrateArgs,
     Dependencies,
     OptionalBuildCrateArgs,
+    OptionalBuildCrateArgsInner,
     RequiredBuildCrateArgs,
 };
 
@@ -184,7 +185,10 @@ impl<'args> BuildGraph<'args> {
             required: RequiredBuildCrateArgs::new(package, args),
             optional: OptionalBuildCrateArgs {
                 dependencies,
-                inner: package.into(),
+                inner: OptionalBuildCrateArgsInner::new(
+                    package,
+                    &ws_resolve.targeted_resolve,
+                ),
             },
             global: Default::default(),
         };

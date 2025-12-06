@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use cargo::core::Package;
 use cargo::core::compiler::CrateType;
-use compact_str::CompactString;
+use cargo::core::{Package, Resolve};
+use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::*;
 use semver::Version;
@@ -49,8 +49,7 @@ pub(crate) enum CrateSource<'src> {
 }
 
 /// The optional, crate-specific arguments accepted by `pkgs.buildRustCrate`.
-#[derive(cauchy::Default, nix_bindings::Attrset)]
-#[attrset(rename_all = "camelCase")]
+#[derive(cauchy::Default)]
 pub(crate) struct OptionalBuildCrateArgs<Dep> {
     pub(crate) inner: OptionalBuildCrateArgsInner,
     pub(crate) dependencies: Dependencies<Dep>,
@@ -130,12 +129,11 @@ pub(crate) struct OptionalBuildCrateArgsInner {
 }
 
 #[derive(cauchy::Default, nix_bindings::Attrset)]
-#[attrset(rename_all = "camelCase")]
 pub(crate) struct Dependencies<Dep> {
-    #[attrset(skip_if = Vec::is_empty)]
+    #[attrset(rename = "dependencies", skip_if = Vec::is_empty)]
     pub(crate) normal: Vec<Dep>,
 
-    #[attrset(skip_if = Vec::is_empty)]
+    #[attrset(rename = "buildDependencies", skip_if = Vec::is_empty)]
     pub(crate) build: Vec<Dep>,
 }
 
@@ -151,7 +149,18 @@ pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) rust: Option<NixDerivation<'a>>,
 }
 
-impl RequiredBuildCrateArgs<'_> {
+impl<'src> RequiredBuildCrateArgs<'src> {
+    pub(crate) fn new(
+        package: &Package,
+        args: &ResolveBuildGraphArgs<'src>,
+    ) -> Self {
+        Self {
+            crate_name: package.name().as_str().into(),
+            src: CrateSource::new(package, args),
+            version: package.version().clone(),
+        }
+    }
+
     fn src_value(&self) -> impl Value {
         match &self.src {
             CrateSource::Vendored { vendor_dir } => {
@@ -164,73 +173,6 @@ impl RequiredBuildCrateArgs<'_> {
             CrateSource::Workspace { workspace_root, path_in_workspace } => {
                 Either::Right(workspace_root.join(path_in_workspace.as_str()))
             },
-        }
-    }
-}
-
-impl<Dep> OptionalBuildCrateArgs<Dep> {
-    pub(crate) fn map_deps<NewDep>(
-        self,
-        fun: impl FnMut(Dep) -> NewDep + Clone,
-    ) -> OptionalBuildCrateArgs<NewDep> {
-        OptionalBuildCrateArgs {
-            inner: self.inner,
-            dependencies: self.dependencies.map(fun),
-        }
-    }
-
-    fn to_attrset(&self) -> impl Attrset
-    where
-        Dep: Value,
-    {
-        // SAFETY: 'inner' and 'dependencies' don't have any overlapping keys.
-        unsafe { self.inner.borrow().concat(self.dependencies.to_attrset()) }
-    }
-}
-
-impl<Dep> Dependencies<Dep> {
-    pub(crate) fn map<NewDep>(
-        self,
-        fun: impl FnMut(Dep) -> NewDep + Clone,
-    ) -> Dependencies<NewDep> {
-        Dependencies {
-            build: self.build.into_iter().map(fun.clone()).collect(),
-            normal: self.normal.into_iter().map(fun).collect(),
-        }
-    }
-
-    fn to_attrset(&self) -> impl Attrset
-    where
-        Dep: Value,
-    {
-        attrset! {
-            dependencies: &*self.normal,
-            buildDependencies: &*self.build,
-        }
-    }
-}
-
-impl<Dep: Value> ToValue for BuildCrateArgs<'_, '_, Dep> {
-    fn to_value(&self) -> impl Value {
-        // SAFETY: the three inner attrsets don't contain any overlapping keys.
-        unsafe {
-            self.required
-                .borrow()
-                .concat(self.optional.to_attrset())
-                .concat(self.global.borrow())
-        }
-    }
-}
-
-impl<'src> RequiredBuildCrateArgs<'src> {
-    pub(crate) fn new(
-        package: &Package,
-        args: &ResolveBuildGraphArgs<'src>,
-    ) -> Self {
-        Self {
-            crate_name: package.name().as_str().into(),
-            src: CrateSource::new(package, args),
-            version: package.version().clone(),
         }
     }
 }
@@ -257,8 +199,83 @@ impl<'src> CrateSource<'src> {
     }
 }
 
-impl From<&Package> for OptionalBuildCrateArgsInner {
-    fn from(_package: &Package) -> Self {
-        todo!();
+impl<Dep> OptionalBuildCrateArgs<Dep> {
+    pub(crate) fn map_deps<NewDep>(
+        self,
+        fun: impl FnMut(Dep) -> NewDep + Clone,
+    ) -> OptionalBuildCrateArgs<NewDep> {
+        OptionalBuildCrateArgs {
+            inner: self.inner,
+            dependencies: self.dependencies.map(fun),
+        }
+    }
+
+    fn to_attrset(&self) -> impl Attrset
+    where
+        Dep: Value,
+    {
+        // SAFETY: 'inner' and 'dependencies' don't have any overlapping keys.
+        unsafe { self.inner.borrow().concat(self.dependencies.borrow()) }
+    }
+}
+
+impl OptionalBuildCrateArgsInner {
+    pub(crate) fn new(package: &Package, resolve: &Resolve) -> Self {
+        let manifest = package.manifest();
+        let metadata = manifest.metadata();
+        let package_id = package.package_id();
+
+        Self {
+            authors: metadata.authors.clone(),
+            build: None,
+            codegen_units: None,
+            crate_bin: None,
+            crate_renames: Vec::new(),
+            description: None,
+            edition: Some(manifest.edition().to_compact_string()),
+            extra_rustc_opts: Vec::new(),
+            extra_rustc_opts_for_build_rs: Vec::new(),
+            features: resolve
+                .features(package_id)
+                .iter()
+                .map(|feat| feat.as_str().into())
+                .collect(),
+            homepage: metadata.homepage.as_deref().map(Into::into),
+            lib_name: None,
+            lib_path: None,
+            license_file: metadata.license_file.as_deref().map(Into::into),
+            links: metadata.links.as_deref().map(Into::into),
+            readme: metadata.readme.as_deref().map(Into::into),
+            repository: metadata.repository.as_deref().map(Into::into),
+            rust_version: metadata
+                .rust_version
+                .as_ref()
+                .map(|v| v.to_compact_string()),
+            r#type: Vec::new(),
+        }
+    }
+}
+
+impl<Dep> Dependencies<Dep> {
+    pub(crate) fn map<NewDep>(
+        self,
+        fun: impl FnMut(Dep) -> NewDep + Clone,
+    ) -> Dependencies<NewDep> {
+        Dependencies {
+            build: self.build.into_iter().map(fun.clone()).collect(),
+            normal: self.normal.into_iter().map(fun).collect(),
+        }
+    }
+}
+
+impl<Dep: Value> ToValue for BuildCrateArgs<'_, '_, Dep> {
+    fn to_value(&self) -> impl Value {
+        // SAFETY: the three inner attrsets don't contain any overlapping keys.
+        unsafe {
+            self.required
+                .borrow()
+                .concat(self.optional.to_attrset())
+                .concat(self.global.borrow())
+        }
     }
 }
