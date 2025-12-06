@@ -7,6 +7,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use cargo::GlobalContext;
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
 use cargo::core::{
@@ -17,8 +18,7 @@ use cargo::core::{
     Shell,
     Workspace,
 };
-use cargo::ops::WorkspaceResolve;
-use cargo::{GlobalContext, ops};
+use cargo::ops::{self, WorkspaceResolve};
 use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::vendor_deps::{

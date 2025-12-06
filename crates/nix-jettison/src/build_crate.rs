@@ -3,7 +3,7 @@ use std::path::Path;
 use cargo::core::compiler::CrateType;
 use compact_str::CompactString;
 use either::Either;
-use nix_bindings::prelude::{Attrset, NixAttrset, NixDerivation, Value};
+use nix_bindings::prelude::*;
 use semver::Version;
 
 use crate::vendor_deps::VendorDir;
@@ -12,15 +12,15 @@ use crate::vendor_deps::VendorDir;
 ///
 /// [buildRustCrate]: https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/default.nix
 pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
-    pub(crate) mandatory: MandatoryBuildCrateArgs<'src>,
+    pub(crate) required: RequiredBuildCrateArgs<'src>,
     pub(crate) optional: OptionalBuildCrateArgs<Dep>,
     pub(crate) global: GlobalBuildCrateArgs<'global>,
 }
 
-/// The mandatory, crate-specific arguments accepted by `pkgs.buildRustCrate`.
+/// The required, crate-specific arguments accepted by `pkgs.buildRustCrate`.
 #[derive(nix_bindings::Attrset)]
 #[attrset(rename_all = "camelCase")]
-pub(crate) struct MandatoryBuildCrateArgs<'src> {
+pub(crate) struct RequiredBuildCrateArgs<'src> {
     pub(crate) crate_name: CompactString,
     #[attrset(with_value = |this| this.src_value())]
     pub(crate) src: CrateSource<'src>,
@@ -126,7 +126,7 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
     pub(crate) r#type: Vec<CrateType>,
 }
 
-/// Unlike [`MandatoryBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
+/// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
 /// arguments don't depend on the particular crate being built.
 #[derive(Default, nix_bindings::Attrset)]
 #[attrset(rename_all = "camelCase", skip_if = Option::is_none)]
@@ -138,22 +138,7 @@ pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) rust: Option<NixDerivation<'a>>,
 }
 
-impl<Dep> BuildCrateArgs<'_, '_, Dep>
-where
-    OptionalBuildCrateArgs<Dep>: Attrset,
-{
-    pub(crate) fn to_attrset(&self) -> impl Attrset {
-        // SAFETY: the three inner attrsets don't contain any overlapping keys.
-        unsafe {
-            self.mandatory
-                .borrow()
-                .concat(self.optional.borrow())
-                .concat(self.global.borrow())
-        }
-    }
-}
-
-impl MandatoryBuildCrateArgs<'_> {
+impl RequiredBuildCrateArgs<'_> {
     fn src_value(&self) -> impl Value {
         match &self.src {
             CrateSource::Vendored { vendor_dir } => Either::Left(
@@ -168,14 +153,29 @@ impl MandatoryBuildCrateArgs<'_> {
     }
 }
 
-impl<'src, Dep> From<MandatoryBuildCrateArgs<'src>>
+impl<'src, Dep> From<RequiredBuildCrateArgs<'src>>
     for BuildCrateArgs<'_, 'src, Dep>
 {
-    fn from(mandatory: MandatoryBuildCrateArgs<'src>) -> Self {
+    fn from(required: RequiredBuildCrateArgs<'src>) -> Self {
         Self {
-            mandatory,
+            required,
             optional: OptionalBuildCrateArgs::default(),
             global: GlobalBuildCrateArgs::default(),
+        }
+    }
+}
+
+impl<Dep> ToValue for BuildCrateArgs<'_, '_, Dep>
+where
+    OptionalBuildCrateArgs<Dep>: Attrset,
+{
+    fn to_value(&self) -> impl Value {
+        // SAFETY: the three inner attrsets don't contain any overlapping keys.
+        unsafe {
+            self.required
+                .borrow()
+                .concat(self.optional.borrow())
+                .concat(self.global.borrow())
         }
     }
 }

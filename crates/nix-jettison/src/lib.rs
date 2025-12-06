@@ -3,6 +3,7 @@
 mod build_crate;
 mod build_package;
 mod jettison;
+mod resolve_build_graph;
 mod vendor_deps;
 
 use nix_bindings::context::{Context, Entrypoint};
