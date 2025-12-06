@@ -162,10 +162,7 @@ impl Attributes {
         }
     }
 
-    fn parse(
-        attrs: &[Attribute],
-        pos: AttributePosition,
-    ) -> syn::Result<Self> {
+    fn parse(attrs: &[Attribute], pos: AttributePosition) -> syn::Result<Self> {
         let mut this = Self { rename: None, default: false };
 
         for attr in attrs {
@@ -190,8 +187,8 @@ impl Attributes {
                     match pos {
                         AttributePosition::Struct => {
                             return Err(meta.error(
-                                "`rename` attribute is only allowed on \
-                                 struct fields",
+                                "`rename` attribute is only allowed on struct \
+                                 fields",
                             ));
                         },
                         AttributePosition::Field => {

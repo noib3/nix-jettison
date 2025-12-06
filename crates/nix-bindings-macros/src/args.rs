@@ -78,16 +78,16 @@ fn named_fields(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
         Fields::Named(fields) => match fields.named.len() {
             0 => Err(syn::Error::new(
                 input.span(),
-                "Args can only be derived for structs with at least one \
-                 named field",
+                "Args can only be derived for structs with at least one named \
+                 field",
             )),
 
             len if len > nix_bindings_sys::MAX_PRIMOP_ARITY as usize => {
                 Err(syn::Error::new(
                     input.span(),
                     format_args!(
-                        "In Nix, functions can have at most {} arguments, \
-                         but this struct has {len} fields",
+                        "In Nix, functions can have at most {} arguments, but \
+                         this struct has {len} fields",
                         nix_bindings_sys::MAX_PRIMOP_ARITY
                     ),
                 ))
@@ -234,10 +234,7 @@ impl ArgsAttribute {
             let lit_str = lit.to_string();
             let name_str = lit_str.trim_matches('"');
             let cstring = CString::new(name_str).map_err(|err| {
-                syn::Error::new(
-                    lit.span(),
-                    format_args!("invalid name: {err}"),
-                )
+                syn::Error::new(lit.span(), format_args!("invalid name: {err}"))
             })?;
             return Ok(Self::Name(cstring));
         }

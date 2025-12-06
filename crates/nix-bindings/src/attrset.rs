@@ -419,10 +419,7 @@ impl Attrset for NixAttrset<'_> {
         ctx: &mut Context<'eval>,
     ) -> impl Pairs + use<'this, 'eval> {
         let iter_raw = unsafe {
-            cpp::attr_iter_create(
-                self.inner.as_raw(),
-                ctx.state_mut().as_ptr(),
-            )
+            cpp::attr_iter_create(self.inner.as_raw(), ctx.state_mut().as_ptr())
         };
 
         let iterator =
@@ -769,9 +766,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
             namespace: N,
         }
 
-        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>>
-            for WriteValue<N>
-        {
+        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>> for WriteValue<N> {
             #[inline]
             fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
                 unsafe { value.write(self.dest, self.namespace, ctx) }
@@ -831,11 +826,9 @@ impl Pairs for NixAttrsetPairs<'_, '_> {
     ) -> T {
         assert!(self.num_attrs_left > 0);
 
-        let value_raw =
-            unsafe { cpp::attr_iter_value(self.iterator.as_ptr()) };
+        let value_raw = unsafe { cpp::attr_iter_value(self.iterator.as_ptr()) };
 
-        let value_ptr =
-            NonNull::new(value_raw).expect("value pointer is null");
+        let value_ptr = NonNull::new(value_raw).expect("value pointer is null");
 
         // SAFETY: the value returned by Nix is initialized.
         let value = unsafe { NixValue::new(value_ptr) };

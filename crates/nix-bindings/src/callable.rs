@@ -50,10 +50,8 @@ pub trait Callable {
             });
 
         // Free the argument once we're done with it.
-        ctx.with_raw(|ctx| unsafe {
-            sys::value_decref(ctx, arg_ptr.as_ptr())
-        })
-        .ok();
+        ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, arg_ptr.as_ptr()) })
+            .ok();
 
         // Free the destination value if the call failed.
         if let Err(err) = res {
@@ -143,8 +141,7 @@ pub trait Callable {
 
         // Free the arguments once we're done with them.
         for &raw_arg in &args_slice[..num_written] {
-            ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, raw_arg) })
-                .ok();
+            ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, raw_arg) }).ok();
         }
 
         // Free the destination value if the call failed.

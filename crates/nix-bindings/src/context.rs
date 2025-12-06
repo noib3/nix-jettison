@@ -49,14 +49,12 @@ impl Context<'_, Entrypoint> {
     #[track_caller]
     #[inline]
     pub fn register_primop<P: PrimOp>(&mut self) {
-        let res = self.inner.with_primop_ptr::<P, _>(
-            P::NAME,
-            |inner, primop_ptr| {
+        let res =
+            self.inner.with_primop_ptr::<P, _>(P::NAME, |inner, primop_ptr| {
                 inner.with_raw(|raw_ctx| unsafe {
                     sys::register_primop(raw_ctx, primop_ptr.as_ptr())
                 })
-            },
-        );
+            });
 
         if let Err(err) = res {
             panic!("couldn't register primop '{:?}': {err}", P::NAME);
@@ -106,10 +104,8 @@ impl<'eval> Context<'eval> {
         capacity: usize,
     ) -> Result<AttrsetBuilder<'_, 'eval>> {
         unsafe {
-            let builder_ptr = cpp::make_bindings_builder(
-                self.state.inner.as_ptr(),
-                capacity,
-            );
+            let builder_ptr =
+                cpp::make_bindings_builder(self.state.inner.as_ptr(), capacity);
             match NonNull::new(builder_ptr) {
                 Some(builder_ptr) => {
                     Ok(AttrsetBuilder { inner: builder_ptr, context: self })
@@ -347,8 +343,8 @@ impl ContextInner {
     ) -> Result<T> {
         // TODO: alloc() is implemented by leaking, so calling this repeatedly
         // will cause memory leaks. Fix this.
-        let primop_raw = self
-            .with_ptr(|ctx| unsafe { P::alloc(namespace.display(), ctx) })?;
+        let primop_raw =
+            self.with_ptr(|ctx| unsafe { P::alloc(namespace.display(), ctx) })?;
 
         let primop_ptr = NonNull::new(primop_raw).ok_or_else(|| {
             self.make_error((

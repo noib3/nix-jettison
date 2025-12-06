@@ -161,8 +161,8 @@ impl<Int> fmt::Display for TryFromI64Error<Int> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "integer conversion failed: cannot convert {}i64 into target \
-             type {}",
+            "integer conversion failed: cannot convert {}i64 into target type \
+             {}",
             self.n,
             core::any::type_name::<Int>()
         )

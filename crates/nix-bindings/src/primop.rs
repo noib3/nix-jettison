@@ -94,8 +94,8 @@ pub trait PrimOpImpl {
 
             let Some(ret) = NonNull::new(ret) else {
                 panic!(
-                    "received NULL `Value` pointer for return value in \
-                     primop call"
+                    "received NULL `Value` pointer for return value in primop \
+                     call"
                 );
             };
 

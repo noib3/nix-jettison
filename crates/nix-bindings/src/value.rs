@@ -251,9 +251,7 @@ pub trait FnOnceValue<T, Ctx = ()> {
 }
 
 /// TODO: docs.
-#[derive(
-    Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Null;
 
 /// TODO: docs.
@@ -951,10 +949,7 @@ macro_rules! impl_try_from_string_value {
             V::String: TryInto<Self, Error: ToError>,
         {
             #[inline]
-            fn try_from_value(
-                mut value: V,
-                ctx: &mut Context,
-            ) -> Result<Self> {
+            fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
                 value.force_inline(ctx)?;
 
                 match value.kind() {
