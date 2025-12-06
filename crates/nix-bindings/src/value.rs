@@ -772,12 +772,12 @@ impl Value for std::path::Path {
         ctx: &mut Context,
     ) -> Result<()> {
         let bytes = self.as_os_str().as_encoded_bytes();
-        let cstr = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
+        let cstring = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
         unsafe {
             cpp::init_path_string(
                 ctx.state_mut().as_ptr(),
                 dest.as_ptr(),
-                cstr.as_ptr(),
+                cstring.as_ptr(),
             );
         }
         Ok(())
@@ -840,6 +840,44 @@ impl PathValue for std::path::PathBuf {
     #[inline]
     unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path> {
         unsafe { self.as_path().into_path_string(ctx) }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Value for std::ffi::OsStr {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::String
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        let bytes = self.as_encoded_bytes();
+        let cstring = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
+        unsafe { cstring.write(dest, namespace, ctx) }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Value for &std::ffi::OsStr {
+    #[inline(always)]
+    fn kind(&self) -> ValueKind {
+        (*self).kind()
+    }
+
+    #[inline(always)]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { (*self).write(dest, namespace, ctx) }
     }
 }
 
