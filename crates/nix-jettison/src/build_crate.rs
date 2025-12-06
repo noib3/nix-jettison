@@ -162,6 +162,45 @@ impl<'src> RequiredBuildCrateArgs<'src> {
     }
 
     fn src_value(&self) -> impl Value {
+        struct WorkspacePath<'a> {
+            workspace_root: &'a Path,
+            path_in_workspace: &'a Path,
+        }
+
+        impl Value for WorkspacePath<'_> {
+            fn kind(&self) -> ValueKind {
+                ValueKind::String
+            }
+
+            unsafe fn write(
+                &self,
+                dest: core::ptr::NonNull<nix_bindings::sys::Value>,
+                namespace: impl nix_bindings::namespace::Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                let args = attrset! {
+                    path: self.workspace_root.join(self.path_in_workspace),
+                    name: self
+                        .path_in_workspace
+                        .file_name()
+                        .expect("path is not empty"),
+                };
+
+                let path = ctx
+                    .builtins()
+                    .path(ctx)
+                    .call::<String>(args, ctx)
+                    .expect(
+                        "arguments are valid and builtins.path returns a \
+                         string",
+                    )
+                    .force(ctx)?;
+
+                // SAFETY: up to the caller.
+                unsafe { path.write(dest, namespace, ctx) }
+            }
+        }
+
         match &self.src {
             CrateSource::Vendored { vendor_dir } => {
                 Either::Left(vendor_dir.join(VendorDir::dir_name(
@@ -171,7 +210,10 @@ impl<'src> RequiredBuildCrateArgs<'src> {
             },
 
             CrateSource::Workspace { workspace_root, path_in_workspace } => {
-                Either::Right(workspace_root.join(path_in_workspace.as_str()))
+                Either::Right(WorkspacePath {
+                    workspace_root,
+                    path_in_workspace: Path::new(path_in_workspace.as_str()),
+                })
             },
         }
     }
@@ -181,18 +223,14 @@ impl<'src> CrateSource<'src> {
     fn new(package: &Package, args: &ResolveBuildGraphArgs<'src>) -> Self {
         if package.package_id().source_id().is_path() {
             let workspace_root = args.src;
-            let package_root = package.root();
-            let path_in_workspace = package_root
+            let path_in_workspace = package
+                .root()
                 .strip_prefix(workspace_root)
-                .expect("package root is under workspace root");
-            Self::Workspace {
-                workspace_root,
-                path_in_workspace: CompactString::from(
-                    path_in_workspace
-                        .to_str()
-                        .expect("workspace-relative path is valid UTF-8"),
-                ),
-            }
+                .expect("package root is under workspace root")
+                .to_str()
+                .expect("workspace-relative path is valid UTF-8")
+                .into();
+            Self::Workspace { workspace_root, path_in_workspace }
         } else {
             Self::Vendored { vendor_dir: args.vendor_dir }
         }
