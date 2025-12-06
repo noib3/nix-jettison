@@ -159,10 +159,21 @@ pub trait PathValue: Value + Sized {
     unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path>;
 }
 
-/// A trait for types that can be fallibly converted from [`Value`]s.
-pub trait TryFromValue<V: Value>: Sized {
-    /// TODO: docs.
-    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self>;
+/// A trait for types that can be infallibly converted into [`Value`]s.
+///
+/// For fallible conversions, see [`TryIntoValue`].
+pub trait IntoValue {
+    /// Converts `self` into a [`Value`].
+    fn into_value(self) -> impl Value;
+}
+
+/// A trait for types that can be infallibly converted into [`Value`]s by
+/// reference.
+///
+/// For conversions from owned values, see [`IntoValue`].
+pub trait ToValue {
+    /// Converts `&self` into a [`Value`].
+    fn to_value(&self) -> impl Value;
 }
 
 /// A trait for types that can be fallibly converted into [`Value`]s.
@@ -172,6 +183,12 @@ pub trait TryIntoValue {
         self,
         ctx: &mut Context,
     ) -> Result<impl Value + use<Self>>;
+}
+
+/// A trait for types that can be fallibly converted from [`Value`]s.
+pub trait TryFromValue<V: Value>: Sized {
+    /// TODO: docs.
+    fn try_from_value(value: V, ctx: &mut Context) -> Result<Self>;
 }
 
 /// TODO: docs.
@@ -651,6 +668,40 @@ impl<P: PrimOp> Value for P {
     }
 }
 
+impl<T: Value + ?Sized + ToOwned> Value for Cow<'_, T> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        self.deref().kind()
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.deref().write(dest, namespace, ctx) }
+    }
+}
+
+impl<T: ToValue> Value for Vec<T> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::List
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.as_slice().into_value().write(dest, namespace, ctx) }
+    }
+}
+
 #[cfg(feature = "std")]
 impl Value for std::path::Path {
     #[inline]
@@ -779,20 +830,44 @@ impl<L: Value, R: Value> Value for either::Either<L, R> {
     }
 }
 
-impl<T: Value + ?Sized + ToOwned> Value for Cow<'_, T> {
-    #[inline]
-    fn kind(&self) -> ValueKind {
-        self.deref().kind()
+impl<T: Value> IntoValue for T {
+    #[inline(always)]
+    fn into_value(self) -> impl Value {
+        self
     }
+}
 
+impl<T: Value> ToValue for T {
+    #[inline(always)]
+    fn to_value(&self) -> impl Value {
+        Value::borrow(self)
+    }
+}
+
+impl<T: IntoValue> TryIntoValue for T {
+    #[inline(always)]
+    fn try_into_value(self, _: &mut Context) -> Result<impl Value + use<T>> {
+        Ok(self.into_value())
+    }
+}
+
+impl<T: TryIntoValue> TryIntoValue for Result<T> {
     #[inline]
-    unsafe fn write(
-        &self,
-        dest: NonNull<sys::Value>,
-        namespace: impl Namespace,
+    fn try_into_value(self, ctx: &mut Context) -> Result<impl Value + use<T>> {
+        self.and_then(|value| value.try_into_value(ctx))
+    }
+}
+
+impl<T: TryIntoValue, E: ToError> TryIntoValue for core::result::Result<T, E> {
+    #[inline]
+    fn try_into_value(
+        self,
         ctx: &mut Context,
-    ) -> Result<()> {
-        unsafe { self.deref().write(dest, namespace, ctx) }
+    ) -> Result<impl Value + use<T, E>> {
+        match self {
+            Ok(value) => value.try_into_value(ctx),
+            Err(err) => Err(ctx.make_error(err)),
+        }
     }
 }
 
@@ -996,36 +1071,6 @@ where
     fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
         <Cow<'_, std::path::Path>>::try_from_value(value, ctx)
             .map(Cow::into_owned)
-    }
-}
-
-impl<T: Value> TryIntoValue for T {
-    #[inline]
-    fn try_into_value(self, _: &mut Context) -> Result<impl Value + use<T>> {
-        Ok(self)
-    }
-}
-
-impl<T: TryIntoValue> TryIntoValue for Result<T> {
-    #[inline]
-    fn try_into_value(self, ctx: &mut Context) -> Result<impl Value + use<T>> {
-        match self {
-            Ok(value) => value.try_into_value(ctx),
-            Err(err) => Err(err),
-        }
-    }
-}
-
-impl<T: TryIntoValue, E: ToError> TryIntoValue for core::result::Result<T, E> {
-    #[inline]
-    fn try_into_value(
-        self,
-        ctx: &mut Context,
-    ) -> Result<impl Value + use<T, E>> {
-        match self {
-            Ok(value) => value.try_into_value(ctx),
-            Err(err) => Err(ctx.make_error(err)),
-        }
     }
 }
 

@@ -13,7 +13,7 @@ use nix_bindings_sys as sys;
 use crate::error::TypeMismatchError;
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Value, ValueKind};
-use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
+use crate::value::{FnOnceValue, NixValue, ToValue, TryFromValue, Values};
 
 /// TODO: docs.
 pub trait List {
@@ -335,7 +335,7 @@ impl<L: ValueIterator> Value for ListValue<L> {
 impl<T, V> List for T
 where
     T: Deref<Target = [V]>,
-    V: Value,
+    V: ToValue,
 {
     #[inline]
     fn len(&self) -> c_uint {
@@ -349,7 +349,7 @@ where
         fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> U {
-        fun.call(self.deref()[idx as usize].borrow(), ctx)
+        fun.call(self.deref()[idx as usize].to_value(), ctx)
     }
 }
 
