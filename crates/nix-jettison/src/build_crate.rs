@@ -21,10 +21,10 @@ pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
 
 /// The required, crate-specific arguments accepted by `pkgs.buildRustCrate`.
 #[derive(nix_bindings::Attrset)]
-#[attrset(rename_all = "camelCase")]
+#[attrset(rename_all = camelCase)]
 pub(crate) struct RequiredBuildCrateArgs<'src> {
     pub(crate) crate_name: CompactString,
-    #[attrset(with_value = |this| this.src_value())]
+    #[attrset(with_value = Self::src_value)]
     pub(crate) src: CrateSource<'src>,
     pub(crate) version: Version,
 }
@@ -56,7 +56,7 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
 }
 
 #[derive(Default, nix_bindings::Attrset)]
-#[attrset(rename_all = "camelCase")]
+#[attrset(rename_all = camelCase)]
 pub(crate) struct OptionalBuildCrateArgsInner {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
@@ -140,7 +140,7 @@ pub(crate) struct Dependencies<Dep> {
 /// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
 /// arguments don't depend on the particular crate being built.
 #[derive(Default, nix_bindings::Attrset)]
-#[attrset(rename_all = "camelCase", skip_if = Option::is_none)]
+#[attrset(rename_all = camelCase, skip_if = Option::is_none)]
 pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) build_tests: Option<bool>,
     pub(crate) cargo: Option<NixDerivation<'a>>,

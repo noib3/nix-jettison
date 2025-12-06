@@ -1199,3 +1199,116 @@ mod keys_impls {
         panic!("{len}-tuple received out of bounds index: {idx}")
     }
 }
+
+#[doc(hidden)]
+pub mod derive {
+    //! Contains [`DerivedAttrset`], a trait used in the expansion of the
+    //! [`Attrset`](crate::Attrset) derive macro.
+
+    use super::*;
+
+    pub trait DerivedAttrset {
+        /// The names of the keys in this attribute set.
+        const KEYS: &[&CStr];
+
+        /// The indices of the fields that *might* be skipped.
+        const MIGHT_SKIP_IDXS: &[u32];
+
+        /// Returns whether the field at the given index should be skipped.
+        fn should_skip(&self, field_idx: u32) -> bool;
+
+        /// Calls the given function with the value of the field at the given
+        /// index.
+        fn with_value<'ctx, 'eval, T>(
+            &self,
+            field_idx: c_uint,
+            fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+            ctx: &'ctx mut Context<'eval>,
+        ) -> T;
+    }
+
+    struct DerivedAttrsetPairs<'a, T> {
+        attrset: &'a T,
+        field_idx: u32,
+    }
+
+    impl<T: DerivedAttrset> Attrset for T {
+        #[inline]
+        fn len(&self, _: &mut Context) -> c_uint {
+            let mut len = Self::KEYS.len() as c_uint;
+            for field_idx in Self::MIGHT_SKIP_IDXS {
+                if self.should_skip(*field_idx) {
+                    len -= 1;
+                }
+            }
+            len
+        }
+
+        #[inline]
+        fn pairs<'this>(
+            &'this self,
+            _: &mut Context,
+        ) -> impl Pairs + use<'this, T> {
+            let mut field_idx = 0;
+
+            while Self::MIGHT_SKIP_IDXS.get(field_idx as usize)
+                == Some(&field_idx)
+            {
+                if self.should_skip(field_idx) {
+                    field_idx += 1;
+                }
+            }
+
+            DerivedAttrsetPairs { attrset: self, field_idx }
+        }
+
+        #[inline]
+        fn with_value<'ctx, 'eval, U>(
+            &self,
+            key: &CStr,
+            fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
+            ctx: &'ctx mut Context<'eval>,
+        ) -> Option<U> {
+            let field_idx = Self::KEYS.iter().position(|&k| k == key)? as u32;
+            if self.should_skip(field_idx) {
+                None
+            } else {
+                Some(self.with_value(field_idx, fun, ctx))
+            }
+        }
+    }
+
+    impl<T: DerivedAttrset> Pairs for DerivedAttrsetPairs<'_, T> {
+        #[inline]
+        fn advance(&mut self, _: &mut Context) {
+            loop {
+                self.field_idx += 1;
+                if self.is_exhausted() {
+                    break;
+                }
+                if !self.attrset.should_skip(self.field_idx) {
+                    break;
+                }
+            }
+        }
+
+        #[inline]
+        fn is_exhausted(&self) -> bool {
+            self.field_idx as usize == T::KEYS.len()
+        }
+
+        #[inline]
+        fn key(&self, _: &mut Context) -> &CStr {
+            T::KEYS[self.field_idx as usize]
+        }
+
+        #[inline]
+        fn with_value<'ctx, 'eval, U>(
+            &self,
+            fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
+            ctx: &'ctx mut Context<'eval>,
+        ) -> U {
+            self.attrset.with_value(self.field_idx, fun, ctx)
+        }
+    }
+}
