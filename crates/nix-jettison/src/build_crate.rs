@@ -7,6 +7,7 @@ use either::Either;
 use nix_bindings::prelude::*;
 use semver::Version;
 
+use crate::resolve_build_graph::ResolveBuildGraphArgs;
 use crate::vendor_deps::VendorDir;
 
 /// The arguments accepted by [`pkgs.buildRustCrate`][buildRustCrate].
@@ -32,7 +33,7 @@ pub(crate) struct RequiredBuildCrateArgs<'src> {
 pub(crate) enum CrateSource<'src> {
     /// The crate is a 3rd-party dependency which has been vendored under the
     /// given directory.
-    Vendored { vendor_dir: &'src VendorDir },
+    Vendored { vendor_dir: &'src Path },
 
     /// The crate source is in the workspace of the root package being built.
     Workspace {
@@ -153,10 +154,12 @@ pub(crate) struct GlobalBuildCrateArgs<'a> {
 impl RequiredBuildCrateArgs<'_> {
     fn src_value(&self) -> impl Value {
         match &self.src {
-            CrateSource::Vendored { vendor_dir } => Either::Left(
-                vendor_dir
-                    .get_package_src(self.crate_name.as_str(), &self.version),
-            ),
+            CrateSource::Vendored { vendor_dir } => {
+                Either::Left(vendor_dir.join(VendorDir::dir_name(
+                    self.crate_name.as_str(),
+                    &self.version,
+                )))
+            },
 
             CrateSource::Workspace { workspace_root, path_in_workspace } => {
                 Either::Right(workspace_root.join(path_in_workspace.as_str()))
@@ -219,9 +222,38 @@ impl<Dep: Value> ToValue for BuildCrateArgs<'_, '_, Dep> {
     }
 }
 
-impl From<&Package> for RequiredBuildCrateArgs<'_> {
-    fn from(_package: &Package) -> Self {
-        todo!();
+impl<'src> RequiredBuildCrateArgs<'src> {
+    pub(crate) fn new(
+        package: &Package,
+        args: &ResolveBuildGraphArgs<'src>,
+    ) -> Self {
+        Self {
+            crate_name: package.name().as_str().into(),
+            src: CrateSource::new(package, args),
+            version: package.version().clone(),
+        }
+    }
+}
+
+impl<'src> CrateSource<'src> {
+    fn new(package: &Package, args: &ResolveBuildGraphArgs<'src>) -> Self {
+        if package.package_id().source_id().is_path() {
+            let workspace_root = args.src;
+            let package_root = package.root();
+            let path_in_workspace = package_root
+                .strip_prefix(workspace_root)
+                .expect("package root is under workspace root");
+            Self::Workspace {
+                workspace_root,
+                path_in_workspace: CompactString::from(
+                    path_in_workspace
+                        .to_str()
+                        .expect("workspace-relative path is valid UTF-8"),
+                ),
+            }
+        } else {
+            Self::Vendored { vendor_dir: args.vendor_dir }
+        }
     }
 }
 

@@ -9,7 +9,6 @@ use std::{fs, io};
 use compact_str::{CompactString, format_compact};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
-use semver::Version;
 
 /// Vendors the dependencies of a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -96,13 +95,11 @@ struct CreateVendorDirFuns<'pkgs, 'builtins> {
 }
 
 impl VendorDir {
-    pub(crate) fn get_package_src(
-        &self,
+    pub(crate) fn dir_name(
         pkg_name: &str,
-        pkg_version: &Version,
-    ) -> PathBuf {
-        let dir_name = Self::dir_name(pkg_name, pkg_version);
-        self.out_path.join(dir_name)
+        pkg_version: impl Display,
+    ) -> CompactString {
+        format_compact!("{pkg_name}-{pkg_version}")
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -165,10 +162,6 @@ impl VendorDir {
         let out_path = derivation.out_path(ctx)?;
 
         Ok(Self { out_path, derivation })
-    }
-
-    fn dir_name(pkg_name: &str, pkg_version: impl Display) -> CompactString {
-        format_compact!("{pkg_name}-{pkg_version}")
     }
 }
 

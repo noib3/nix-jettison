@@ -17,6 +17,7 @@ use crate::build_crate::{
     BuildCrateArgs,
     Dependencies,
     OptionalBuildCrateArgs,
+    RequiredBuildCrateArgs,
 };
 
 /// Resolves the build graph of a Rust package.
@@ -180,7 +181,7 @@ impl<'args> BuildGraph<'args> {
             .expect("package ID not found in workspace");
 
         let build_crate_args = BuildCrateArgs {
-            required: package.into(),
+            required: RequiredBuildCrateArgs::new(package, args),
             optional: OptionalBuildCrateArgs {
                 dependencies,
                 inner: package.into(),
