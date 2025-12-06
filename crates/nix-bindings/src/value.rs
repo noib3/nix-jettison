@@ -11,7 +11,13 @@ use core::slice;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
-use crate::error::{Result, ToError, TryFromI64Error, TypeMismatchError};
+use crate::error::{
+    Result,
+    ToError,
+    TryFromI64Error,
+    TryIntoI64Error,
+    TypeMismatchError,
+};
 use crate::list::{List, NixList};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, PrimOp};
@@ -512,6 +518,40 @@ impl_value_for_int!(i16);
 impl_value_for_int!(i32);
 impl_value_for_int!(i64);
 
+macro_rules! impl_value_for_big_int {
+    ($ty:ty) => {
+        impl Value for $ty {
+            #[inline]
+            fn kind(&self) -> ValueKind {
+                ValueKind::Int
+            }
+
+            #[inline]
+            unsafe fn write(
+                &self,
+                dest: NonNull<sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                unsafe { self.into_int(ctx)?.write(dest, namespace, ctx) }
+            }
+        }
+
+        impl IntValue for $ty {
+            #[inline]
+            unsafe fn into_int(self, ctx: &mut Context) -> Result<i64> {
+                self.try_into().map_err(|_| {
+                    ctx.make_error(TryIntoI64Error::<$ty>::new(self))
+                })
+            }
+        }
+    };
+}
+
+impl_value_for_big_int!(usize);
+impl_value_for_big_int!(isize);
+impl_value_for_big_int!(u64);
+
 macro_rules! impl_value_for_float {
     ($ty:ty) => {
         impl Value for $ty {
@@ -696,7 +736,24 @@ impl<T: ToValue> Value for Vec<T> {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { self.as_slice().into_value().write(dest, namespace, ctx) }
+        unsafe { self.as_slice().write(dest, namespace, ctx) }
+    }
+}
+
+impl<T: ToValue> Value for &[T] {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::List
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.into_list().into_value().write(dest, namespace, ctx) }
     }
 }
 

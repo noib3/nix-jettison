@@ -77,6 +77,13 @@ pub struct TypeMismatchError {
     pub found: ValueKind,
 }
 
+/// The type of error that can occur when trying to convert a integer into an
+/// `i64` where `Int` doesn't implement `Into<i64>`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TryIntoI64Error<Int> {
+    int: Int,
+}
+
 /// The type of error that can occur when trying to convert an `i64` into a
 /// different integer type.
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -90,6 +97,13 @@ impl Error {
     #[inline]
     pub(crate) fn new(kind: ErrorKind, _: &mut ContextInner) -> Self {
         Self { kind }
+    }
+}
+
+impl<Int> TryIntoI64Error<Int> {
+    #[inline]
+    pub(crate) fn new(int: Int) -> Self {
+        Self { int }
     }
 }
 
@@ -146,6 +160,35 @@ impl fmt::Display for TypeMismatchError {
 
 impl core::error::Error for TypeMismatchError {}
 
+impl<Int: fmt::Display> fmt::Display for TryIntoI64Error<Int> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "integer conversion failed: cannot convert {} into i64",
+            self.int,
+        )
+    }
+}
+
+impl<Int: fmt::Debug + fmt::Display> core::error::Error
+    for TryIntoI64Error<Int>
+{
+}
+
+impl<Int: fmt::Display> ToError for TryIntoI64Error<Int> {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: the Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+}
+
 impl<Int> fmt::Debug for TryFromI64Error<Int> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -170,6 +213,19 @@ impl<Int> fmt::Display for TryFromI64Error<Int> {
 }
 
 impl<Int> core::error::Error for TryFromI64Error<Int> {}
+
+impl<Int> ToError for TryFromI64Error<Int> {
+    #[inline]
+    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+        // SAFETY: the Display impl doesn't contain any NUL bytes.
+        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Nix
+    }
+}
 
 impl ToError for core::convert::Infallible {
     #[inline]
@@ -225,19 +281,6 @@ impl ToError for core::str::Utf8Error {
     #[inline]
     fn format_to_c_str(&self) -> Cow<'_, CStr> {
         // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
-    }
-}
-
-impl<Int> ToError for TryFromI64Error<Int> {
-    #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        // SAFETY: the Display impl doesn't contain any NUL bytes.
         unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
     }
 
