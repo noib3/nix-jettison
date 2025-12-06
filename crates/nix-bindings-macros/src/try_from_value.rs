@@ -137,20 +137,20 @@ fn try_from_attrset_impl(
     })
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 struct Attributes {
     rename: Option<Rename>,
     default: bool,
 }
 
 #[derive(Copy, Clone)]
-enum AttributePosition {
+pub(crate) enum AttributePosition {
     Field,
     Struct,
 }
 
 #[derive(Copy, Clone)]
-enum Rename {
+pub(crate) enum Rename {
     CamelCase,
 }
 
@@ -163,7 +163,7 @@ impl Attributes {
     }
 
     fn parse(attrs: &[Attribute], pos: AttributePosition) -> syn::Result<Self> {
-        let mut this = Self { rename: None, default: false };
+        let mut this = Self::default();
 
         for attr in attrs {
             if !attr.path().is_ident("try_from") {
@@ -174,7 +174,7 @@ impl Attributes {
                 if meta.path.is_ident("rename_all") {
                     match pos {
                         AttributePosition::Struct => {
-                            this.rename = Some(Rename::parse(meta)?);
+                            this.rename = Some(Rename::parse(meta, pos)?);
                         },
                         AttributePosition::Field => {
                             return Err(meta.error(
@@ -192,7 +192,7 @@ impl Attributes {
                             ));
                         },
                         AttributePosition::Field => {
-                            this.rename = Some(Rename::parse(meta)?);
+                            this.rename = Some(Rename::parse(meta, pos)?);
                         },
                     }
                 } else if meta.path.is_ident("default") {
@@ -210,13 +210,16 @@ impl Attributes {
 }
 
 impl Rename {
-    fn apply(self, field_name: &mut String) {
+    pub(crate) fn apply(self, field_name: &mut String) {
         match self {
             Self::CamelCase => to_camel_case(field_name),
         }
     }
 
-    fn parse(meta: ParseNestedMeta<'_>) -> syn::Result<Self> {
+    pub(crate) fn parse(
+        meta: ParseNestedMeta<'_>,
+        _pos: AttributePosition,
+    ) -> syn::Result<Self> {
         let lit = meta.value()?.parse::<Literal>()?;
         let lit_str = lit.to_string();
         let value = lit_str.trim_matches('"');
@@ -225,7 +228,7 @@ impl Rename {
             "camelCase" => Ok(Self::CamelCase),
             _ => Err(syn::Error::new(
                 lit.span(),
-                format_args!("unsupported rename_all value: {value}"),
+                format_args!("unsupported rename value: {value}"),
             )),
         }
     }

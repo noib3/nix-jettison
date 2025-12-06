@@ -1,11 +1,9 @@
 use std::path::Path;
 
-use cargo::core::compiler::CrateType;
 use cargo::core::{Package, Resolve};
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::*;
-use semver::Version;
 
 use crate::resolve_build_graph::ResolveBuildGraphArgs;
 use crate::vendor_deps::VendorDir;
@@ -21,12 +19,12 @@ pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
 
 /// The required, crate-specific arguments accepted by `pkgs.buildRustCrate`.
 #[derive(nix_bindings::Attrset)]
-#[attrset(rename_all = camelCase)]
+// #[attrset(rename_all = camelCase)]
 pub(crate) struct RequiredBuildCrateArgs<'src> {
     pub(crate) crate_name: CompactString,
     #[attrset(with_value = Self::src_value)]
     pub(crate) src: CrateSource<'src>,
-    pub(crate) version: Version,
+    pub(crate) version: CompactString,
 }
 
 /// The path to a crate's source directory.
@@ -56,7 +54,7 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
 }
 
 #[derive(Default, nix_bindings::Attrset)]
-#[attrset(rename_all = camelCase)]
+// #[attrset(rename_all = camelCase)]
 pub(crate) struct OptionalBuildCrateArgsInner {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
@@ -72,12 +70,12 @@ pub(crate) struct OptionalBuildCrateArgsInner {
     /// This is derived state from the Cargo.toml/source structure of the
     /// crate.
     #[attrset(skip_if = Option::is_none)]
-    pub(crate) crate_bin: Option<()>,
+    pub(crate) crate_bin: Option<Null>,
 
     /// This is derived state from the dependencies section of the Cargo.toml
     /// of the crate.
     #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) crate_renames: Vec<()>,
+    pub(crate) crate_renames: Vec<Null>,
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) description: Option<CompactString>,
@@ -125,22 +123,23 @@ pub(crate) struct OptionalBuildCrateArgsInner {
     /// If set, `buildRustCrate` will set the `crateType` to the given value,
     /// otherwise it will default to `"lib"`.
     #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) r#type: Vec<CrateType>,
+    pub(crate) r#type: Vec<CompactString>,
 }
 
 #[derive(cauchy::Default, nix_bindings::Attrset)]
+#[attrset(bounds = {Dep: ToValue})]
 pub(crate) struct Dependencies<Dep> {
-    #[attrset(rename = "dependencies", skip_if = Vec::is_empty)]
+    // #[attrset(rename = "dependencies", skip_if = Vec::is_empty)]
     pub(crate) normal: Vec<Dep>,
 
-    #[attrset(rename = "buildDependencies", skip_if = Vec::is_empty)]
+    // #[attrset(rename = "buildDependencies", skip_if = Vec::is_empty)]
     pub(crate) build: Vec<Dep>,
 }
 
 /// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
 /// arguments don't depend on the particular crate being built.
 #[derive(Default, nix_bindings::Attrset)]
-#[attrset(rename_all = camelCase, skip_if = Option::is_none)]
+// #[attrset(rename_all = camelCase, skip_if = Option::is_none)]
 pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) build_tests: Option<bool>,
     pub(crate) cargo: Option<NixDerivation<'a>>,
@@ -157,7 +156,7 @@ impl<'src> RequiredBuildCrateArgs<'src> {
         Self {
             crate_name: package.name().as_str().into(),
             src: CrateSource::new(package, args),
-            version: package.version().clone(),
+            version: package.version().to_compact_string(),
         }
     }
 
@@ -250,7 +249,7 @@ impl<Dep> OptionalBuildCrateArgs<Dep> {
 
     fn to_attrset(&self) -> impl Attrset
     where
-        Dep: Value,
+        Dep: ToValue,
     {
         // SAFETY: 'inner' and 'dependencies' don't have any overlapping keys.
         unsafe { self.inner.borrow().concat(self.dependencies.borrow()) }

@@ -25,7 +25,6 @@ either = { version = "1", default-features = false }
 pkg-config = "0.3"
 proc-macro2 = "1"
 quote = "1"
-semver = "1"
 syn = "2.0"
 
 # Internal dependencies.

@@ -2519,7 +2519,6 @@ dependencies = [
  "derive_more",
  "either",
  "nix-bindings",
- "semver",
 ]
 
 [[package]]
