@@ -13,7 +13,8 @@ pub mod context;
 mod entry;
 pub mod error;
 pub mod list;
-mod namespace;
+#[doc(hidden)]
+pub mod namespace;
 pub mod primop;
 pub mod thunk;
 mod utf8_cstr;

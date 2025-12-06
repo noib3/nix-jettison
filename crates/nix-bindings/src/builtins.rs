@@ -18,6 +18,14 @@ impl<'eval> Builtins<'eval> {
             .expect("builtins.fetchGit exists and it's a function")
     }
 
+    /// Returns a handle to the `builtins.path` function.
+    #[inline]
+    pub fn path(&self, ctx: &mut Context) -> NixLambda<'eval> {
+        self.inner
+            .get(c"path", ctx)
+            .expect("builtins.path exists and it's a function")
+    }
+
     #[inline]
     pub(crate) fn new(inner: NixAttrset<'eval>) -> Self {
         Self { inner }
