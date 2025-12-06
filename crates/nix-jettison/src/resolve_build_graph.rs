@@ -27,7 +27,7 @@ pub(crate) struct ResolveBuildGraph;
 
 #[derive(nix_bindings::Args, nix_bindings::TryFromValue)]
 #[args(flatten, name = "args")]
-#[try_from(rename_all = "camelCase")]
+#[try_from(rename_all = camelCase)]
 pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The path to the root of the workspace the package is in.
     pub(crate) src: &'a Path,

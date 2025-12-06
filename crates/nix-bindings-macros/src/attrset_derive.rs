@@ -247,7 +247,7 @@ impl Field {
         let mut key_name_str = field_name.to_string();
 
         if let Some(rename) = rename {
-            rename.apply(&mut key_name_str);
+            rename.clone().apply(&mut key_name_str);
         }
 
         let key_name = CString::new(key_name_str)

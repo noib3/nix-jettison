@@ -98,14 +98,14 @@ fn try_from_attrset_impl(
         let field_attrs =
             Attributes::parse(&field.attrs, AttributePosition::Field)?;
 
-        let attrs = struct_attrs.combine(field_attrs);
-
         let field_name = field.ident.as_ref().expect("fields are named");
 
         let mut key_name_str = field_name.to_string();
 
-        if let Some(rename) = &attrs.rename {
-            rename.apply(&mut key_name_str);
+        if let Some(rename) =
+            field_attrs.rename.as_ref().or(struct_attrs.rename.as_ref())
+        {
+            rename.clone().apply(&mut key_name_str);
         }
 
         let key_name = CString::new(key_name_str)
@@ -119,16 +119,18 @@ fn try_from_attrset_impl(
 
         field_names.push(field_name);
 
-        field_initializers.extend(if attrs.default {
-            quote! {
-                let #field_name = #attrset.get_opt(#key_name, #ctx)?
-                    .unwrap_or_default();
-            }
-        } else {
-            quote! {
-                let #field_name = #attrset.get(#key_name, #ctx)?;
-            }
-        });
+        field_initializers.extend(
+            if struct_attrs.default || field_attrs.default {
+                quote! {
+                    let #field_name = #attrset.get_opt(#key_name, #ctx)?
+                        .unwrap_or_default();
+                }
+            } else {
+                quote! {
+                    let #field_name = #attrset.get(#key_name, #ctx)?;
+                }
+            },
+        );
     }
 
     Ok(quote! {
@@ -137,7 +139,7 @@ fn try_from_attrset_impl(
     })
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Clone, Default)]
 struct Attributes {
     rename: Option<Rename>,
     default: bool,
@@ -149,19 +151,13 @@ pub(crate) enum AttributePosition {
     Struct,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub(crate) enum Rename {
     CamelCase,
+    Replace(String),
 }
 
 impl Attributes {
-    fn combine(self, other: Self) -> Self {
-        Self {
-            rename: other.rename.or(self.rename),
-            default: self.default || other.default,
-        }
-    }
-
     fn parse(attrs: &[Attribute], pos: AttributePosition) -> syn::Result<Self> {
         let mut this = Self::default();
 
@@ -213,22 +209,39 @@ impl Rename {
     pub(crate) fn apply(self, field_name: &mut String) {
         match self {
             Self::CamelCase => to_camel_case(field_name),
+            Self::Replace(s) => *field_name = s,
         }
     }
 
     pub(crate) fn parse(
         meta: ParseNestedMeta<'_>,
-        _pos: AttributePosition,
+        pos: AttributePosition,
     ) -> syn::Result<Self> {
-        let lit = meta.value()?.parse::<Literal>()?;
+        let value = meta.value()?;
+
+        let fork = value.fork();
+        if let Ok(ident) = fork.parse::<syn::Ident>() {
+            value.parse::<syn::Ident>()?;
+            match ident.to_string().as_str() {
+                "camelCase" => return Ok(Self::CamelCase),
+                _ => {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        format_args!("unsupported rename value: {}", ident),
+                    ));
+                },
+            }
+        }
+
+        let lit: Literal = value.parse()?;
         let lit_str = lit.to_string();
         let value = lit_str.trim_matches('"');
 
-        match value {
-            "camelCase" => Ok(Self::CamelCase),
-            _ => Err(syn::Error::new(
+        match pos {
+            AttributePosition::Field => Ok(Self::Replace(value.to_string())),
+            AttributePosition::Struct => Err(syn::Error::new(
                 lit.span(),
-                format_args!("unsupported rename value: {value}"),
+                "literal string renames are only allowed on struct fields",
             )),
         }
     }

@@ -19,7 +19,7 @@ pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
 
 /// The required, crate-specific arguments accepted by `pkgs.buildRustCrate`.
 #[derive(nix_bindings::Attrset)]
-// #[attrset(rename_all = camelCase)]
+#[attrset(rename_all = camelCase)]
 pub(crate) struct RequiredBuildCrateArgs<'src> {
     pub(crate) crate_name: CompactString,
     #[attrset(with_value = Self::src_value)]
@@ -54,7 +54,7 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
 }
 
 #[derive(Default, nix_bindings::Attrset)]
-// #[attrset(rename_all = camelCase)]
+#[attrset(rename_all = camelCase)]
 pub(crate) struct OptionalBuildCrateArgsInner {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
@@ -127,19 +127,19 @@ pub(crate) struct OptionalBuildCrateArgsInner {
 }
 
 #[derive(cauchy::Default, nix_bindings::Attrset)]
-#[attrset(bounds = {Dep: ToValue})]
+#[attrset(bounds = { Dep: ToValue })]
 pub(crate) struct Dependencies<Dep> {
-    // #[attrset(rename = "dependencies", skip_if = Vec::is_empty)]
+    #[attrset(rename = "dependencies", skip_if = Vec::is_empty)]
     pub(crate) normal: Vec<Dep>,
 
-    // #[attrset(rename = "buildDependencies", skip_if = Vec::is_empty)]
+    #[attrset(rename = "buildDependencies", skip_if = Vec::is_empty)]
     pub(crate) build: Vec<Dep>,
 }
 
 /// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
 /// arguments don't depend on the particular crate being built.
 #[derive(Default, nix_bindings::Attrset)]
-// #[attrset(rename_all = camelCase, skip_if = Option::is_none)]
+#[attrset(rename_all = camelCase, skip_if = Option::is_none)]
 pub(crate) struct GlobalBuildCrateArgs<'a> {
     pub(crate) build_tests: Option<bool>,
     pub(crate) cargo: Option<NixDerivation<'a>>,
