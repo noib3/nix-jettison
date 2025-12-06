@@ -1,32 +1,18 @@
 use core::ffi::CStr;
 use core::result::Result;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::env;
 use std::ffi::CString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::Context as _;
-use cargo::GlobalContext;
-use cargo::core::compiler::{CompileKind, RustcTargetData};
-use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{
-    Package,
-    PackageId,
-    PackageIdSpec,
-    Resolve,
-    Shell,
-    Workspace,
-};
-use cargo::ops::{self, WorkspaceResolve};
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::vendor_deps::{
-    VendorDeps,
-    VendorDepsArgs,
-    VendorDepsError,
-    VendorDir,
+use crate::build_crate::BuildCrateArgs;
+use crate::resolve_build_graph::{
+    ResolveBuildGraph,
+    ResolveBuildGraphArgs,
+    ResolveBuildGraphError,
 };
+use crate::vendor_deps::{VendorDeps, VendorDepsArgs, VendorDepsError};
 
 /// Builds a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -50,160 +36,14 @@ pub(crate) struct BuildPackageArgs<'a> {
 #[derive(Debug, derive_more::Display, cauchy::From)]
 #[display("{_0}")]
 pub(crate) enum BuildPackageError {
-    /// Configuring the global Cargo context failed.
-    ConfigureCargoContext(anyhow::Error),
-
-    /// Constructing the [`RustcTargetData`] failed.
-    CreateTargetData(anyhow::Error),
-
-    /// Constructing the [`Workspace`] failed.
-    CreateWorkspace(anyhow::Error),
-
-    /// Getting the current working directory failed..
-    Cwd(anyhow::Error),
-
     /// A Nix runtime error occurred.
     Nix(#[from] NixError),
 
-    /// Parsing the features failed.
-    ParseFeatures(anyhow::Error),
-
-    /// Resolving the [`Workspace`] failed.
-    ResolveWorkspace(anyhow::Error),
+    /// Resolving the build graph failed.
+    ResolveBuildGraph(#[from] ResolveBuildGraphError),
 
     /// Vendoring the dependencies failed.
     VendorDeps(#[from] VendorDepsError),
-}
-
-struct BuildGraph {
-    crates: HashMap<PackageId, Thunk<'static, NixDerivation<'static>>>,
-}
-
-impl BuildPackage {
-    fn cargo_ctx(
-        cargo_home: PathBuf,
-    ) -> Result<GlobalContext, BuildPackageError> {
-        let cwd = env::current_dir()
-            .context("couldn't get the current directory of the process")
-            .map_err(BuildPackageError::Cwd)?;
-
-        let mut ctx = GlobalContext::new(Shell::new(), cwd, cargo_home);
-
-        ctx.configure(0, false, None, true, true, true, &None, &[], &[])
-            .map_err(BuildPackageError::ConfigureCargoContext)?;
-
-        Ok(ctx)
-    }
-
-    fn generate_cargo_config(vendor_dir: &Path) -> String {
-        let vendored_sources = "vendored-sources";
-
-        format!(
-            r#"
-[source.crates-io]
-replace-with = "{vendored_sources}"
-
-[source.{vendored_sources}]
-directory = "{}"
-"#,
-            vendor_dir.display()
-        )
-    }
-}
-
-impl BuildPackageArgs<'_> {
-    fn compile_target(
-        &self,
-        _ctx: &mut Context,
-    ) -> Result<CompileKind, BuildPackageError> {
-        Ok(CompileKind::Host)
-    }
-
-    fn features(
-        &self,
-        _ctx: &mut Context,
-    ) -> Result<CliFeatures, BuildPackageError> {
-        CliFeatures::from_command_line(
-            &self.features,
-            self.all_features,
-            !self.no_default_features,
-        )
-        .map_err(BuildPackageError::ParseFeatures)
-    }
-}
-
-impl BuildGraph {
-    fn new(
-        root_pkg_name: &str,
-        ws_resolve: WorkspaceResolve<'_>,
-        _ctx: &mut Context,
-    ) -> Result<Self, NixError> {
-        let _root_id = ws_resolve
-            .targeted_resolve
-            .iter()
-            .find(|id| id.name().as_str() == root_pkg_name)
-            .expect("root package not found in workspace resolve");
-
-        todo!();
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_rust_crate(
-        resolve: &Resolve,
-        package: &Package,
-        deps: &[Thunk<'static, NixDerivation<'static>>],
-        build_deps: &[Thunk<'static, NixDerivation<'static>>],
-        vendor_dir: &VendorDir,
-        pkgs: NixAttrset,
-        ctx: &mut Context,
-    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
-        let pkg_id = package.package_id();
-
-        let src =
-            if pkg_id.source_id().is_path() {
-                Cow::Borrowed(package.root())
-            } else {
-                Cow::Owned(vendor_dir.get_package_src(
-                    package.name().as_str(),
-                    package.version(),
-                ))
-            };
-
-        let features = resolve
-            .features(pkg_id)
-            .iter()
-            .map(|feature| feature.as_str())
-            .into_value();
-
-        let custom_lib_name = package.targets().iter().find_map(|target| {
-            if !target.is_lib() {
-                None
-            } else {
-                (pkg_id.name() != target.name()).then(|| target.name())
-            }
-        });
-
-        // See https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/default.nix#L232-L251
-        // for the list of arguments processed by `buildRustCrate`.
-        let args = attrset! {
-            src: src,
-            release: true,
-            crateName: pkg_id.name().as_str(),
-            version: pkg_id.version().to_string(),
-            dependencies: deps.into_value(),
-            features: features,
-            edition: package.manifest().edition().to_string(),
-            procMacro: package.proc_macro(),
-        }
-        .merge(custom_lib_name.map(|name| attrset! { libName: name }))
-        .merge((!build_deps.is_empty()).then(|| {
-            attrset! {
-                buildDependencies: build_deps.into_value(),
-            }
-        }));
-
-        pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?.call(args, ctx)
-    }
 }
 
 impl Function for BuildPackage {
@@ -212,52 +52,55 @@ impl Function for BuildPackage {
     fn call<'a: 'a>(
         args: Self::Args<'a>,
         ctx: &mut Context,
-    ) -> Result<impl Value + use<>, BuildPackageError> {
-        let vendor_args = VendorDepsArgs {
+    ) -> Result<NixDerivation<'static>, BuildPackageError> {
+        let vendor_deps_args = VendorDepsArgs {
             pkgs: args.pkgs,
             cargo_lock: args.src.join("Cargo.lock").into(),
         };
 
-        let vendor_dir = <VendorDeps as Function>::call(vendor_args, ctx)?;
+        let vendor_dir = <VendorDeps as Function>::call(vendor_deps_args, ctx)?;
 
-        let cargo_config = Self::generate_cargo_config(vendor_dir.path());
+        let resolve_build_graph_args = ResolveBuildGraphArgs {
+            vendor_dir: vendor_dir.path(),
+            src: args.src,
+            package: args.package,
+            features: args.features,
+            all_features: args.all_features,
+            no_default_features: args.no_default_features,
+        };
 
-        let cargo_home = args
-            .pkgs
-            .get::<NixLambda>(c"writeTextDir", ctx)?
-            .call_multi::<NixDerivation>(("config.toml", cargo_config), ctx)?
-            .force(ctx)?;
+        let build_graph = <ResolveBuildGraph as Function>::call(
+            resolve_build_graph_args,
+            ctx,
+        )?;
 
-        let global_ctx = Self::cargo_ctx(cargo_home.out_path(ctx)?)?;
+        let build_rust_crate =
+            args.pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?;
 
-        let manifest_path = args.src.join("Cargo.toml");
+        let mut build_crates: Vec<NixDerivation<'static>> =
+            Vec::with_capacity(build_graph.crates.len());
 
-        let workspace = Workspace::new(&manifest_path, &global_ctx)
-            .map_err(BuildPackageError::CreateWorkspace)?;
+        for args in build_graph.crates {
+            let args = BuildCrateArgs {
+                required: args.required,
+                optional: args.optional.map_deps(|idx| build_crates[idx]),
+                global: args.global,
+            };
 
-        let target = args.compile_target(ctx)?;
+            let derivation = build_rust_crate
+                .call(args.to_value(), ctx)
+                .map_err(BuildPackageError::Nix)?
+                .force(ctx)?;
 
-        let mut target_data = RustcTargetData::new(&workspace, &[target])
-            .map_err(BuildPackageError::CreateTargetData)?;
+            build_crates.push(derivation);
+        }
 
-        let _workspace_resolve = ops::resolve_ws_with_opts(
-            &workspace,
-            &mut target_data,
-            &[target],
-            &args.features(ctx)?,
-            &[PackageIdSpec::new(args.package.clone())],
-            HasDevUnits::No,
-            ForceAllTargets::No,
-            true,
-        )
-        .map_err(BuildPackageError::ResolveWorkspace)?;
-
-        Ok(workspace
-            .members()
-            .map(|pkg| pkg.name().as_str())
-            .collect::<Vec<_>>()
-            .into_list()
-            .into_value())
+        // The derivation for the requested package is the root of the build
+        // graph, which is the last element in the list.
+        Ok(build_crates
+            .into_iter()
+            .next_back()
+            .expect("build graph is never empty"))
     }
 }
 

@@ -153,6 +153,41 @@ impl RequiredBuildCrateArgs<'_> {
     }
 }
 
+impl<Dep> OptionalBuildCrateArgs<Dep> {
+    pub(crate) fn map_deps<NewDep>(
+        self,
+        fun: impl FnMut(Dep) -> NewDep + Clone,
+    ) -> OptionalBuildCrateArgs<NewDep> {
+        OptionalBuildCrateArgs {
+            authors: self.authors,
+            build: self.build,
+            build_dependencies: self
+                .build_dependencies
+                .into_iter()
+                .map(fun.clone())
+                .collect(),
+            codegen_units: self.codegen_units,
+            crate_bin: self.crate_bin,
+            crate_renames: self.crate_renames,
+            dependencies: self.dependencies.into_iter().map(fun).collect(),
+            description: self.description,
+            edition: self.edition,
+            extra_rustc_opts: self.extra_rustc_opts,
+            extra_rustc_opts_for_build_rs: self.extra_rustc_opts_for_build_rs,
+            features: self.features,
+            homepage: self.homepage,
+            lib_name: self.lib_name,
+            lib_path: self.lib_path,
+            license_file: self.license_file,
+            links: self.links,
+            readme: self.readme,
+            repository: self.repository,
+            rust_version: self.rust_version,
+            r#type: self.r#type,
+        }
+    }
+}
+
 impl<'src, Dep> From<RequiredBuildCrateArgs<'src>>
     for BuildCrateArgs<'_, 'src, Dep>
 {

@@ -47,7 +47,7 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
 }
 
 pub(crate) struct BuildGraph<'args> {
-    crates: Vec<BuildCrateArgs<'static, 'args, usize>>,
+    pub(crate) crates: Vec<BuildCrateArgs<'static, 'args, usize>>,
 }
 
 /// The type of error that can occur when resolving a build graph fails.

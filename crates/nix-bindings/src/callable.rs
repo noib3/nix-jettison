@@ -13,6 +13,7 @@ use crate::error::{Result, TypeMismatchError};
 use crate::thunk::Thunk;
 use crate::value::{
     FnOnceValue,
+    IntoValue,
     NixValue,
     TryFromValue,
     Value,
@@ -29,14 +30,14 @@ pub trait Callable {
     #[inline]
     fn call<T: TryFromValue<NixValue<'static>>>(
         &self,
-        arg: impl Value,
+        arg: impl IntoValue,
         ctx: &mut Context,
     ) -> Result<Thunk<'static, T>> {
         let dest_ptr = ctx.alloc_value()?;
         let arg_ptr = ctx.alloc_value()?;
 
-        let res =
-            (unsafe { arg.write_no_primop(arg_ptr, ctx) }).and_then(|()| {
+        let res = (unsafe { arg.into_value().write_no_primop(arg_ptr, ctx) })
+            .and_then(|()| {
                 ctx.with_raw(|ctx| {
                     unsafe {
                         sys::init_apply(
