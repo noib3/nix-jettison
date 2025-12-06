@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use cargo::core::Package;
 use cargo::core::compiler::CrateType;
 use compact_str::CompactString;
 use either::Either;
@@ -50,14 +51,18 @@ pub(crate) enum CrateSource<'src> {
 #[derive(cauchy::Default, nix_bindings::Attrset)]
 #[attrset(rename_all = "camelCase")]
 pub(crate) struct OptionalBuildCrateArgs<Dep> {
+    pub(crate) inner: OptionalBuildCrateArgsInner,
+    pub(crate) dependencies: Dependencies<Dep>,
+}
+
+#[derive(Default, nix_bindings::Attrset)]
+#[attrset(rename_all = "camelCase")]
+pub(crate) struct OptionalBuildCrateArgsInner {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) build: Option<String>,
-
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) build_dependencies: Vec<Dep>,
 
     /// This is derived state which can be specified in Cargo profiles (for
     /// example: `[profile.release] codegen-units = N`).
@@ -73,9 +78,6 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
     /// of the crate.
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) crate_renames: Vec<()>,
-
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) dependencies: Vec<Dep>,
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) description: Option<CompactString>,
@@ -126,6 +128,16 @@ pub(crate) struct OptionalBuildCrateArgs<Dep> {
     pub(crate) r#type: Vec<CrateType>,
 }
 
+#[derive(cauchy::Default, nix_bindings::Attrset)]
+#[attrset(rename_all = "camelCase")]
+pub(crate) struct Dependencies<Dep> {
+    #[attrset(skip_if = Vec::is_empty)]
+    pub(crate) normal: Vec<Dep>,
+
+    #[attrset(skip_if = Vec::is_empty)]
+    pub(crate) build: Vec<Dep>,
+}
+
 /// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
 /// arguments don't depend on the particular crate being built.
 #[derive(Default, nix_bindings::Attrset)]
@@ -159,58 +171,62 @@ impl<Dep> OptionalBuildCrateArgs<Dep> {
         fun: impl FnMut(Dep) -> NewDep + Clone,
     ) -> OptionalBuildCrateArgs<NewDep> {
         OptionalBuildCrateArgs {
-            authors: self.authors,
-            build: self.build,
-            build_dependencies: self
-                .build_dependencies
-                .into_iter()
-                .map(fun.clone())
-                .collect(),
-            codegen_units: self.codegen_units,
-            crate_bin: self.crate_bin,
-            crate_renames: self.crate_renames,
-            dependencies: self.dependencies.into_iter().map(fun).collect(),
-            description: self.description,
-            edition: self.edition,
-            extra_rustc_opts: self.extra_rustc_opts,
-            extra_rustc_opts_for_build_rs: self.extra_rustc_opts_for_build_rs,
-            features: self.features,
-            homepage: self.homepage,
-            lib_name: self.lib_name,
-            lib_path: self.lib_path,
-            license_file: self.license_file,
-            links: self.links,
-            readme: self.readme,
-            repository: self.repository,
-            rust_version: self.rust_version,
-            r#type: self.r#type,
+            inner: self.inner,
+            dependencies: self.dependencies.map(fun),
+        }
+    }
+
+    fn to_attrset(&self) -> impl Attrset
+    where
+        Dep: Value,
+    {
+        // SAFETY: 'inner' and 'dependencies' don't have any overlapping keys.
+        unsafe { self.inner.borrow().concat(self.dependencies.to_attrset()) }
+    }
+}
+
+impl<Dep> Dependencies<Dep> {
+    pub(crate) fn map<NewDep>(
+        self,
+        fun: impl FnMut(Dep) -> NewDep + Clone,
+    ) -> Dependencies<NewDep> {
+        Dependencies {
+            build: self.build.into_iter().map(fun.clone()).collect(),
+            normal: self.normal.into_iter().map(fun).collect(),
+        }
+    }
+
+    fn to_attrset(&self) -> impl Attrset
+    where
+        Dep: Value,
+    {
+        attrset! {
+            dependencies: &*self.normal,
+            buildDependencies: &*self.build,
         }
     }
 }
 
-impl<'src, Dep> From<RequiredBuildCrateArgs<'src>>
-    for BuildCrateArgs<'_, 'src, Dep>
-{
-    fn from(required: RequiredBuildCrateArgs<'src>) -> Self {
-        Self {
-            required,
-            optional: OptionalBuildCrateArgs::default(),
-            global: GlobalBuildCrateArgs::default(),
-        }
-    }
-}
-
-impl<Dep> ToValue for BuildCrateArgs<'_, '_, Dep>
-where
-    OptionalBuildCrateArgs<Dep>: Attrset,
-{
+impl<Dep: Value> ToValue for BuildCrateArgs<'_, '_, Dep> {
     fn to_value(&self) -> impl Value {
         // SAFETY: the three inner attrsets don't contain any overlapping keys.
         unsafe {
             self.required
                 .borrow()
-                .concat(self.optional.borrow())
+                .concat(self.optional.to_attrset())
                 .concat(self.global.borrow())
         }
+    }
+}
+
+impl From<&Package> for RequiredBuildCrateArgs<'_> {
+    fn from(_package: &Package) -> Self {
+        todo!();
+    }
+}
+
+impl From<&Package> for OptionalBuildCrateArgsInner {
+    fn from(_package: &Package) -> Self {
+        todo!();
     }
 }

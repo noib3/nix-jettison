@@ -90,6 +90,7 @@ impl Function for BuildPackage {
             let derivation = build_rust_crate
                 .call(args.to_value(), ctx)
                 .map_err(BuildPackageError::Nix)?
+                // FIXME: does forcing here disable build parallelism?
                 .force(ctx)?;
 
             build_crates.push(derivation);

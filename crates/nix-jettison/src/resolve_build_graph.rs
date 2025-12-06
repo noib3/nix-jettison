@@ -1,17 +1,23 @@
 use core::ffi::CStr;
 use core::result::Result;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::Path;
 
 use cargo::GlobalContext;
 use cargo::core::compiler::{CompileKind, RustcTargetData};
+use cargo::core::dependency::DepKind;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{PackageIdSpec, Workspace};
+use cargo::core::{PackageId, PackageIdSpec, Workspace};
 use cargo::ops::{self, WorkspaceResolve};
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_crate::BuildCrateArgs;
+use crate::build_crate::{
+    BuildCrateArgs,
+    Dependencies,
+    OptionalBuildCrateArgs,
+};
 
 /// Resolves the build graph of a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -48,6 +54,7 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
 
 pub(crate) struct BuildGraph<'args> {
     pub(crate) crates: Vec<BuildCrateArgs<'static, 'args, usize>>,
+    pkg_id_to_idx: HashMap<PackageId, usize>,
 }
 
 /// The type of error that can occur when resolving a build graph fails.
@@ -128,13 +135,65 @@ impl<'args> BuildGraph<'args> {
         args: &ResolveBuildGraphArgs<'args>,
         ws_resolve: WorkspaceResolve<'_>,
     ) -> Result<Self, ResolveBuildGraphError> {
-        let _root_id = ws_resolve
+        let root_id = ws_resolve
             .targeted_resolve
             .iter()
             .find(|id| id.name().as_str() == args.package)
             .expect("root package not found in workspace resolve");
 
-        todo!();
+        let mut this =
+            Self { crates: Vec::new(), pkg_id_to_idx: HashMap::new() };
+
+        Self::build_recursive(&mut this, root_id, args, &ws_resolve);
+
+        Ok(this)
+    }
+
+    fn build_recursive(
+        this: &mut Self,
+        pkg_id: PackageId,
+        args: &ResolveBuildGraphArgs<'args>,
+        ws_resolve: &WorkspaceResolve<'_>,
+    ) -> usize {
+        // Fast path if we've already seen this package.
+        if let Some(&idx) = this.pkg_id_to_idx.get(&pkg_id) {
+            return idx;
+        }
+
+        let mut dependencies = Dependencies::default();
+
+        for (dep_id, dep_set) in ws_resolve.targeted_resolve.deps(pkg_id) {
+            let dep_idx = Self::build_recursive(this, dep_id, args, ws_resolve);
+
+            for dep in dep_set {
+                match dep.kind() {
+                    DepKind::Normal => dependencies.normal.push(dep_idx),
+                    DepKind::Development => {},
+                    DepKind::Build => dependencies.build.push(dep_idx),
+                }
+            }
+        }
+
+        let package = ws_resolve
+            .pkg_set
+            .get_one(pkg_id)
+            .expect("package ID not found in workspace");
+
+        let build_crate_args = BuildCrateArgs {
+            required: package.into(),
+            optional: OptionalBuildCrateArgs {
+                dependencies,
+                inner: package.into(),
+            },
+            global: Default::default(),
+        };
+
+        let idx = this.crates.len();
+
+        this.crates.push(build_crate_args);
+        this.pkg_id_to_idx.insert(pkg_id, idx);
+
+        idx
     }
 }
 
