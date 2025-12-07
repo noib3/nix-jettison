@@ -18,6 +18,7 @@ derive_more = { workspace = true }
 either = { workspace = true }
 memchr = { workspace = true }
 nix-bindings = { workspace = true, features = ["compact_str", "either", "std"] }
+percent-encoding = { workspace = true }
 
 [lints]
 workspace = true

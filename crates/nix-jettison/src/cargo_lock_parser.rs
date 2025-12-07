@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use compact_str::CompactString;
 
 const CRATES_IO_REGISTRY_URL: &str = cargo::sources::CRATES_IO_INDEX;
@@ -103,29 +105,49 @@ pub(crate) enum RegistryProtocol {
 pub(crate) struct GitSource<'lock> {
     pub(crate) url: &'lock str,
     pub(crate) rev: &'lock str,
-    pub(crate) tag: Option<&'lock str>,
-    pub(crate) branch: Option<&'lock str>,
-    pub(crate) url_fragment: Option<&'lock str>,
+    pub(crate) detail: Option<GitSourceDetail<'lock>>,
+}
+
+/// See [docs] for more infos.
+///
+/// These were made mutually exclusive in [8984].
+///
+/// [docs]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#choice-of-commit
+/// [8984]: https://github.com/rust-lang/cargo/pull/8984
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GitSourceDetail<'lock> {
+    Branch(&'lock str),
+    Tag(&'lock str),
+    Rev(&'lock str),
 }
 
 /// The type of error that can occur when parsing the contents of a
 /// `Cargo.lock` file.
 #[derive(Debug, derive_more::Display, cauchy::Error)]
 pub(crate) enum CargoLockParseError {
+    #[display(
+        "invalid source protocol: {protocol}, expected one of 'registry+', \
+         'sparse+' or 'git+'"
+    )]
+    InvalidSourceProtocol { protocol: CompactString },
+
+    #[display(
+        "invalid git detail key: {key}, expected one of 'branch', 'tag' or \
+         'rev'"
+    )]
+    InvalidGitDetailKey { key: CompactString },
+
     #[display("missing closing quote for field '{field_name}'")]
     MissingClosingQuote { field_name: &'static str },
 
     #[display("expected field '{field_name}' after '{after}'")]
     MissingField { field_name: &'static str, after: &'static str },
 
+    #[display("missing git revision in {source:?}")]
+    MissingGitRevision { source: CompactString },
+
     #[display("missing source protocol in {source:?}")]
     MissingSourceProtocol { source: CompactString },
-
-    #[display(
-        "invalid source protocol: {protocol}, expected one of 'registry+', \
-         'sparse+' or 'git+'"
-    )]
-    InvalidSourceProtocol { protocol: CompactString },
 }
 
 trait Search<Needle>: AsRef<str> {
@@ -307,7 +329,7 @@ impl<'lock> PackageSource<'lock> {
     fn parse(source: &'lock str) -> Result<Self, CargoLockParseError> {
         let (protocol, url) = source.split_once('+').ok_or(
             CargoLockParseError::MissingSourceProtocol {
-                source: CompactString::from(source),
+                source: source.into(),
             },
         )?;
 
@@ -336,6 +358,24 @@ impl<'lock> PackageSource<'lock> {
     }
 }
 
+impl<'lock> GitSourceDetail<'lock> {
+    /// Converts `self` into the string to pass as the `ref` argument to
+    /// `builtins.fetchGit`.
+    pub(crate) fn into_ref_for_fetch_git(self) -> Option<Cow<'lock, str>> {
+        match self {
+            Self::Branch(branch) => Some(Cow::Borrowed(branch)),
+            Self::Tag(tag) => Some(Cow::Owned(format!("refs/tags/{tag}"))),
+            Self::Rev(rev) => {
+                let rev = percent_encoding::percent_decode_str(rev)
+                    .decode_utf8()
+                    .expect("gave a &str as input, so it must be valid UTF-8");
+
+                rev.starts_with("refs/").then_some(rev)
+            },
+        }
+    }
+}
+
 impl<'lock> Iterator for CargoLockParser<'lock> {
     type Item = Result<PackageEntry<'lock>, CargoLockParseError>;
 
@@ -349,8 +389,35 @@ impl<'lock> TryFrom<&'lock str> for GitSource<'lock> {
     type Error = CargoLockParseError;
 
     #[inline]
-    fn try_from(_source: &'lock str) -> Result<Self, Self::Error> {
-        todo!();
+    fn try_from(source: &'lock str) -> Result<Self, Self::Error> {
+        // Git sources have the format: <url>[?<key=value>]#<revision>
+
+        let (url_with_query, rev) =
+            source.split_once('#').ok_or_else(|| {
+                CargoLockParseError::MissingGitRevision {
+                    source: source.into(),
+                }
+            })?;
+
+        let (url, query) =
+            url_with_query.split_once('?').unwrap_or((url_with_query, ""));
+
+        let detail = if let Some((key, value)) = query.split_once('=') {
+            Some(match key {
+                "branch" => GitSourceDetail::Branch(value),
+                "tag" => GitSourceDetail::Tag(value),
+                "rev" => GitSourceDetail::Rev(value),
+                _ => {
+                    return Err(CargoLockParseError::InvalidGitDetailKey {
+                        key: key.into(),
+                    });
+                },
+            })
+        } else {
+            None
+        };
+
+        Ok(Self { url, rev, detail })
     }
 }
 

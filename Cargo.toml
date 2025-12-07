@@ -23,10 +23,11 @@ derive_more = { version = "2", default-features = false, features = [
 doxygen-bindgen = "0.1"
 either = { version = "1", default-features = false }
 memchr = "2"
+percent-encoding = "2"
 pkg-config = "0.3"
 proc-macro2 = "1"
 quote = "1"
-syn = "2.0"
+syn = "2"
 
 # Internal dependencies.
 nix-bindings = { path = "./crates/nix-bindings" }

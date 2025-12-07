@@ -13,6 +13,7 @@ use nix_bindings::prelude::{Error as NixError, *};
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,
+    GitSourceDetail,
     PackageEntry,
     PackageSource,
     RegistryKind,
@@ -101,13 +102,13 @@ impl VendorDir {
                     funs.fetchurl.call::<NixAttrset>(args, ctx)?
                 },
                 Some(PackageSource::Git(src)) => {
-                    let r#ref = src.branch.map(Cow::Borrowed).or_else(|| {
-                        src.tag.map(|tag| format!("refs/tags/{tag}").into())
-                    });
+                    let r#ref = src
+                        .detail
+                        .and_then(GitSourceDetail::into_ref_for_fetch_git);
 
                     let args = attrset! {
                         url: src.url,
-                        rev: src.url_fragment.unwrap_or(src.rev),
+                        rev: src.rev,
                         submodules: true,
                     }
                     .merge(match r#ref {

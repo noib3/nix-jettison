@@ -2520,6 +2520,7 @@ dependencies = [
  "either",
  "memchr",
  "nix-bindings",
+ "percent-encoding",
 ]
 
 [[package]]
