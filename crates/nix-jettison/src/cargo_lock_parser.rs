@@ -327,11 +327,9 @@ impl<'lock> PackageSource<'lock> {
     /// empty. The caller is responsible for setting it.
     #[inline]
     fn parse(source: &'lock str) -> Result<Self, CargoLockParseError> {
-        let (protocol, url) = source.split_once('+').ok_or(
-            CargoLockParseError::MissingSourceProtocol {
-                source: source.into(),
-            },
-        )?;
+        let (protocol, url) = source.split_once('+').ok_or_else(|| {
+            CargoLockParseError::MissingSourceProtocol { source: source.into() }
+        })?;
 
         let protocol = match protocol {
             "registry" => RegistryProtocol::Registry,
@@ -432,5 +430,37 @@ impl Search<&str> for &str {
     #[inline]
     fn search(&self, needle: &str) -> Option<usize> {
         memchr::memmem::find(self.as_bytes(), needle.as_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple() {
+        let source = "https://github.com/user/repo.git#abc123";
+        let git_src = GitSource::try_from(source).unwrap();
+        assert_eq!(git_src.url, "https://github.com/user/repo.git");
+        assert_eq!(git_src.rev, "abc123");
+        assert_eq!(git_src.detail, None);
+    }
+
+    #[test]
+    fn with_tag() {
+        let source = "https://github.com/user/repo.git?tag=v1.0.0#abc123";
+        let git_src = GitSource::try_from(source).unwrap();
+        assert_eq!(git_src.url, "https://github.com/user/repo.git");
+        assert_eq!(git_src.rev, "abc123");
+        assert_eq!(git_src.detail, Some(GitSourceDetail::Tag("v1.0.0")));
+    }
+
+    #[test]
+    fn with_branch() {
+        let source = "https://github.com/user/repo.git?branch=main#abc123";
+        let git_src = GitSource::try_from(source).unwrap();
+        assert_eq!(git_src.url, "https://github.com/user/repo.git");
+        assert_eq!(git_src.rev, "abc123");
+        assert_eq!(git_src.detail, Some(GitSourceDetail::Branch("main")));
     }
 }
