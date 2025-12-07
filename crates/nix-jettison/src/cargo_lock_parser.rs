@@ -1,3 +1,8 @@
+use compact_str::CompactString;
+
+const CRATES_IO_REGISTRY_URL: &str = cargo::sources::CRATES_IO_INDEX;
+const CRATES_IO_SPARSE_URL: &str = "https://index.crates.io/";
+
 /// A simple, no-allocation parser for the subset of the Cargo.lock format that
 /// we need to vendor dependencies.
 pub(crate) struct CargoLockParser<'lock> {
@@ -56,14 +61,13 @@ pub(crate) struct CargoLockParser<'lock> {
 pub(crate) struct PackageEntry<'lock> {
     pub(crate) name: &'lock str,
     pub(crate) version: &'lock str,
-    pub(crate) source: PackageSource<'lock>,
+    pub(crate) source: Option<PackageSource<'lock>>,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum PackageSource<'lock> {
     Registry(RegistrySource<'lock>),
     Git(GitSource<'lock>),
-    Path,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -82,6 +86,7 @@ pub(crate) enum RegistryKind<'lock> {
     /// For other registries we need to store both the protocol and the URL to
     /// know where to get the `config.json` file containing the download URL
     /// template.
+    #[expect(unused, reason = "we can't handle custom registries yet")]
     Other { protocol: RegistryProtocol, url: &'lock str },
 }
 
@@ -107,11 +112,20 @@ pub(crate) struct GitSource<'lock> {
 /// `Cargo.lock` file.
 #[derive(Debug, derive_more::Display, cauchy::Error)]
 pub(crate) enum CargoLockParseError {
+    #[display("missing closing quote for field '{field_name}'")]
+    MissingClosingQuote { field_name: &'static str },
+
     #[display("expected field '{field_name}' after '{after}'")]
     MissingField { field_name: &'static str, after: &'static str },
 
-    #[display("missing closing quote for field '{field_name}'")]
-    MissingClosingQuote { field_name: &'static str },
+    #[display("missing source protocol in {source:?}")]
+    MissingSourceProtocol { source: CompactString },
+
+    #[display(
+        "invalid source protocol: {protocol}, expected one of 'registry+', \
+         'sparse+' or 'git+'"
+    )]
+    InvalidSourceProtocol { protocol: CompactString },
 }
 
 trait Search<Needle>: AsRef<str> {
@@ -146,20 +160,12 @@ impl<'lock> CargoLockParser<'lock> {
         &mut self,
     ) -> Result<Option<PackageEntry<'lock>>, CargoLockParseError> {
         // Start with a dummy entry, we'll fill its fields as we parse them.
-        let mut entry =
-            PackageEntry { name: "", version: "", source: PackageSource::Path };
+        let mut entry = PackageEntry { name: "", version: "", source: None };
 
         loop {
             match self.cursor_position {
                 CursorPosition::StartOfEntry => {
-                    let offset = self.search_from_cursor(b'n').ok_or(
-                        CargoLockParseError::MissingField {
-                            field_name: "name",
-                            after: "[[package]]",
-                        },
-                    )?;
-                    self.cursor_offset = offset;
-                    let expected = "name = \"";
+                    let expected = "[[package]]\nname = \"";
                     if !self.src_after_cursor().starts_with(expected) {
                         return Err(CargoLockParseError::MissingField {
                             field_name: "name",
@@ -201,7 +207,7 @@ impl<'lock> CargoLockParser<'lock> {
                 CursorPosition::EndOfVersion => {
                     let expected = "\nsource = \"";
                     if !self.src_after_cursor().starts_with(expected) {
-                        entry.source = PackageSource::Path;
+                        entry.source = None;
                         self.cursor_position = CursorPosition::EndOfChecksum;
                         continue;
                     }
@@ -213,13 +219,14 @@ impl<'lock> CargoLockParser<'lock> {
                         },
                     )?;
                     let source = &self.src[source_start..source_end];
-                    entry.source = PackageSource::try_from(source)?;
+                    entry.source = Some(PackageSource::parse(source)?);
                     self.cursor_offset = source_end + 1;
                     self.cursor_position = CursorPosition::EndOfSource;
                 },
 
                 CursorPosition::EndOfSource => {
-                    let PackageSource::Registry(src) = &mut entry.source else {
+                    let Some(PackageSource::Registry(src)) = &mut entry.source
+                    else {
                         self.cursor_position = CursorPosition::EndOfChecksum;
                         continue;
                     };
@@ -291,6 +298,44 @@ impl<'lock> CargoLockParser<'lock> {
     }
 }
 
+impl<'lock> PackageSource<'lock> {
+    /// Parses a package source string into a [`PackageSource`].
+    ///
+    /// Note that the [`checksum`](RegistrySource::checksum) field is left
+    /// empty. The caller is responsible for setting it.
+    #[inline]
+    fn parse(source: &'lock str) -> Result<Self, CargoLockParseError> {
+        let (protocol, url) = source.split_once('+').ok_or(
+            CargoLockParseError::MissingSourceProtocol {
+                source: CompactString::from(source),
+            },
+        )?;
+
+        let protocol = match protocol {
+            "registry" => RegistryProtocol::Registry,
+            "sparse" => RegistryProtocol::Sparse,
+            "git" => return GitSource::try_from(url).map(Self::Git),
+            _ => {
+                return Err(CargoLockParseError::InvalidSourceProtocol {
+                    protocol: protocol.into(),
+                });
+            },
+        };
+
+        let kind = match protocol {
+            RegistryProtocol::Registry if url == CRATES_IO_REGISTRY_URL => {
+                RegistryKind::CratesIo
+            },
+            RegistryProtocol::Sparse if url == CRATES_IO_SPARSE_URL => {
+                RegistryKind::CratesIo
+            },
+            _ => RegistryKind::Other { protocol, url },
+        };
+
+        Ok(Self::Registry(RegistrySource { checksum: "", kind }))
+    }
+}
+
 impl<'lock> Iterator for CargoLockParser<'lock> {
     type Item = Result<PackageEntry<'lock>, CargoLockParseError>;
 
@@ -300,7 +345,7 @@ impl<'lock> Iterator for CargoLockParser<'lock> {
     }
 }
 
-impl<'lock> TryFrom<&'lock str> for PackageSource<'lock> {
+impl<'lock> TryFrom<&'lock str> for GitSource<'lock> {
     type Error = CargoLockParseError;
 
     #[inline]

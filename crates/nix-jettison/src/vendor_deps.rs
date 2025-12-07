@@ -85,7 +85,7 @@ impl VendorDir {
             let PackageEntry { name, version, source } = dep_res?;
 
             let source_path = match source {
-                PackageSource::Registry(src) => {
+                Some(PackageSource::Registry(src)) => {
                     match src.kind {
                         RegistryKind::CratesIo => {},
                         RegistryKind::Other { .. } => {
@@ -100,7 +100,7 @@ impl VendorDir {
                     };
                     funs.fetchurl.call::<NixAttrset>(args, ctx)?
                 },
-                PackageSource::Git(src) => {
+                Some(PackageSource::Git(src)) => {
                     let r#ref = src.branch.map(Cow::Borrowed).or_else(|| {
                         src.tag.map(|tag| format!("refs/tags/{tag}").into())
                     });
@@ -117,7 +117,7 @@ impl VendorDir {
 
                     funs.fetch_git.call::<NixAttrset>(args, ctx)?
                 },
-                PackageSource::Path => continue,
+                None => continue,
             };
 
             links.push(attrset! {
