@@ -16,6 +16,7 @@ cauchy = { workspace = true }
 compact_str = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
+memchr = { workspace = true }
 nix-bindings = { workspace = true, features = ["compact_str", "either", "std"] }
 
 [lints]

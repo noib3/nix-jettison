@@ -128,10 +128,7 @@ impl VendorDir {
 
         let derivation = funs
             .link_farm
-            .call_multi::<NixDerivation>(
-                (c"vendored-deps", links.into_list().into_value()),
-                ctx,
-            )?
+            .call_multi::<NixDerivation>((c"vendored-deps", links), ctx)?
             .force(ctx)?;
 
         let out_path = derivation.out_path(ctx)?;
