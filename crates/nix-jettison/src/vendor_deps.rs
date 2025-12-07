@@ -10,6 +10,14 @@ use compact_str::{CompactString, format_compact};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
+use crate::cargo_lock_parser::{
+    CargoLockParseError,
+    CargoLockParser,
+    PackageEntry,
+    PackageSource,
+    RegistryKind,
+};
+
 /// Vendors the dependencies of a Rust package.
 #[derive(nix_bindings::PrimOp)]
 pub(crate) struct VendorDeps;
@@ -31,60 +39,17 @@ pub(crate) enum VendorDepsError {
 
     /// Parsing the contents of the `Cargo.lock` failed.
     #[display("failed to parse Cargo.lock at {path:?}: {err}")]
-    ParseCargoLock { path: PathBuf, err: ParseCargoLockError },
+    ParseCargoLock { path: PathBuf, err: CargoLockParseError },
 
     /// Reading the `Cargo.lock` into a string failed.
     #[display("failed to read Cargo.lock at {path:?}: {err}")]
     ReadCargoLock { path: PathBuf, err: io::Error },
 }
 
-/// The type of error that can occur when parsing the contents of a
-/// `Cargo.lock` file fails.
-#[derive(Debug, derive_more::Display)]
-#[display("{_0}")]
-pub(crate) enum ParseCargoLockError {}
-
 /// TODO: docs.
 pub(crate) struct VendorDir {
     derivation: NixDerivation<'static>,
     out_path: PathBuf,
-}
-
-/// TODO: docs.
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct Dependency<'lock> {
-    name: &'lock str,
-    version: &'lock str,
-    source: DependencySource<'lock>,
-}
-
-/// TODO: docs.
-#[derive(Debug, Copy, Clone)]
-pub(crate) enum DependencySource<'lock> {
-    /// TODO: docs.
-    CratesIo(CratesIoSource<'lock>),
-
-    /// TODO: docs.
-    Git(GitSource<'lock>),
-
-    /// TODO: docs.
-    Path,
-}
-
-/// TODO: docs.
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct CratesIoSource<'lock> {
-    checksum: &'lock str,
-}
-
-/// TODO: docs.
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct GitSource<'lock> {
-    url: &'lock str,
-    rev: &'lock str,
-    url_fragment: Option<&'lock str>,
-    branch: Option<&'lock str>,
-    tag: Option<&'lock str>,
 }
 
 /// The functions that will have to be called to create the vendor directory.
@@ -106,18 +71,28 @@ impl VendorDir {
         &self.out_path
     }
 
-    fn create<'a>(
+    fn create<'a, Err>(
+        deps: impl Iterator<Item = Result<PackageEntry<'a>, Err>>,
         funs: CreateVendorDirFuns,
-        deps: impl Iterator<Item = Dependency<'a>>,
         ctx: &mut Context,
-    ) -> Result<Self, NixError> {
+    ) -> Result<Self, VendorDepsError>
+    where
+        VendorDepsError: From<Err>,
+    {
         let mut links = Vec::new();
 
-        for dep in deps {
-            let Dependency { name, version, .. } = dep;
+        for dep_res in deps {
+            let PackageEntry { name, version, source } = dep_res?;
 
-            let source_path = match dep.source {
-                DependencySource::CratesIo(src) => {
+            let source_path = match source {
+                PackageSource::Registry(src) => {
+                    match src.kind {
+                        RegistryKind::CratesIo => {},
+                        RegistryKind::Other { .. } => {
+                            panic!("custom registries are not yet supported")
+                        },
+                    }
+
                     let args = attrset! {
                         name: format!("{name}-{version}.tar.gz"),
                         url: format!("https://static.crates.io/crates/{name}/{name}-{version}.crate"),
@@ -125,7 +100,7 @@ impl VendorDir {
                     };
                     funs.fetchurl.call::<NixAttrset>(args, ctx)?
                 },
-                DependencySource::Git(src) => {
+                PackageSource::Git(src) => {
                     let r#ref = src.branch.map(Cow::Borrowed).or_else(|| {
                         src.tag.map(|tag| format!("refs/tags/{tag}").into())
                     });
@@ -142,7 +117,7 @@ impl VendorDir {
 
                     funs.fetch_git.call::<NixAttrset>(args, ctx)?
                 },
-                DependencySource::Path => continue,
+                PackageSource::Path => continue,
             };
 
             links.push(attrset! {
@@ -182,15 +157,12 @@ impl Function for VendorDeps {
             },
         };
 
-        let deps = match parse_lockfile(&cargo_lock) {
-            Ok(deps) => deps,
-            Err(err) => {
-                return Err(VendorDepsError::ParseCargoLock {
-                    path: args.cargo_lock.into_owned(),
-                    err,
-                });
-            },
-        };
+        let deps = CargoLockParser::new(&cargo_lock).map(|res| {
+            res.map_err(|err| VendorDepsError::ParseCargoLock {
+                path: (*args.cargo_lock).to_owned(),
+                err,
+            })
+        });
 
         let funs = CreateVendorDirFuns {
             link_farm: args.pkgs.get(c"linkFarm", ctx)?,
@@ -198,16 +170,13 @@ impl Function for VendorDeps {
             fetch_git: ctx.builtins().fetch_git(ctx),
         };
 
-        VendorDir::create(funs, deps, ctx).map_err(Into::into)
+        VendorDir::create(deps, funs, ctx)
     }
 }
 
-impl TryIntoValue for VendorDir {
-    fn try_into_value(
-        self,
-        _: &mut Context,
-    ) -> Result<impl Value + use<>, NixError> {
-        Ok(self.derivation)
+impl IntoValue for VendorDir {
+    fn into_value(self) -> impl Value {
+        self.derivation
     }
 }
 
@@ -221,35 +190,4 @@ impl ToError for VendorDepsError {
             .expect("the Display impl doesn't contain any NUL bytes")
             .into()
     }
-}
-
-fn parse_lockfile(
-    _cargo_lock: &str,
-) -> Result<impl Iterator<Item = Dependency<'_>>, ParseCargoLockError> {
-    Ok([
-            Dependency {
-                name: "abs-path",
-                version: "0.1.0",
-                source: DependencySource::Git(GitSource {
-                    url: "https://github.com/nomad/abs-path.git",
-                    rev: "c9f47071a05cc80bcff4af7b65754a23f2edb6ad",
-                    url_fragment: None,
-                    branch: None,
-                    tag: None,
-                }),
-            },
-            Dependency {
-                name: "anstream",
-                version: "0.6.21",
-                source: DependencySource::CratesIo(CratesIoSource {
-                    checksum: "43d5b281e737544384e969a5ccad3f1cdd24b48086a0fc1b2a5262a26b8f4f4a",
-                }),
-            },
-            Dependency {
-                name: "local-dep",
-                version: "0.1.0",
-                source: DependencySource::Path,
-            },
-        ]
-        .into_iter())
 }

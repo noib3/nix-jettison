@@ -1,7 +1,5 @@
 /// A simple, no-allocation parser for the subset of the Cargo.lock format that
 /// we need to vendor dependencies.
-///
-/// This parser only supports the "TOML v0.4" format used by Cargo.lock files
 pub(crate) struct CargoLockParser<'lock> {
     /// The byte offset in `src` we're currently at. This is always guaranteed
     /// to be a valid UTF-8 boundary.
@@ -13,7 +11,7 @@ pub(crate) struct CargoLockParser<'lock> {
 
 /// A representation of a `[[package]]` entry in a Cargo.lock file.
 ///
-/// Each entry can contain the following fields:
+/// Each entry can contain the following fields (in this order):
 ///
 /// - `name`: required;
 ///
@@ -26,7 +24,7 @@ pub(crate) struct CargoLockParser<'lock> {
 ///
 /// - `dependencies` OR `replace`: both of them are optional, and they're
 ///   mutually exclusive. `replace` is present when using the `[replace]`
-///   section in `Cargo.toml` to override a dependency. For example, this:
+///   section in a `Cargo.toml` to override a dependency. For example, this:
 ///
 ///   ```toml
 ///   [replace]
@@ -53,13 +51,13 @@ pub(crate) struct CargoLockParser<'lock> {
 ///   with a `replace` field. We also always skip parsing the `dependencies`
 ///   field since we don't need it for vendoring.
 pub(crate) struct PackageEntry<'lock> {
-    name: &'lock str,
-    version: &'lock str,
-    source: Option<DependencySource<'lock>>,
+    pub(crate) name: &'lock str,
+    pub(crate) version: &'lock str,
+    pub(crate) source: PackageSource<'lock>,
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum DependencySource<'lock> {
+pub(crate) enum PackageSource<'lock> {
     Registry(RegistrySource<'lock>),
     Git(GitSource<'lock>),
     Path,
@@ -74,13 +72,13 @@ pub(crate) struct RegistrySource<'lock> {
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum RegistryKind<'lock> {
     /// For `crates.io` dependencies we don't need to store the protocol or the
-    /// URL since we know to always download them from
+    /// URL since we know to always download crates from
     /// `https://static.crates.io/crates`.
     CratesIo,
 
     /// For other registries we need to store both the protocol and the URL to
-    /// know where to download the `config.json` file containing the download
-    /// URL template.
+    /// know where to get the `config.json` file containing the download URL
+    /// template.
     Other { protocol: RegistryProtocol, url: &'lock str },
 }
 
@@ -95,8 +93,28 @@ pub(crate) enum RegistryProtocol {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GitSource<'lock> {
-    url: &'lock str,
-    rev: &'lock str,
-    branch: Option<&'lock str>,
-    tag: Option<&'lock str>,
+    pub(crate) url: &'lock str,
+    pub(crate) rev: &'lock str,
+    pub(crate) tag: Option<&'lock str>,
+    pub(crate) branch: Option<&'lock str>,
+    pub(crate) url_fragment: Option<&'lock str>,
+}
+
+/// The type of error that can occur when parsing the contents of a
+/// `Cargo.lock` file.
+#[derive(Debug, derive_more::Display, cauchy::Error)]
+pub(crate) enum CargoLockParseError {}
+
+impl<'lock> CargoLockParser<'lock> {
+    pub(crate) fn new(cargo_dot_lock: &'lock str) -> Self {
+        Self { cursor: 0, src: cargo_dot_lock }
+    }
+}
+
+impl<'lock> Iterator for CargoLockParser<'lock> {
+    type Item = Result<PackageEntry<'lock>, CargoLockParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
 }
