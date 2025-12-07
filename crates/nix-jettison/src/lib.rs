@@ -2,6 +2,7 @@
 
 mod build_crate;
 mod build_package;
+mod cargo_lock_parser;
 mod jettison;
 mod resolve_build_graph;
 mod vendor_deps;
