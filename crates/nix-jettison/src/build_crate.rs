@@ -188,12 +188,12 @@ impl<'src> RequiredBuildCrateArgs<'src> {
                 let path = ctx
                     .builtins()
                     .path(ctx)
-                    .call::<String>(args, ctx)
+                    .call(args, ctx)
                     .expect(
                         "arguments are valid and builtins.path returns a \
                          string",
                     )
-                    .force(ctx)?;
+                    .force_into::<String>(ctx)?;
 
                 // SAFETY: up to the caller.
                 unsafe { path.write(dest, namespace, ctx) }

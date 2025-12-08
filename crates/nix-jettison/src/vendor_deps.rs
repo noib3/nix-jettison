@@ -57,10 +57,10 @@ pub(crate) struct VendorDir {
 
 /// The functions that will have to be called to create the vendor directory.
 struct CreateVendorDirFuns<'pkgs, 'builtins> {
-    link_farm: NixLambda<'pkgs>,
-    fetchurl: NixFunctor<'pkgs>,
     fetch_git: NixLambda<'builtins>,
-    run_command: NixLambda<'pkgs>,
+    fetchurl: NixFunctor<'pkgs>,
+    link_farm: NixLambda<'pkgs>,
+    run_command_local: NixLambda<'pkgs>,
 }
 
 impl VendorDir {
@@ -91,14 +91,14 @@ impl VendorDir {
             let download_drv = source.download(name, version, &funs, ctx)?;
             links.push(attrset! {
                 name: Self::dir_name(name, version),
-                path: download_drv,
+                path: download_drv.into_value(),
             });
         }
 
         let derivation = funs
             .link_farm
-            .call_multi::<NixDerivation>((c"vendored-deps", links), ctx)?
-            .force(ctx)?;
+            .call_multi((c"vendored-deps", links), ctx)?
+            .force_into::<NixDerivation>(ctx)?;
 
         let out_path = derivation.out_path(ctx)?;
 
@@ -106,38 +106,40 @@ impl VendorDir {
     }
 }
 
-impl PackageSource<'_> {
+impl<'lock> PackageSource<'lock> {
     #[allow(clippy::too_many_arguments)]
-    fn download(
+    fn download<'pkgs>(
         &self,
-        pkg_name: &str,
-        pkg_version: &str,
-        funs: &CreateVendorDirFuns,
+        pkg_name: &'lock str,
+        pkg_version: &'lock str,
+        funs: &CreateVendorDirFuns<'pkgs, '_>,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
-        match self {
-            Self::Registry(src) => src.download(
+    ) -> Result<impl Lazy<NixDerivation<'static>> + use<'lock, 'pkgs>, NixError>
+    {
+        Ok(match self {
+            Self::Registry(src) => Either::Left(src.download(
                 pkg_name,
                 pkg_version,
                 funs.fetchurl,
-                funs.run_command,
+                funs.run_command_local,
                 ctx,
-            ),
-            Self::Git(src) => src.download(funs.fetch_git, ctx),
-        }
+            )?),
+            Self::Git(src) => Either::Right(src.download(funs.fetch_git, ctx)?),
+        })
     }
 }
 
-impl RegistrySource<'_> {
+impl<'lock> RegistrySource<'lock> {
     #[allow(clippy::too_many_arguments)]
-    fn download(
+    fn download<'pkgs>(
         &self,
-        pkg_name: &str,
-        pkg_version: &str,
+        pkg_name: &'lock str,
+        pkg_version: &'lock str,
         fetchurl: NixFunctor,
-        run_command: NixLambda,
+        run_command_local: NixLambda<'pkgs>,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+    ) -> Result<impl Lazy<NixDerivation<'static>> + use<'lock, 'pkgs>, NixError>
+    {
         match self.kind {
             RegistryKind::CratesIo => {},
             RegistryKind::Other { .. } => {
@@ -151,7 +153,9 @@ impl RegistrySource<'_> {
             sha256: self.checksum,
         };
 
-        Ok(fetchurl.call::<NixDerivation>(args, ctx)?.map(|drv, ctx| {
+        let checksum = self.checksum;
+
+        Ok(fetchurl.call(args, ctx)?.into_lazy::<NixDerivation>().map(move |drv, ctx| {
             let tarball_path = drv.out_path(ctx)?;
 
             let extract_crate = format!(
@@ -161,11 +165,11 @@ impl RegistrySource<'_> {
             echo '{{\"package\":\"{}\",\"files\":{{}}}}' > $out/.cargo-checksum.json
             "#,
                 tarball_path.display(),
-                self.checksum,
+                checksum,
             );
 
-            run_command
-                .call_multi::<NixDerivation>(
+            run_command_local
+                .call_multi(
                     (
                         format!("{pkg_name}-{pkg_version}"),
                         attrset! {},
@@ -173,7 +177,7 @@ impl RegistrySource<'_> {
                     ),
                     ctx,
                 )?
-                .force(ctx)
+                .force_into::<NixDerivation>(ctx)
         }))
     }
 }
@@ -183,7 +187,7 @@ impl GitSource<'_> {
         &self,
         fetch_git: NixLambda,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+    ) -> Result<Thunk<'static>, NixError> {
         let r#ref = self.r#ref.and_then(GitSourceRef::format_for_fetch_git);
 
         let args = attrset! {
@@ -196,7 +200,7 @@ impl GitSource<'_> {
             None => Either::Right(attrset! { allRefs: true }),
         });
 
-        fetch_git.call::<NixDerivation>(args, ctx)
+        fetch_git.call(args, ctx)
     }
 }
 
@@ -228,7 +232,7 @@ impl Function for VendorDeps {
             link_farm: args.pkgs.get(c"linkFarm", ctx)?,
             fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
             fetch_git: ctx.builtins().fetch_git(ctx),
-            run_command: args.pkgs.get(c"runCommand", ctx)?,
+            run_command_local: args.pkgs.get(c"runCommandLocal", ctx)?,
         };
 
         VendorDir::create(deps, funs, ctx)

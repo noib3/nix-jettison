@@ -10,73 +10,76 @@ use crate::namespace::Namespace;
 use crate::value::{NixValue, TryFromValue, Value, ValueKind};
 
 /// TODO: docs.
-pub struct Thunk<'a, T> {
-    state: ThunkState<'a, T>,
-}
+pub trait Lazy<Output> {
+    /// TODO: docs.
+    fn force(self, ctx: &mut Context) -> Result<Output>;
 
-enum ThunkState<'a, T> {
-    Unevaluated(NixValue<'a>),
-    Evaluated(T),
-}
+    /// TODO: docs.
+    fn map<Fun, NewOutput>(self, _fun: Fun) -> impl Lazy<NewOutput>
+    where
+        Fun: FnOnce(Output, &mut Context) -> Result<NewOutput>,
+        Self: Sized,
+    {
+        struct Todo;
 
-impl<'a, T> Thunk<'a, T> {
+        impl<T> Lazy<T> for Todo {
+            fn force(self, _ctx: &mut Context) -> Result<T> {
+                todo!()
+            }
+        }
+
+        Todo
+    }
+
     /// TODO: docs.
     #[inline]
-    pub fn force(self, ctx: &mut Context) -> Result<T>
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+    {
+        crate::value::Null
+    }
+}
+
+/// TODO: docs.
+pub struct Thunk<'a> {
+    value: NixValue<'a>,
+}
+
+impl<'a> Thunk<'a> {
+    /// TODO: docs.
+    #[inline(always)]
+    pub fn force_into<T>(self, ctx: &mut Context) -> Result<T>
     where
         T: TryFromValue<NixValue<'a>>,
     {
-        match self.state {
-            ThunkState::Unevaluated(mut value) => {
-                value.force_inline(ctx)?;
-                T::try_from_value(value, ctx)
-            },
-            ThunkState::Evaluated(value) => Ok(value),
-        }
+        self.into_lazy::<T>().force(ctx)
     }
 
     /// TODO: docs.
-    #[inline]
-    pub fn map<F, U>(self, _fun: F) -> Thunk<'a, U>
+    #[inline(always)]
+    pub fn into_lazy<T>(self) -> impl Lazy<T>
     where
-        F: FnOnce(T, &mut Context) -> Result<U>,
+        T: TryFromValue<NixValue<'a>>,
     {
-        todo!();
+        self
+    }
+
+    #[inline(always)]
+    pub(crate) fn new(value: NixValue<'a>) -> Self {
+        Self { value }
     }
 }
 
-impl<'a, V: TryFromValue<NixValue<'a>>> TryFromValue<NixValue<'a>>
-    for Thunk<'a, V>
-{
-    #[inline]
-    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
-        let state = match value.kind() {
-            ValueKind::Thunk => ThunkState::Unevaluated(value),
-            _ => V::try_from_value(value, ctx).map(ThunkState::Evaluated)?,
-        };
-        Ok(Self { state })
-    }
-}
-
-impl<V: Value> Value for Thunk<'_, V> {
+impl Value for Thunk<'_> {
     #[inline]
     fn force_inline(&mut self, ctx: &mut Context) -> Result<()> {
-        if let ThunkState::Unevaluated(value) = &mut self.state {
-            value.force_inline(ctx)?;
-        }
-        Ok(())
+        self.value.force_inline(ctx)
     }
 
     #[inline]
     fn kind(&self) -> ValueKind {
-        match &self.state {
-            // NOTE: even if the state is Unevaluated, we still call kind() on
-            // the inner value instead of always returning ValueKind::Thunk
-            // because a previous call to 'force_inline()' may have changed the
-            // value's kind.
-            ThunkState::Unevaluated(v) => v.kind(),
-            ThunkState::Evaluated(v) => v.kind(),
-        }
+        self.value.kind()
     }
 
     #[inline]
@@ -86,13 +89,36 @@ impl<V: Value> Value for Thunk<'_, V> {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        match &self.state {
-            ThunkState::Unevaluated(v) => unsafe {
-                v.write(dest, namespace, ctx)
-            },
-            ThunkState::Evaluated(v) => unsafe {
-                v.write(dest, namespace, ctx)
-            },
+        unsafe { self.value.write(dest, namespace, ctx) }
+    }
+}
+
+impl<'a> TryFromValue<NixValue<'a>> for Thunk<'a> {
+    #[inline]
+    fn try_from_value(value: NixValue<'a>, _: &mut Context) -> Result<Self> {
+        Ok(Self::new(value))
+    }
+}
+
+impl<'a, T: TryFromValue<NixValue<'a>>> Lazy<T> for Thunk<'a> {
+    #[inline]
+    fn force(mut self, ctx: &mut Context) -> Result<T> {
+        self.value.force_inline(ctx)?;
+        T::try_from_value(self.value, ctx)
+    }
+}
+
+#[cfg(feature = "either")]
+impl<L, R, T> Lazy<T> for either::Either<L, R>
+where
+    L: Lazy<T>,
+    R: Lazy<T>,
+{
+    #[inline]
+    fn force(self, ctx: &mut Context) -> Result<T> {
+        match self {
+            Self::Left(l) => l.force(ctx),
+            Self::Right(r) => r.force(ctx),
         }
     }
 }

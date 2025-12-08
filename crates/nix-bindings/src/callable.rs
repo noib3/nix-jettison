@@ -1,7 +1,6 @@
 //! TODO: docs.
 
 use core::ffi::c_uint;
-use core::marker::PhantomData;
 use core::ptr;
 use core::ptr::NonNull;
 
@@ -28,11 +27,11 @@ pub trait Callable {
 
     /// TODO: docs.
     #[inline]
-    fn call<T: TryFromValue<NixValue<'static>>>(
+    fn call(
         &self,
         arg: impl IntoValue,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, T>> {
+    ) -> Result<Thunk<'static>> {
         let dest_ptr = ctx.alloc_value()?;
         let arg_ptr = ctx.alloc_value()?;
 
@@ -66,7 +65,7 @@ pub trait Callable {
         // SAFETY: `init_apply` has initialized the value at `dest_ptr`.
         let value = unsafe { NixValue::new(dest_ptr) };
 
-        Thunk::try_from_value(value, ctx)
+        Ok(Thunk::new(value))
     }
 
     /// TODO: docs.
@@ -77,11 +76,11 @@ pub trait Callable {
     #[inline]
     #[track_caller]
     #[allow(clippy::too_many_lines)]
-    fn call_multi<T: TryFromValue<NixValue<'static>>>(
+    fn call_multi(
         &self,
         args: impl Values,
         ctx: &mut Context,
-    ) -> Result<Thunk<'static, T>> {
+    ) -> Result<Thunk<'static>> {
         const fn values_len<V: Values>(_: &V) -> c_uint {
             V::LEN
         }
@@ -159,31 +158,19 @@ pub trait Callable {
 
         let lambda = NixLambda::try_from_value(value, ctx)?;
 
-        struct LazyCallLastArg<'lambda, 'ctx, 'eval, Ret> {
+        struct LazyCallLastArg<'lambda, 'ctx, 'eval> {
             lambda: NixLambda<'lambda>,
             ctx: &'ctx mut Context<'eval>,
-            ret: PhantomData<Ret>,
         }
 
-        impl<Ret> FnOnceValue<Result<Thunk<'static, Ret>>>
-            for LazyCallLastArg<'_, '_, '_, Ret>
-        where
-            Ret: TryFromValue<NixValue<'static>>,
-        {
+        impl FnOnceValue<Result<Thunk<'static>>> for LazyCallLastArg<'_, '_, '_> {
             #[inline]
-            fn call(
-                self,
-                value: impl Value,
-                _: (),
-            ) -> Result<Thunk<'static, Ret>> {
-                self.lambda.call::<Ret>(value, self.ctx)
+            fn call(self, value: impl Value, _: ()) -> Result<Thunk<'static>> {
+                self.lambda.call(value, self.ctx)
             }
         }
 
-        args.with_value(
-            args_len - 1 as c_uint,
-            LazyCallLastArg::<T> { lambda, ctx, ret: PhantomData },
-        )
+        args.with_value(args_len - 1 as c_uint, LazyCallLastArg { lambda, ctx })
     }
 }
 
