@@ -254,7 +254,13 @@ impl<F: Function> PrimOpImpl for F {
 
         let mut try_block = || unsafe {
             let args = <Self as Function>::Args::from_raw(args_list, ctx)?;
-            let val = Self::call(args, ctx).try_into_value(ctx)?;
+            let mut val = Self::call(args, ctx).try_into_value(ctx)?;
+            // As described in the [docs] of `nix_init_apply`, it's not
+            // possible to return thunks from primops, so let's force the value
+            // before writing it to the return location.
+            //
+            // [docs]: https://github.com/NixOS/nix/blob/af0ac14/src/libexpr-c/nix_api_value.h#L564
+            val.force_inline(ctx)?;
             val.write(ret, namespace, ctx)
         };
 
