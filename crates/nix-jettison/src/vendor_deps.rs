@@ -172,6 +172,7 @@ impl GitSource<'_> {
             url: self.url,
             rev: self.rev,
             submodules: true,
+            postFetch: "echo '{\"package\":null,\"files\":{}}' > $out/.cargo-checksum.json",
         }
         .merge(match r#ref {
             Some(r#ref) => Either::Left(attrset! { ref: r#ref }),
