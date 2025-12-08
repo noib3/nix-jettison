@@ -105,7 +105,7 @@ pub(crate) enum RegistryProtocol {
 pub(crate) struct GitSource<'lock> {
     pub(crate) url: &'lock str,
     pub(crate) rev: &'lock str,
-    pub(crate) detail: Option<GitSourceDetail<'lock>>,
+    pub(crate) r#ref: Option<GitSourceRef<'lock>>,
 }
 
 /// See [docs] for more infos.
@@ -115,7 +115,7 @@ pub(crate) struct GitSource<'lock> {
 /// [docs]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#choice-of-commit
 /// [8984]: https://github.com/rust-lang/cargo/pull/8984
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum GitSourceDetail<'lock> {
+pub(crate) enum GitSourceRef<'lock> {
     Branch(&'lock str),
     Tag(&'lock str),
     Rev(&'lock str),
@@ -126,21 +126,21 @@ pub(crate) enum GitSourceDetail<'lock> {
 #[derive(Debug, derive_more::Display, cauchy::Error)]
 pub(crate) enum CargoLockParseError {
     #[display(
-        "invalid source protocol: {protocol}, expected one of 'registry+', \
+        "invalid source protocol: {protocol:?}, expected one of 'registry+', \
          'sparse+' or 'git+'"
     )]
     InvalidSourceProtocol { protocol: CompactString },
 
     #[display(
-        "invalid git detail key: {key}, expected one of 'branch', 'tag' or \
+        "invalid git ref key: {key:?}, expected one of 'branch', 'tag' or \
          'rev'"
     )]
-    InvalidGitDetailKey { key: CompactString },
+    InvalidGitSourceRefKey { key: CompactString },
 
-    #[display("missing closing quote for field '{field_name}'")]
+    #[display("missing closing quote for field {field_name:?}")]
     MissingClosingQuote { field_name: &'static str },
 
-    #[display("expected field '{field_name}' after '{after}'")]
+    #[display("expected field {field_name:?} after {after:?}")]
     MissingField { field_name: &'static str, after: &'static str },
 
     #[display("missing git revision in {source:?}")]
@@ -356,10 +356,10 @@ impl<'lock> PackageSource<'lock> {
     }
 }
 
-impl<'lock> GitSourceDetail<'lock> {
+impl<'lock> GitSourceRef<'lock> {
     /// Converts `self` into the string to pass as the `ref` argument to
     /// `builtins.fetchGit`.
-    pub(crate) fn into_ref_for_fetch_git(self) -> Option<Cow<'lock, str>> {
+    pub(crate) fn format_for_fetch_git(self) -> Option<Cow<'lock, str>> {
         match self {
             Self::Branch(branch) => Some(Cow::Borrowed(branch)),
             Self::Tag(tag) => Some(Cow::Owned(format!("refs/tags/{tag}"))),
@@ -388,7 +388,7 @@ impl<'lock> TryFrom<&'lock str> for GitSource<'lock> {
 
     #[inline]
     fn try_from(source: &'lock str) -> Result<Self, Self::Error> {
-        // Git sources have the format: <url>[?<key=value>]#<revision>
+        // Git sources have the format: <url>[?<key>=<value>]#<revision>
 
         let (url_with_query, rev) =
             source.split_once('#').ok_or_else(|| {
@@ -400,13 +400,13 @@ impl<'lock> TryFrom<&'lock str> for GitSource<'lock> {
         let (url, query) =
             url_with_query.split_once('?').unwrap_or((url_with_query, ""));
 
-        let detail = if let Some((key, value)) = query.split_once('=') {
+        let r#ref = if let Some((key, value)) = query.split_once('=') {
             Some(match key {
-                "branch" => GitSourceDetail::Branch(value),
-                "tag" => GitSourceDetail::Tag(value),
-                "rev" => GitSourceDetail::Rev(value),
+                "branch" => GitSourceRef::Branch(value),
+                "tag" => GitSourceRef::Tag(value),
+                "rev" => GitSourceRef::Rev(value),
                 _ => {
-                    return Err(CargoLockParseError::InvalidGitDetailKey {
+                    return Err(CargoLockParseError::InvalidGitSourceRefKey {
                         key: key.into(),
                     });
                 },
@@ -415,7 +415,7 @@ impl<'lock> TryFrom<&'lock str> for GitSource<'lock> {
             None
         };
 
-        Ok(Self { url, rev, detail })
+        Ok(Self { url, rev, r#ref })
     }
 }
 
@@ -443,7 +443,7 @@ mod tests {
         let git_src = GitSource::try_from(source).unwrap();
         assert_eq!(git_src.url, "https://github.com/user/repo.git");
         assert_eq!(git_src.rev, "abc123");
-        assert_eq!(git_src.detail, None);
+        assert_eq!(git_src.r#ref, None);
     }
 
     #[test]
@@ -452,7 +452,7 @@ mod tests {
         let git_src = GitSource::try_from(source).unwrap();
         assert_eq!(git_src.url, "https://github.com/user/repo.git");
         assert_eq!(git_src.rev, "abc123");
-        assert_eq!(git_src.detail, Some(GitSourceDetail::Tag("v1.0.0")));
+        assert_eq!(git_src.r#ref, Some(GitSourceRef::Tag("v1.0.0")));
     }
 
     #[test]
@@ -461,6 +461,6 @@ mod tests {
         let git_src = GitSource::try_from(source).unwrap();
         assert_eq!(git_src.url, "https://github.com/user/repo.git");
         assert_eq!(git_src.rev, "abc123");
-        assert_eq!(git_src.detail, Some(GitSourceDetail::Branch("main")));
+        assert_eq!(git_src.r#ref, Some(GitSourceRef::Branch("main")));
     }
 }

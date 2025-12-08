@@ -13,7 +13,7 @@ use nix_bindings::prelude::{Error as NixError, *};
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,
-    GitSourceDetail,
+    GitSourceRef,
     PackageEntry,
     PackageSource,
     RegistryKind,
@@ -103,8 +103,8 @@ impl VendorDir {
                 },
                 Some(PackageSource::Git(src)) => {
                     let r#ref = src
-                        .detail
-                        .and_then(GitSourceDetail::into_ref_for_fetch_git);
+                        .r#ref
+                        .and_then(GitSourceRef::format_for_fetch_git);
 
                     let args = attrset! {
                         url: src.url,
