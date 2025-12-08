@@ -13,32 +13,6 @@ use crate::value::{NixValue, TryFromValue, Value, ValueKind};
 pub trait Lazy<Output> {
     /// TODO: docs.
     fn force(self, ctx: &mut Context) -> Result<Output>;
-
-    /// TODO: docs.
-    fn map<Fun, NewOutput>(self, _fun: Fun) -> impl Lazy<NewOutput>
-    where
-        Fun: FnOnce(Output, &mut Context) -> Result<NewOutput>,
-        Self: Sized,
-    {
-        struct Todo;
-
-        impl<T> Lazy<T> for Todo {
-            fn force(self, _ctx: &mut Context) -> Result<T> {
-                todo!()
-            }
-        }
-
-        Todo
-    }
-
-    /// TODO: docs.
-    #[inline]
-    fn into_value(self) -> impl Value
-    where
-        Self: Sized,
-    {
-        crate::value::Null
-    }
 }
 
 /// TODO: docs.

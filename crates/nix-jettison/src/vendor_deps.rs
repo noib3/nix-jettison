@@ -57,6 +57,7 @@ pub(crate) struct VendorDir {
 
 /// The functions that will have to be called to create the vendor directory.
 struct CreateVendorDirFuns<'pkgs, 'builtins> {
+    extract_crate: NixLambda<'static>,
     fetch_git: NixLambda<'builtins>,
     fetchurl: NixFunctor<'pkgs>,
     link_farm: NixLambda<'pkgs>,
@@ -114,16 +115,11 @@ impl<'lock> PackageSource<'lock> {
         pkg_version: &'lock str,
         funs: &CreateVendorDirFuns<'pkgs, '_>,
         ctx: &mut Context,
-    ) -> Result<impl Lazy<NixDerivation<'static>> + use<'lock, 'pkgs>, NixError>
-    {
+    ) -> Result<impl Value + use<'lock, 'pkgs>, NixError> {
         Ok(match self {
-            Self::Registry(src) => Either::Left(src.download(
-                pkg_name,
-                pkg_version,
-                funs.fetchurl,
-                funs.run_command_local,
-                ctx,
-            )?),
+            Self::Registry(src) => {
+                Either::Left(src.download(pkg_name, pkg_version, funs, ctx)?)
+            },
             Self::Git(src) => Either::Right(src.download(funs.fetch_git, ctx)?),
         })
     }
@@ -135,11 +131,9 @@ impl<'lock> RegistrySource<'lock> {
         &self,
         pkg_name: &'lock str,
         pkg_version: &'lock str,
-        fetchurl: NixFunctor,
-        run_command_local: NixLambda<'pkgs>,
+        funs: &CreateVendorDirFuns<'pkgs, '_>,
         ctx: &mut Context,
-    ) -> Result<impl Lazy<NixDerivation<'static>> + use<'lock, 'pkgs>, NixError>
-    {
+    ) -> Result<impl Value + use<'lock, 'pkgs>, NixError> {
         match self.kind {
             RegistryKind::CratesIo => {},
             RegistryKind::Other { .. } => {
@@ -147,38 +141,22 @@ impl<'lock> RegistrySource<'lock> {
             },
         }
 
-        let args = attrset! {
+        let fetchurl_args = attrset! {
             name: format!("{pkg_name}-{pkg_version}.tar.gz"),
             url: format!("https://static.crates.io/crates/{pkg_name}/{pkg_name}-{pkg_version}.crate"),
             sha256: self.checksum,
         };
 
-        let checksum = self.checksum;
+        let drv = funs.fetchurl.call(fetchurl_args, ctx)?;
 
-        Ok(fetchurl.call(args, ctx)?.into_lazy::<NixDerivation>().map(move |drv, ctx| {
-            let tarball_path = drv.out_path(ctx)?;
+        let extract_crate_args = attrset! {
+            drv: drv,
+            checksum: self.checksum,
+            name: format!("{pkg_name}-{pkg_version}"),
+            runCommandLocal: funs.run_command_local,
+        };
 
-            let extract_crate = format!(
-                r#"
-            mkdir -p $out
-            tar -xzf {} --strip-components 1 -C $out
-            echo '{{\"package\":\"{}\",\"files\":{{}}}}' > $out/.cargo-checksum.json
-            "#,
-                tarball_path.display(),
-                checksum,
-            );
-
-            run_command_local
-                .call_multi(
-                    (
-                        format!("{pkg_name}-{pkg_version}"),
-                        attrset! {},
-                        extract_crate,
-                    ),
-                    ctx,
-                )?
-                .force_into::<NixDerivation>(ctx)
-        }))
+        funs.extract_crate.call(extract_crate_args, ctx)
     }
 }
 
@@ -228,7 +206,17 @@ impl Function for VendorDeps {
             })
         });
 
+        let extract_crate = ctx.eval(c"
+            { drv, checksum, name, runCommandLocal }:
+            runCommandLocal name {} ''
+              mkdir -p $out
+              tar -xzf ${drv} --strip-components 1 -C $out
+              echo '{\"package\":\"${checksum}\",\"files\":{}}' > $out/.cargo-checksum.json
+            ''
+        ")?;
+
         let funs = CreateVendorDirFuns {
+            extract_crate,
             link_farm: args.pkgs.get(c"linkFarm", ctx)?,
             fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
             fetch_git: ctx.builtins().fetch_git(ctx),
