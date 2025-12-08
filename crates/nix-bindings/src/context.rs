@@ -2,7 +2,7 @@
 
 use core::ffi::CStr;
 use core::marker::PhantomData;
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
@@ -82,6 +82,30 @@ impl<'eval> Context<'eval> {
             Ok(attrset) => Builtins::new(attrset),
             Err(err) => unreachable!("builtins is not an attrset: {err}"),
         }
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub fn eval<T>(&mut self, expr: &CStr) -> Result<T>
+    where
+        T: TryFromValue<NixValue<'static>>,
+    {
+        let dest = self.alloc_value()?;
+
+        self.with_raw_and_state(|raw_ctx, state| unsafe {
+            sys::expr_eval_from_string(
+                raw_ctx,
+                state.as_ptr(),
+                expr.as_ptr(),
+                ptr::null_mut(),
+                dest.as_ptr(),
+            );
+        })?;
+
+        // SAFETY: `expr_eval_from_string` has initialized the value.
+        let value = unsafe { NixValue::new(dest) };
+
+        T::try_from_value(value, self)
     }
 
     /// Allocates a new, uninitialized value, returning a pointer to it.
