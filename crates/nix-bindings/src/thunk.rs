@@ -10,29 +10,38 @@ use crate::namespace::Namespace;
 use crate::value::{NixValue, TryFromValue, Value, ValueKind};
 
 /// TODO: docs.
-pub struct Thunk<'a, V> {
-    state: ThunkState<'a, V>,
+pub struct Thunk<'a, T> {
+    state: ThunkState<'a, T>,
 }
 
-enum ThunkState<'a, V> {
+enum ThunkState<'a, T> {
     Unevaluated(NixValue<'a>),
-    Evaluated(V),
+    Evaluated(T),
 }
 
-impl<'a, V> Thunk<'a, V> {
+impl<'a, T> Thunk<'a, T> {
     /// TODO: docs.
     #[inline]
-    pub fn force(self, ctx: &mut Context) -> Result<V>
+    pub fn force(self, ctx: &mut Context) -> Result<T>
     where
-        V: TryFromValue<NixValue<'a>>,
+        T: TryFromValue<NixValue<'a>>,
     {
         match self.state {
             ThunkState::Unevaluated(mut value) => {
                 value.force_inline(ctx)?;
-                V::try_from_value(value, ctx)
+                T::try_from_value(value, ctx)
             },
             ThunkState::Evaluated(value) => Ok(value),
         }
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub fn map<F, U>(self, _fun: F) -> Thunk<'a, U>
+    where
+        F: FnOnce(T, &mut Context) -> Result<U>,
+    {
+        todo!();
     }
 }
 
