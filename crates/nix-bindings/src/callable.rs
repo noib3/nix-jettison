@@ -9,6 +9,7 @@ use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 use crate::attrset::NixAttrset;
 use crate::context::Context;
 use crate::error::{Result, TypeMismatchError};
+use crate::namespace::Namespace;
 use crate::thunk::Thunk;
 use crate::value::{
     FnOnceValue,
@@ -222,6 +223,23 @@ impl<'a> TryFromValue<NixAttrset<'a>> for NixFunctor<'a> {
     }
 }
 
+impl Value for NixFunctor<'_> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        self.inner.kind()
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.inner.write(dest, namespace, ctx) }
+    }
+}
+
 impl Callable for NixLambda<'_> {
     #[inline]
     fn value(&self) -> NixValue<'_> {
@@ -244,5 +262,22 @@ impl<'a> TryFromValue<NixValue<'a>> for NixLambda<'a> {
                 found: other,
             })),
         }
+    }
+}
+
+impl Value for NixLambda<'_> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        self.inner.kind()
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.inner.write(dest, namespace, ctx) }
     }
 }
