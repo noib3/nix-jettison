@@ -13,10 +13,12 @@ use nix_bindings::prelude::{Error as NixError, *};
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,
+    GitSource,
     GitSourceRef,
     PackageEntry,
     PackageSource,
     RegistryKind,
+    RegistrySource,
 };
 
 /// Vendors the dependencies of a Rust package.
@@ -58,6 +60,7 @@ struct CreateVendorDirFuns<'pkgs, 'builtins> {
     link_farm: NixLambda<'pkgs>,
     fetchurl: NixFunctor<'pkgs>,
     fetch_git: NixLambda<'builtins>,
+    run_command: NixLambda<'pkgs>,
 }
 
 impl VendorDir {
@@ -84,46 +87,11 @@ impl VendorDir {
 
         for dep_res in deps {
             let PackageEntry { name, version, source } = dep_res?;
-
-            let source_path = match source {
-                Some(PackageSource::Registry(src)) => {
-                    match src.kind {
-                        RegistryKind::CratesIo => {},
-                        RegistryKind::Other { .. } => {
-                            panic!("custom registries are not yet supported")
-                        },
-                    }
-
-                    let args = attrset! {
-                        name: format!("{name}-{version}.tar.gz"),
-                        url: format!("https://static.crates.io/crates/{name}/{name}-{version}.crate"),
-                        sha256: src.checksum,
-                    };
-                    funs.fetchurl.call::<NixAttrset>(args, ctx)?
-                },
-                Some(PackageSource::Git(src)) => {
-                    let r#ref = src
-                        .r#ref
-                        .and_then(GitSourceRef::format_for_fetch_git);
-
-                    let args = attrset! {
-                        url: src.url,
-                        rev: src.rev,
-                        submodules: true,
-                    }
-                    .merge(match r#ref {
-                        Some(r#ref) => Either::Left(attrset! { ref: r#ref }),
-                        None => Either::Right(attrset! { allRefs: true }),
-                    });
-
-                    funs.fetch_git.call::<NixAttrset>(args, ctx)?
-                },
-                None => continue,
-            };
-
+            let Some(source) = source else { continue };
+            let download_drv = source.download(name, version, &funs, ctx)?;
             links.push(attrset! {
                 name: Self::dir_name(name, version),
-                path: source_path,
+                path: download_drv,
             });
         }
 
@@ -135,6 +103,100 @@ impl VendorDir {
         let out_path = derivation.out_path(ctx)?;
 
         Ok(Self { out_path, derivation })
+    }
+}
+
+impl PackageSource<'_> {
+    #[allow(clippy::too_many_arguments)]
+    fn download(
+        &self,
+        pkg_name: &str,
+        pkg_version: &str,
+        funs: &CreateVendorDirFuns,
+        ctx: &mut Context,
+    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+        match self {
+            Self::Registry(src) => src.download(
+                pkg_name,
+                pkg_version,
+                funs.fetchurl,
+                funs.run_command,
+                ctx,
+            ),
+            Self::Git(src) => src.download(funs.fetch_git, ctx),
+        }
+    }
+}
+
+impl RegistrySource<'_> {
+    #[allow(clippy::too_many_arguments)]
+    fn download(
+        &self,
+        pkg_name: &str,
+        pkg_version: &str,
+        fetchurl: NixFunctor,
+        run_command: NixLambda,
+        ctx: &mut Context,
+    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+        match self.kind {
+            RegistryKind::CratesIo => {},
+            RegistryKind::Other { .. } => {
+                panic!("custom registries are not yet supported")
+            },
+        }
+
+        let args = attrset! {
+            name: format!("{pkg_name}-{pkg_version}.tar.gz"),
+            url: format!("https://static.crates.io/crates/{pkg_name}/{pkg_name}-{pkg_version}.crate"),
+            sha256: self.checksum,
+        };
+
+        Ok(fetchurl.call::<NixDerivation>(args, ctx)?.map(|drv, ctx| {
+            let tarball_path = drv.out_path(ctx)?;
+
+            let extract_crate = format!(
+                r#"
+            mkdir -p $out
+            tar -xzf {} --strip-components 1 -C $out
+            echo '{{\"package\":\"{}\",\"files\":{{}}}}' > $out/.cargo-checksum.json
+            "#,
+                tarball_path.display(),
+                self.checksum,
+            );
+
+            run_command
+                .call_multi::<NixDerivation>(
+                    (
+                        format!("{pkg_name}-{pkg_version}"),
+                        attrset! {},
+                        extract_crate,
+                    ),
+                    ctx,
+                )?
+                .force(ctx)
+        }))
+    }
+}
+
+impl GitSource<'_> {
+    fn download(
+        &self,
+        fetch_git: NixLambda,
+        ctx: &mut Context,
+    ) -> Result<Thunk<'static, NixDerivation<'static>>, NixError> {
+        let r#ref = self.r#ref.and_then(GitSourceRef::format_for_fetch_git);
+
+        let args = attrset! {
+            url: self.url,
+            rev: self.rev,
+            submodules: true,
+        }
+        .merge(match r#ref {
+            Some(r#ref) => Either::Left(attrset! { ref: r#ref }),
+            None => Either::Right(attrset! { allRefs: true }),
+        });
+
+        fetch_git.call::<NixDerivation>(args, ctx)
     }
 }
 
@@ -166,6 +228,7 @@ impl Function for VendorDeps {
             link_farm: args.pkgs.get(c"linkFarm", ctx)?,
             fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
             fetch_git: ctx.builtins().fetch_git(ctx),
+            run_command: args.pkgs.get(c"runCommand", ctx)?,
         };
 
         VendorDir::create(deps, funs, ctx)
