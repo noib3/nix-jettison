@@ -295,8 +295,8 @@ impl<'a> NixAttrset<'a> {
                             format!("error getting attribute {key:?}: ")
                                 .into_bytes();
                         new_msg.append(&mut orig_msg);
-                        // SAFETY: the new message does contain a NUL byte
-                        // and we've preserved the trailing NUL byte from the
+                        // SAFETY: the new message does contain a NUL byte and
+                        // we've preserved the trailing NUL byte from the
                         // original message.
                         unsafe { CString::from_vec_with_nul_unchecked(new_msg) }
                     })

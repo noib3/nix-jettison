@@ -10,6 +10,7 @@ use syn::{
     Attribute,
     Data,
     DeriveInput,
+    Expr,
     Fields,
     FieldsNamed,
     LifetimeParam,
@@ -125,6 +126,13 @@ fn try_from_attrset_impl(
                     let #field_name = #attrset.get_opt(#key_name, #ctx)?
                         .unwrap_or_default();
                 }
+            } else if let Some(with_expr) = field_attrs.with {
+                quote! {
+                    let #field_name = {
+                        let __value = #attrset.get::<::nix_bindings::value::NixValue>(#key_name, #ctx)?;
+                        (#with_expr)(__value, #ctx)?
+                    };
+                }
             } else {
                 quote! {
                     let #field_name = #attrset.get(#key_name, #ctx)?;
@@ -143,6 +151,7 @@ fn try_from_attrset_impl(
 struct Attributes {
     rename: Option<Rename>,
     default: bool,
+    with: Option<Expr>,
 }
 
 #[derive(Copy, Clone)]
@@ -158,6 +167,7 @@ pub(crate) enum Rename {
 }
 
 impl Attributes {
+    #[allow(clippy::too_many_lines)]
     fn parse(attrs: &[Attribute], pos: AttributePosition) -> syn::Result<Self> {
         let mut this = Self::default();
 
@@ -192,7 +202,32 @@ impl Attributes {
                         },
                     }
                 } else if meta.path.is_ident("default") {
+                    if this.with.is_some() {
+                        return Err(meta.error(
+                            "`with` and `default` attributes cannot be used \
+                             together",
+                        ));
+                    }
                     this.default = true;
+                } else if meta.path.is_ident("with") {
+                    if this.default {
+                        return Err(meta.error(
+                            "`with` and `default` attributes cannot be used \
+                             together",
+                        ));
+                    }
+
+                    match pos {
+                        AttributePosition::Struct => {
+                            return Err(meta.error(
+                                "`with` attribute is only allowed on struct \
+                                 fields",
+                            ));
+                        },
+                        AttributePosition::Field => {
+                            this.with = Some(meta.value()?.parse()?);
+                        },
+                    }
                 } else {
                     return Err(meta.error("unsupported attribute"));
                 }
