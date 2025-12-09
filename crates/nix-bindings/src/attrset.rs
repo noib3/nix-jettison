@@ -1269,6 +1269,8 @@ pub mod derive {
             {
                 if self.should_skip(field_idx) {
                     field_idx += 1;
+                } else {
+                    break;
                 }
             }
 
