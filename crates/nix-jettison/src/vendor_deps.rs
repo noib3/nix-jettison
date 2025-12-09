@@ -1,5 +1,5 @@
 use core::ffi::CStr;
-use core::fmt::Display;
+use core::fmt::{Display, Write};
 use core::result::Result;
 use std::borrow::Cow;
 use std::ffi::CString;
@@ -96,7 +96,7 @@ impl VendorDir {
 
         let vendored_sources = "vendored-sources";
 
-        let config_dot_toml = format!(
+        let mut config_dot_toml = format!(
             r#"
             [source.crates-io]
             replace-with = "{vendored_sources}"
@@ -115,6 +115,13 @@ impl VendorDir {
                     LinkPath::Registry(drv)
                 },
                 PackageSource::Git(src) => {
+                    writeln!(
+                        &mut config_dot_toml,
+                        "{}",
+                        src.into_cargo_config_entry(vendored_sources)
+                    )
+                    .expect("writing to a String cannot fail");
+
                     let drv = src.download(funs.fetch_git, ctx)?;
                     LinkPath::Git(drv)
                 },

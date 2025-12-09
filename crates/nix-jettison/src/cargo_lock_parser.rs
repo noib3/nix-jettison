@@ -1,3 +1,4 @@
+use core::fmt;
 use std::borrow::Cow;
 
 use compact_str::CompactString;
@@ -356,6 +357,51 @@ impl<'lock> PackageSource<'lock> {
     }
 }
 
+impl<'lock> GitSource<'lock> {
+    /// Returns a value that formats `self` as a Cargo config entry that
+    /// replaces this git source with the given `replace_with` source.
+    ///
+    /// The returned value can be appended to a `config.toml` file used by
+    /// Cargo.
+    pub(crate) fn into_cargo_config_entry(
+        self,
+        replace_with: &str,
+    ) -> impl fmt::Display {
+        struct GitSourceConfigEntry<'lock, 'vendor> {
+            source: GitSource<'lock>,
+            replace_with: &'vendor str,
+        }
+
+        impl fmt::Display for GitSourceConfigEntry<'_, '_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Self { source, replace_with } = self;
+
+                // The format of the `[source."..."]` key doesn't actually
+                // matter, as long as it's unique. Cargo uses the URL and the
+                // ref to identify the source.
+                f.write_str("[source.\"")?;
+                f.write_str(source.url)?;
+                if let Some(r#ref) = source.r#ref {
+                    let (key, value) = r#ref.as_key_value();
+                    write!(f, "?{}={}", key, value)?;
+                }
+                f.write_str("\"]\n")?;
+
+                writeln!(f, "git = \"{}\"", source.url)?;
+
+                if let Some(r#ref) = source.r#ref {
+                    let (key, value) = r#ref.as_key_value();
+                    writeln!(f, "{} = \"{}\"", key, value)?;
+                }
+
+                writeln!(f, "replace-with = \"{}\"", replace_with)
+            }
+        }
+
+        GitSourceConfigEntry { source: self, replace_with }
+    }
+}
+
 impl<'lock> GitSourceRef<'lock> {
     /// Converts `self` into the string to pass as the `ref` argument to
     /// `builtins.fetchGit`.
@@ -370,6 +416,14 @@ impl<'lock> GitSourceRef<'lock> {
 
                 rev.starts_with("refs/").then_some(rev)
             },
+        }
+    }
+
+    fn as_key_value(self) -> (&'static str, &'lock str) {
+        match self {
+            Self::Branch(branch) => ("branch", branch),
+            Self::Tag(tag) => ("tag", tag),
+            Self::Rev(rev) => ("rev", rev),
         }
     }
 }
