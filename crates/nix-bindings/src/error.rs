@@ -104,6 +104,14 @@ impl Error {
     ) -> Self {
         Self { kind, message: message.into() }
     }
+
+    #[inline]
+    pub(crate) fn map_message<NewMessage: Into<Cow<'static, CStr>>>(
+        self,
+        f: impl FnOnce(Cow<'static, CStr>) -> NewMessage,
+    ) -> Self {
+        Self::new(self.kind, f(self.message))
+    }
 }
 
 impl<Int> TryIntoI64Error<Int> {
@@ -268,12 +276,5 @@ impl From<core::str::Utf8Error> for Error {
         let message =
             unsafe { CString::from_vec_unchecked(err.to_string().into()) };
         Self::new(ErrorKind::Nix, message)
-    }
-}
-
-impl From<(ErrorKind, &'static CStr)> for Error {
-    #[inline]
-    fn from((kind, message): (ErrorKind, &'static CStr)) -> Self {
-        Self::new(kind, message)
     }
 }

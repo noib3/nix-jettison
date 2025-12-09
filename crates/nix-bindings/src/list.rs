@@ -226,7 +226,8 @@ impl<'a> TryFromValue<NixValue<'a>> for NixList<'a> {
             other => Err(TypeMismatchError {
                 expected: ValueKind::List,
                 found: other,
-            }.into()),
+            }
+            .into()),
         }
     }
 }

@@ -286,7 +286,22 @@ impl<'a> NixAttrset<'a> {
     ) -> Result<Option<T>> {
         self.with_value_inner(
             key,
-            |value, ctx| T::try_from_value(value, ctx),
+            |value, ctx| {
+                T::try_from_value(value, ctx).map_err(|err| {
+                    err.map_message(|msg| {
+                        let mut orig_msg =
+                            msg.into_owned().into_bytes_with_nul();
+                        let mut new_msg =
+                            format!("error getting attribute {key:?}: ")
+                                .into_bytes();
+                        new_msg.append(&mut orig_msg);
+                        // SAFETY: the new message does contain a NUL byte
+                        // and we've preserved the trailing NUL byte from the
+                        // original message.
+                        unsafe { CString::from_vec_with_nul_unchecked(new_msg) }
+                    })
+                })
+            },
             ctx,
         )
         .transpose()
@@ -473,7 +488,8 @@ impl<'a> TryFromValue<NixValue<'a>> for NixAttrset<'a> {
             other => Err(TypeMismatchError {
                 expected: ValueKind::Attrset,
                 found: other,
-            }.into()),
+            }
+            .into()),
         }
     }
 }

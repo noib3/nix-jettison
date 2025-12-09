@@ -218,7 +218,8 @@ impl<'a> TryFromValue<NixAttrset<'a>> for NixFunctor<'a> {
             other => Err(TypeMismatchError {
                 expected: ValueKind::Function,
                 found: other,
-            }.into()),
+            }
+            .into()),
         }
     }
 }
@@ -260,7 +261,8 @@ impl<'a> TryFromValue<NixValue<'a>> for NixLambda<'a> {
             other => Err(TypeMismatchError {
                 expected: ValueKind::Function,
                 found: other,
-            }.into()),
+            }
+            .into()),
         }
     }
 }
