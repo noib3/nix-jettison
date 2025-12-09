@@ -62,6 +62,7 @@ struct CreateVendorDirFuns<'pkgs, 'builtins> {
     fetchurl: NixFunctor<'pkgs>,
     link_farm: NixLambda<'pkgs>,
     run_command_local: NixLambda<'pkgs>,
+    write_text_file: NixLambda<'pkgs>,
 }
 
 impl VendorDir {
@@ -84,17 +85,58 @@ impl VendorDir {
     where
         VendorDepsError: From<Err>,
     {
+        #[derive(nix_bindings::Value)]
+        enum LinkPath<RegistrySource, GitSource> {
+            Registry(RegistrySource),
+            Git(GitSource),
+            ConfigDotToml(Thunk<'static>),
+        }
+
         let mut links = Vec::new();
+
+        let vendored_sources = "vendored-sources";
+
+        let config_dot_toml = format!(
+            r#"
+            [source.crates-io]
+            replace-with = "{vendored_sources}"
+
+            [source.{vendored_sources}]
+            directory = "."
+            "#
+        );
 
         for dep_res in deps {
             let PackageEntry { name, version, source } = dep_res?;
             let Some(source) = source else { continue };
-            let download_drv = source.download(name, version, &funs, ctx)?;
+            let link_path = match source {
+                PackageSource::Registry(src) => {
+                    let drv = src.download(name, version, &funs, ctx)?;
+                    LinkPath::Registry(drv)
+                },
+                PackageSource::Git(src) => {
+                    let drv = src.download(funs.fetch_git, ctx)?;
+                    LinkPath::Git(drv)
+                },
+            };
             links.push(attrset! {
                 name: Self::dir_name(name, version),
-                path: download_drv.into_value(),
+                path: link_path,
             });
         }
+
+        let config_dot_toml_drv = funs.write_text_file.call(
+            attrset! {
+                name: "config.toml",
+                text: config_dot_toml,
+            },
+            ctx,
+        )?;
+
+        links.push(attrset! {
+            name: CompactString::const_new("config.toml"),
+            path: LinkPath::ConfigDotToml(config_dot_toml_drv),
+        });
 
         let derivation = funs
             .link_farm
@@ -104,24 +146,6 @@ impl VendorDir {
         let out_path = derivation.out_path(ctx)?;
 
         Ok(Self { out_path, derivation })
-    }
-}
-
-impl<'lock> PackageSource<'lock> {
-    #[allow(clippy::too_many_arguments)]
-    fn download<'pkgs>(
-        &self,
-        pkg_name: &'lock str,
-        pkg_version: &'lock str,
-        funs: &CreateVendorDirFuns<'pkgs, '_>,
-        ctx: &mut Context,
-    ) -> Result<impl Value + use<'lock, 'pkgs>, NixError> {
-        Ok(match self {
-            Self::Registry(src) => {
-                Either::Left(src.download(pkg_name, pkg_version, funs, ctx)?)
-            },
-            Self::Git(src) => Either::Right(src.download(funs.fetch_git, ctx)?),
-        })
     }
 }
 
@@ -222,6 +246,7 @@ impl Function for VendorDeps {
             fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
             fetch_git: ctx.builtins().fetch_git(ctx),
             run_command_local: args.pkgs.get(c"runCommandLocal", ctx)?,
+            write_text_file: args.pkgs.get(c"writeTextFile", ctx)?,
         };
 
         VendorDir::create(deps, funs, ctx)
