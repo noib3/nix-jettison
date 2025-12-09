@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use cargo::core::{Package, Resolve, Target};
+use cargo::core::compiler::CrateType;
+use cargo::core::{Package, Resolve, Target, TargetKind};
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::*;
@@ -99,6 +100,9 @@ pub(crate) struct OptionalBuildCrateArgsInner {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) homepage: Option<CompactString>,
 
+    #[attrset(rename = "type", skip_if = Vec::is_empty)]
+    pub(crate) lib_crate_types: Vec<CompactString>,
+
     #[attrset(skip_if = Option::is_none)]
     pub(crate) lib_name: Option<CompactString>,
 
@@ -122,11 +126,6 @@ pub(crate) struct OptionalBuildCrateArgsInner {
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) rust_version: Option<CompactString>,
-
-    /// If set, `buildRustCrate` will set the `crateType` to the given value,
-    /// otherwise it will default to `"lib"`.
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) r#type: Vec<CompactString>,
 }
 
 #[derive(cauchy::Default, nix_bindings::Attrset)]
@@ -281,6 +280,26 @@ impl OptionalBuildCrateArgsInner {
                 .map(|feat| feat.as_str().into())
                 .collect(),
             homepage: metadata.homepage.as_deref().map(Into::into),
+            lib_crate_types: package
+                .targets()
+                .iter()
+                // A package cannot have multiple library targets, so we can
+                // stop iterating after finding the first one.
+                .find_map(|target| match target.kind() {
+                    TargetKind::Lib(crate_types) => Some(&**crate_types),
+                    _ => None,
+                })
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|crate_type| match crate_type {
+                    // Filter out Lib, buildRustCrate already defaults to
+                    // ["lib"] if we pass an empty list.
+                    //
+                    // See https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/default.nix#L373
+                    CrateType::Lib => None,
+                    other => Some(other.as_str().into()),
+                })
+                .collect(),
             lib_name: None,
             lib_path: None,
             license_file: metadata.license_file.as_deref().map(Into::into),
@@ -292,7 +311,6 @@ impl OptionalBuildCrateArgsInner {
                 .rust_version
                 .as_ref()
                 .map(|v| v.to_compact_string()),
-            r#type: Vec::new(),
         }
     }
 }
