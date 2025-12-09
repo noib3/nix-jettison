@@ -1,8 +1,9 @@
 use core::result::Result;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use cargo::GlobalContext;
@@ -38,7 +39,8 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The path to the directory where dependencies have been vendored.
     ///
     /// This can be obtained by calling `(jettison.vendorDeps { ... }).outPath`.
-    pub(crate) vendor_dir: &'a Path,
+    #[try_from(with = get_vendor_dir)]
+    pub(crate) vendor_dir: Cow<'a, Path>,
 
     /// The list of the package's features to enable.
     #[try_from(default)]
@@ -204,7 +206,7 @@ impl Function for ResolveBuildGraph {
     ) -> Result<BuildGraph<'args>, ResolveBuildGraphError> {
         let manifest_path = args.src.join("Cargo.toml");
 
-        let global_ctx = Self::cargo_ctx(args.vendor_dir)?;
+        let global_ctx = Self::cargo_ctx(&args.vendor_dir)?;
 
         let workspace = Workspace::new(&manifest_path, &global_ctx)
             .map_err(ResolveBuildGraphError::CreateWorkspace)?;
@@ -241,5 +243,30 @@ impl From<ResolveBuildGraphError> for NixError {
         let message = CString::new(err.to_string())
             .expect("the Display impl doesn't contain any NUL bytes");
         Self::new(ErrorKind::Nix, message)
+    }
+}
+
+fn get_vendor_dir<'a>(
+    mut value: NixValue<'a>,
+    ctx: &mut Context,
+) -> Result<Cow<'a, Path>, NixError> {
+    value.force_inline(ctx)?;
+
+    match value.kind() {
+        ValueKind::Attrset => NixDerivation::try_from_value(value, ctx)
+            .and_then(|drv| drv.out_path(ctx))
+            .map(Cow::Owned),
+
+        ValueKind::Path => {
+            <&'a Path>::try_from_value(value, ctx).map(Cow::Borrowed)
+        },
+
+        ValueKind::String => <String>::try_from_value(value, ctx)
+            .map(|s| Cow::Owned(PathBuf::from(s))),
+
+        _ => Err(NixError::new(
+            ErrorKind::Nix,
+            c"expected \"vendorDir\" to be a derivation, path, or string",
+        )),
     }
 }

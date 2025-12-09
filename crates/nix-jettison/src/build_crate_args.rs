@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use cargo::core::compiler::CrateType;
@@ -32,7 +33,7 @@ pub(crate) struct RequiredBuildCrateArgs<'src> {
 pub(crate) enum CrateSource<'src> {
     /// The crate is a 3rd-party dependency which has been vendored under the
     /// given directory.
-    Vendored { vendor_dir: &'src Path },
+    Vendored { vendor_dir: Cow<'src, Path> },
 
     /// The crate source is in the workspace of the root package being built.
     Workspace {
@@ -233,7 +234,7 @@ impl<'src> CrateSource<'src> {
                 .into();
             Self::Workspace { workspace_root, path_in_workspace }
         } else {
-            Self::Vendored { vendor_dir: args.vendor_dir }
+            Self::Vendored { vendor_dir: args.vendor_dir.clone() }
         }
     }
 }

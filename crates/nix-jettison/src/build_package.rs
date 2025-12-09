@@ -60,7 +60,7 @@ impl Function for BuildPackage {
         let vendor_dir = <VendorDeps as Function>::call(vendor_deps_args, ctx)?;
 
         let resolve_build_graph_args = ResolveBuildGraphArgs {
-            vendor_dir: vendor_dir.path(),
+            vendor_dir: vendor_dir.path().into(),
             src: args.src,
             package: args.package,
             features: args.features,
