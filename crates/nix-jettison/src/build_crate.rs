@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use cargo::core::{Package, Resolve};
+use cargo::core::{Package, Resolve, Target};
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::*;
@@ -110,6 +110,9 @@ pub(crate) struct OptionalBuildCrateArgsInner {
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) links: Option<CompactString>,
+
+    #[attrset(skip_if = core::ops::Not::not)]
+    pub(crate) proc_macro: bool,
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) readme: Option<CompactString>,
@@ -282,6 +285,7 @@ impl OptionalBuildCrateArgsInner {
             lib_path: None,
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
+            proc_macro: package.targets().iter().any(Target::proc_macro),
             readme: metadata.readme.as_deref().map(Into::into),
             repository: metadata.repository.as_deref().map(Into::into),
             rust_version: metadata
