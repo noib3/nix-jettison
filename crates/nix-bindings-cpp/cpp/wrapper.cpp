@@ -71,6 +71,25 @@ extern "C" nix::Value* get_builtins(nix::EvalState* state) {
     return state->baseEnv.values[0];
 }
 
+// Expression evaluation.
+
+extern "C" nix_err expr_eval_from_string(
+    nix_c_context* context,
+    nix::EvalState* state,
+    const char* expr,
+    const char* path,
+    nix::Value* value
+) {
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        nix::Expr* parsedExpr = state->parseExprFromString(expr, state->rootPath(nix::CanonPath(path)));
+        state->eval(parsedExpr, *value);
+        state->forceValue(*value, nix::noPos);
+    }
+    NIXC_CATCH_ERRS
+}
+
 // Lists.
 
 extern "C" nix::ListBuilder* make_list_builder(nix::EvalState* state, size_t size) {

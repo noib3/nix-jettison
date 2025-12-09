@@ -107,6 +107,20 @@ unsafe extern "C" {
     pub fn get_builtins(state: *mut EvalState) -> *mut Value;
 }
 
+// Expression evaluation.
+unsafe extern "C" {
+    /// Parse and evaluate a Nix expression from a string.
+    ///
+    /// This is what `nix_expr_eval_from_string` SHOULD do, but it segfaults.
+    pub fn expr_eval_from_string(
+        context: *mut c_context,
+        state: *mut EvalState,
+        expr: *const c_char,
+        path: *const c_char,
+        value: *mut Value,
+    ) -> err;
+}
+
 // Lists.
 unsafe extern "C" {
     /// Create a list builder with the specified size.

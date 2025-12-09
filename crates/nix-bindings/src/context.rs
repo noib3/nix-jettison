@@ -93,11 +93,11 @@ impl<'eval> Context<'eval> {
         let dest = self.alloc_value()?;
 
         self.with_raw_and_state(|raw_ctx, state| unsafe {
-            sys::expr_eval_from_string(
+            cpp::expr_eval_from_string(
                 raw_ctx,
                 state.as_ptr(),
                 expr.as_ptr(),
-                ptr::null_mut(),
+                c".".as_ptr(),
                 dest.as_ptr(),
             );
         })?;
