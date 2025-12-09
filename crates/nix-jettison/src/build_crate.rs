@@ -268,7 +268,7 @@ impl OptionalBuildCrateArgsInner {
             codegen_units: None,
             crate_bin: None,
             crate_renames: Vec::new(),
-            description: None,
+            description: metadata.description.as_deref().map(Into::into),
             edition: Some(manifest.edition().to_compact_string()),
             extra_rustc_opts: Vec::new(),
             extra_rustc_opts_for_build_rs: Vec::new(),

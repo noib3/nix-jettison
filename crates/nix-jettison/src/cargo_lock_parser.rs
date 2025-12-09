@@ -357,7 +357,7 @@ impl<'lock> PackageSource<'lock> {
     }
 }
 
-impl<'lock> GitSource<'lock> {
+impl GitSource<'_> {
     /// Returns a value that formats `self` as a Cargo config entry that
     /// replaces this git source with the given `replace_with` source.
     ///
