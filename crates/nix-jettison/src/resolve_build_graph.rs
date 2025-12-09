@@ -2,14 +2,16 @@ use core::ffi::CStr;
 use core::result::Result;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::env;
 use std::ffi::CString;
 use std::path::Path;
 
+use anyhow::Context as _;
 use cargo::GlobalContext;
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::dependency::DepKind;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{PackageId, PackageIdSpec, Workspace};
+use cargo::core::{PackageId, PackageIdSpec, Shell, Workspace};
 use cargo::ops::{self, WorkspaceResolve};
 use nix_bindings::prelude::{Error as NixError, *};
 
@@ -66,14 +68,14 @@ pub(crate) enum ResolveBuildGraphError {
     /// Configuring the global Cargo context failed.
     ConfigureCargoContext(anyhow::Error),
 
-    /// Creating the global Cargo context failed.
-    CreateCargoContext(anyhow::Error),
-
     /// Constructing the [`RustcTargetData`] failed.
     CreateTargetData(anyhow::Error),
 
     /// Constructing the [`Workspace`] failed.
     CreateWorkspace(anyhow::Error),
+
+    /// Getting the current working directory failed.
+    GetCwd(anyhow::Error),
 
     /// A Nix runtime error occurred.
     Nix(#[from] NixError),
@@ -89,29 +91,21 @@ impl ResolveBuildGraph {
     fn cargo_ctx(
         vendor_dir: &Path,
     ) -> Result<GlobalContext, ResolveBuildGraphError> {
-        let mut ctx = GlobalContext::default()
-            .map_err(ResolveBuildGraphError::CreateCargoContext)?;
+        let shell = Shell::new();
 
-        let vendored_sources = "vendored-sources";
-        let vendor_dir = vendor_dir.display();
+        let cwd = env::current_dir()
+            .context("couldn't get the current directory of the process")
+            .map_err(ResolveBuildGraphError::GetCwd)?;
 
-        let cli_config = vec![
-            format!("source.crates-io.replace-with = '{vendored_sources}'"),
-            format!("source.{vendored_sources}.directory = '{vendor_dir}'"),
-        ];
+        // The vendor directory created by `VendorDir::create()` contains a
+        // `config.toml` file that configures Cargo to use the vendored
+        // sources, so we can use it at the Cargo home.
+        let cargo_home = vendor_dir;
 
-        ctx.configure(
-            0,
-            false,
-            None,
-            true,
-            true,
-            true,
-            &None,
-            &[],
-            &cli_config,
-        )
-        .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
+        let mut ctx = GlobalContext::new(shell, cwd, cargo_home.to_owned());
+
+        ctx.configure(0, false, None, true, true, true, &None, &[], &[])
+            .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
 
         Ok(ctx)
     }
