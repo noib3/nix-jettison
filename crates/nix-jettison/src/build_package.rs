@@ -23,6 +23,7 @@ pub(crate) struct BuildPackageArgs<'a> {
     pkgs: NixAttrset<'a>,
     src: &'a Path,
     package: String,
+    #[try_from(default)]
     features: Vec<String>,
     #[try_from(default)]
     all_features: bool,

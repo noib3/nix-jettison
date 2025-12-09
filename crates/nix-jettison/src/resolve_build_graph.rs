@@ -35,13 +35,14 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The package's name.
     pub(crate) package: String,
 
-    /// The list of the package's features to enable.
-    pub(crate) features: Vec<String>,
-
     /// The path to the directory where dependencies have been vendored.
     ///
     /// This can be obtained by calling `(jettison.vendorDeps { ... }).outPath`.
     pub(crate) vendor_dir: &'a Path,
+
+    /// The list of the package's features to enable.
+    #[try_from(default)]
+    pub(crate) features: Vec<String>,
 
     /// Whether to enable all features (equivalent to calling Cargo with the
     /// `--all-features` CLI flag).
