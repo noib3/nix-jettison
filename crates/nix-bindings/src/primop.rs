@@ -10,7 +10,7 @@ use nix_bindings_sys as sys;
 
 use crate::Utf8CStr;
 use crate::context::{Context, EvalState};
-use crate::error::{ErrorKind, Result};
+use crate::error::{Error, ErrorKind, Result};
 use crate::value::{NixValue, TryFromValue, TryIntoValue, Value, ValueKind};
 
 /// TODO: docs.
@@ -206,7 +206,7 @@ impl<'a> ArgsList<'a> {
     ) -> Result<T> {
         let arg_raw = unsafe { *self.inner.as_ptr().offset(offset.into()) };
         let arg_ptr = NonNull::new(arg_raw).ok_or_else(|| {
-            ctx.make_error((ErrorKind::Overflow, c"argument is NULL"))
+            Error::new(ErrorKind::Overflow, c"argument is NULL")
         })?;
         // SAFETY: the argument list comes from a primop callback, so every
         // argument has been initialized.
@@ -264,9 +264,15 @@ impl<F: Function> PrimOpImpl for F {
             val.write(ret, namespace, ctx)
         };
 
-        // Errors are handled by setting the `Context::inner` field, so we
-        // can ignore the result here.
-        let _ = try_block();
+        if let Err(err) = try_block() {
+            unsafe {
+                sys::set_err_msg(
+                    ctx.inner_mut().as_raw(),
+                    err.kind().code(),
+                    err.message().as_ptr(),
+                );
+            }
+        }
     }
 
     #[inline(always)]

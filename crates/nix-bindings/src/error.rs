@@ -9,25 +9,16 @@ use core::marker::PhantomData;
 
 use nix_bindings_sys as sys;
 
-use crate::context::ContextInner;
 use crate::value::ValueKind;
 
 /// TODO: docs.
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// TODO: docs.
-pub trait ToError {
-    /// TODO: docs.
-    fn kind(&self) -> ErrorKind;
-
-    /// TODO: docs.
-    fn format_to_c_str(&self) -> Cow<'_, CStr>;
-}
-
-/// TODO: docs.
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
+    message: Cow<'static, CStr>,
 }
 
 /// TODO: docs.
@@ -93,10 +84,25 @@ pub struct TryFromI64Error<Int> {
 }
 
 impl Error {
-    #[deprecated = "use Context::make_error instead"]
+    /// Returns the error's kind.
     #[inline]
-    pub(crate) fn new(kind: ErrorKind, _: &mut ContextInner) -> Self {
-        Self { kind }
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    /// Returns the error's message.
+    #[inline]
+    pub fn message(&self) -> &CStr {
+        &self.message
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub fn new(
+        kind: ErrorKind,
+        message: impl Into<Cow<'static, CStr>>,
+    ) -> Self {
+        Self { kind, message: message.into() }
     }
 }
 
@@ -176,16 +182,13 @@ impl<Int: fmt::Debug + fmt::Display> core::error::Error
 {
 }
 
-impl<Int: fmt::Display> ToError for TryIntoI64Error<Int> {
+impl<Int: fmt::Display> From<TryIntoI64Error<Int>> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+    fn from(err: TryIntoI64Error<Int>) -> Self {
         // SAFETY: the Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
+        let message =
+            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
+        Self::new(ErrorKind::Nix, message)
     }
 }
 
@@ -214,90 +217,63 @@ impl<Int> fmt::Display for TryFromI64Error<Int> {
 
 impl<Int> core::error::Error for TryFromI64Error<Int> {}
 
-impl<Int> ToError for TryFromI64Error<Int> {
+impl<Int> From<TryFromI64Error<Int>> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+    fn from(err: TryFromI64Error<Int>) -> Self {
         // SAFETY: the Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
+        let message =
+            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
+        Self::new(ErrorKind::Nix, message)
     }
 }
 
-impl ToError for core::convert::Infallible {
+impl From<core::convert::Infallible> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        unreachable!()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        unreachable!()
+    fn from(err: core::convert::Infallible) -> Self {
+        match err {}
     }
 }
 
-impl ToError for TypeMismatchError {
+impl From<TypeMismatchError> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+    fn from(err: TypeMismatchError) -> Self {
         // SAFETY: the Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()).into() }
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
+        let message =
+            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
+        Self::new(ErrorKind::Nix, message)
     }
 }
 
-impl ToError for alloc::ffi::NulError {
+impl From<alloc::ffi::NulError> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+    fn from(err: alloc::ffi::NulError) -> Self {
         // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
+        let message =
+            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
+        Self::new(ErrorKind::Nix, message)
     }
 }
 
-impl ToError for alloc::ffi::IntoStringError {
+impl From<alloc::ffi::IntoStringError> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        c"C string contained non-utf8 bytes".into()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
+    fn from(_: alloc::ffi::IntoStringError) -> Self {
+        Self::new(ErrorKind::Nix, c"C string contained non-utf8 bytes")
     }
 }
 
-impl ToError for core::str::Utf8Error {
+impl From<core::str::Utf8Error> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()) }.into()
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
+    fn from(err: core::str::Utf8Error) -> Self {
+        // SAFETY: Utf8Error's Display impl doesn't contain any NUL bytes.
+        let message =
+            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
+        Self::new(ErrorKind::Nix, message)
     }
 }
 
-impl ToError for (ErrorKind, &CStr) {
+impl From<(ErrorKind, &'static CStr)> for Error {
     #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        Cow::Borrowed(self.1)
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKind {
-        self.0
+    fn from((kind, message): (ErrorKind, &'static CStr)) -> Self {
+        Self::new(kind, message)
     }
 }

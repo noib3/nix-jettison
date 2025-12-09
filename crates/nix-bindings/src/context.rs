@@ -3,12 +3,13 @@
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
+use core::slice;
 
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::attrset::NixAttrset;
 use crate::builtins::Builtins;
-use crate::error::{Error, ErrorKind, Result, ToError};
+use crate::error::{Error, ErrorKind, Result};
 use crate::namespace::Namespace;
 use crate::primop::PrimOp;
 use crate::value::{NixValue, TryFromValue};
@@ -117,7 +118,7 @@ impl<'eval> Context<'eval> {
         let raw_ptr = unsafe { cpp::alloc_value(self.state.inner.as_ptr()) };
 
         NonNull::new(raw_ptr).ok_or_else(|| {
-            self.make_error((ErrorKind::Overflow, c"failed to allocate Value"))
+            Error::new(ErrorKind::Overflow, c"failed to allocate Value")
         })
     }
 
@@ -134,10 +135,10 @@ impl<'eval> Context<'eval> {
                 Some(builder_ptr) => {
                     Ok(AttrsetBuilder { inner: builder_ptr, context: self })
                 },
-                None => Err(self.make_error((
+                None => Err(Error::new(
                     ErrorKind::Overflow,
                     c"failed to create AttrsetBuilder",
-                ))),
+                )),
             }
         }
     }
@@ -157,10 +158,10 @@ impl<'eval> Context<'eval> {
                     context: self,
                     index: 0,
                 }),
-                None => Err(self.make_error((
+                None => Err(Error::new(
                     ErrorKind::Overflow,
                     c"failed to create ListBuilder",
-                ))),
+                )),
             }
         }
     }
@@ -187,11 +188,9 @@ impl<'eval> Context<'eval> {
 }
 
 impl<State> Context<'_, State> {
-    /// TODO: docs.
     #[inline]
-    #[doc(hidden)]
-    pub fn make_error(&mut self, err: impl ToError) -> Error {
-        self.inner.make_error(err)
+    pub(crate) fn inner_mut(&mut self) -> &mut ContextInner {
+        &mut self.inner
     }
 
     #[inline]
@@ -307,16 +306,9 @@ impl ListBuilder<'_, '_> {
 }
 
 impl ContextInner {
-    /// TODO: docs.
     #[inline]
-    pub(crate) fn make_error(&mut self, err: impl ToError) -> Error {
-        unsafe {
-            let kind = err.kind();
-            let message = err.format_to_c_str();
-            sys::set_err_msg(self.ptr.as_ptr(), kind.code(), message.as_ptr());
-            #[expect(deprecated)]
-            Error::new(kind, self)
-        }
+    pub(crate) fn as_raw(&mut self) -> *mut sys::c_context {
+        self.ptr.as_ptr()
     }
 
     #[inline]
@@ -341,13 +333,13 @@ impl ContextInner {
         &mut self,
         fun: impl FnOnce(*mut sys::c_context) -> T,
     ) -> Result<T> {
-        let ret = fun(self.ptr.as_ptr());
+        let ret = fun(self.as_raw());
         self.check_err().map(|()| ret)
     }
 
     #[inline]
     fn check_err(&mut self) -> Result<()> {
-        let kind = match unsafe { sys::err_code(self.ptr.as_ptr()) } {
+        let kind = match unsafe { sys::err_code(self.as_raw()) } {
             sys::err_NIX_OK => return Ok(()),
             sys::err_NIX_ERR_UNKNOWN => ErrorKind::Unknown,
             sys::err_NIX_ERR_OVERFLOW => ErrorKind::Overflow,
@@ -355,8 +347,18 @@ impl ContextInner {
             sys::err_NIX_ERR_NIX_ERROR => ErrorKind::Nix,
             other => unreachable!("invalid error code: {other}"),
         };
-        #[expect(deprecated)]
-        Err(Error::new(kind, self))
+        let mut err_msg_len = 0;
+        let err_msg_ptr = unsafe {
+            sys::err_msg(ptr::null_mut(), self.as_raw(), &mut err_msg_len)
+        };
+        let bytes = unsafe {
+            slice::from_raw_parts(
+                err_msg_ptr as *const u8,
+                (err_msg_len + 1) as usize,
+            )
+        };
+        let err_msg = unsafe { CStr::from_bytes_with_nul_unchecked(bytes) };
+        Err(Error::new(kind, err_msg.to_owned()))
     }
 
     #[inline]
@@ -371,10 +373,10 @@ impl ContextInner {
             self.with_ptr(|ctx| unsafe { P::alloc(namespace.display(), ctx) })?;
 
         let primop_ptr = NonNull::new(primop_raw).ok_or_else(|| {
-            self.make_error((
+            Error::new(
                 ErrorKind::Overflow,
                 c"failed to allocate PrimOp for {primop:?}",
-            ))
+            )
         })?;
 
         let ret = fun(self, primop_ptr);

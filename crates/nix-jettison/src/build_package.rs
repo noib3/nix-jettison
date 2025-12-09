@@ -1,6 +1,4 @@
-use core::ffi::CStr;
 use core::result::Result;
-use std::borrow::Cow;
 use std::ffi::CString;
 use std::path::Path;
 
@@ -105,14 +103,10 @@ impl Function for BuildPackage {
     }
 }
 
-impl ToError for BuildPackageError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
-    }
-
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        CString::new(self.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes")
-            .into()
+impl From<BuildPackageError> for NixError {
+    fn from(err: BuildPackageError) -> Self {
+        let message = CString::new(err.to_string())
+            .expect("the Display impl doesn't contain any NUL bytes");
+        Self::new(ErrorKind::Nix, message)
     }
 }

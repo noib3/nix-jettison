@@ -1,6 +1,4 @@
-use core::ffi::CStr;
 use core::result::Result;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
@@ -237,14 +235,10 @@ impl IntoValue for BuildGraph<'_> {
     }
 }
 
-impl ToError for ResolveBuildGraphError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
-    }
-
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        CString::new(self.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes")
-            .into()
+impl From<ResolveBuildGraphError> for NixError {
+    fn from(err: ResolveBuildGraphError) -> Self {
+        let message = CString::new(err.to_string())
+            .expect("the Display impl doesn't contain any NUL bytes");
+        Self::new(ErrorKind::Nix, message)
     }
 }

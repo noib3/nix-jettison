@@ -1,6 +1,5 @@
 //! TODO: docs.
 
-use alloc::borrow::Cow;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -15,7 +14,7 @@ pub use nix_bindings_macros::attrset;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::context::EvalState;
-use crate::error::{ErrorKind, ToError, TypeMismatchError};
+use crate::error::{Error, ErrorKind, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
 use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
@@ -270,10 +269,11 @@ impl<'a> NixAttrset<'a> {
         ctx: &mut Context,
     ) -> Result<T> {
         self.get_opt(key, ctx)?.ok_or_else(|| {
-            ctx.make_error(MissingAttributeError {
+            MissingAttributeError {
                 attrset: self.into_attrset().borrow(),
                 attr: key,
-            })
+            }
+            .into()
         })
     }
 
@@ -470,10 +470,10 @@ impl<'a> TryFromValue<NixValue<'a>> for NixAttrset<'a> {
 
         match value.kind() {
             ValueKind::Attrset => Ok(Self { inner: value }),
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Attrset,
                 found: other,
-            })),
+            }.into()),
         }
     }
 }
@@ -692,7 +692,7 @@ impl<'a> TryFromValue<NixAttrset<'a>> for NixDerivation<'a> {
         if attrset.get::<CString>(c"type", ctx)? == c"derivation" {
             Ok(Self { inner: attrset })
         } else {
-            Err(ctx.make_error((ErrorKind::Nix, c"not a derivation")))
+            Err(Error::new(ErrorKind::Nix, c"not a derivation"))
         }
     }
 }
@@ -1030,16 +1030,13 @@ impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
     }
 }
 
-impl<A: Attrset> ToError for MissingAttributeError<'_, A> {
+impl<A: Attrset> From<MissingAttributeError<'_, A>> for Error {
     #[inline]
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
-    }
-
-    #[inline]
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
+    fn from(err: MissingAttributeError<'_, A>) -> Self {
         // SAFETY: the Display impl doesn't contain any NUL bytes.
-        unsafe { CString::from_vec_unchecked(self.to_string().into()).into() }
+        let message =
+            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
+        Self::new(ErrorKind::Nix, message)
     }
 }
 

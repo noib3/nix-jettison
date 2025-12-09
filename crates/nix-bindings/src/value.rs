@@ -12,8 +12,8 @@ use core::slice;
 use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 
 use crate::error::{
+    Error,
     Result,
-    ToError,
     TryFromI64Error,
     TryIntoI64Error,
     TypeMismatchError,
@@ -539,10 +539,9 @@ macro_rules! impl_value_for_big_int {
 
         impl IntValue for $ty {
             #[inline]
-            unsafe fn into_int(self, ctx: &mut Context) -> Result<i64> {
-                self.try_into().map_err(|_| {
-                    ctx.make_error(TryIntoI64Error::<$ty>::new(self))
-                })
+            unsafe fn into_int(self, _: &mut Context) -> Result<i64> {
+                self.try_into()
+                    .map_err(|_| TryIntoI64Error::<$ty>::new(self).into())
             }
         }
     };
@@ -627,7 +626,7 @@ impl Value for str {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        let string = CString::new(self).map_err(|err| ctx.make_error(err))?;
+        let string = CString::new(self)?;
         unsafe { string.write(dest, namespace, ctx) }
     }
 }
@@ -772,7 +771,7 @@ impl Value for std::path::Path {
         ctx: &mut Context,
     ) -> Result<()> {
         let bytes = self.as_os_str().as_encoded_bytes();
-        let cstring = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
+        let cstring = CString::new(bytes)?;
         unsafe {
             cpp::init_path_string(
                 ctx.state_mut().as_ptr(),
@@ -807,11 +806,8 @@ impl PathValue for &std::path::Path {
     type Path = CString;
 
     #[inline]
-    unsafe fn into_path_string(self, ctx: &mut Context) -> Result<Self::Path> {
-        match CString::new(self.as_os_str().as_encoded_bytes()) {
-            Ok(cstr) => Ok(cstr),
-            Err(err) => Err(ctx.make_error(err)),
-        }
+    unsafe fn into_path_string(self, _: &mut Context) -> Result<Self::Path> {
+        CString::new(self.as_os_str().as_encoded_bytes()).map_err(Into::into)
     }
 }
 
@@ -858,7 +854,7 @@ impl Value for std::ffi::OsStr {
         ctx: &mut Context,
     ) -> Result<()> {
         let bytes = self.as_encoded_bytes();
-        let cstring = CString::new(bytes).map_err(|err| ctx.make_error(err))?;
+        let cstring = CString::new(bytes)?;
         unsafe { cstring.write(dest, namespace, ctx) }
     }
 }
@@ -944,23 +940,15 @@ impl<T: IntoValue> TryIntoValue for T {
     }
 }
 
-impl<T: TryIntoValue> TryIntoValue for Result<T> {
-    #[inline]
-    fn try_into_value(self, ctx: &mut Context) -> Result<impl Value + use<T>> {
-        self.and_then(|value| value.try_into_value(ctx))
-    }
-}
-
-impl<T: TryIntoValue, E: ToError> TryIntoValue for core::result::Result<T, E> {
+impl<T: TryIntoValue, E: Into<Error>> TryIntoValue
+    for core::result::Result<T, E>
+{
     #[inline]
     fn try_into_value(
         self,
         ctx: &mut Context,
     ) -> Result<impl Value + use<T, E>> {
-        match self {
-            Ok(value) => value.try_into_value(ctx),
-            Err(err) => Err(ctx.make_error(err)),
-        }
+        self.map_err(Into::into).and_then(|value| value.try_into_value(ctx))
     }
 }
 
@@ -985,10 +973,11 @@ impl<V: BoolValue> TryFromValue<V> for bool {
         match value.kind() {
             // SAFETY: the value's kind is a boolean.
             ValueKind::Bool => unsafe { value.into_bool(ctx) },
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Bool,
                 found: other,
-            })),
+            }
+            .into()),
         }
     }
 }
@@ -1001,10 +990,11 @@ impl<V: IntValue> TryFromValue<V> for i64 {
         match value.kind() {
             // SAFETY: the value's kind is an integer.
             ValueKind::Int => unsafe { value.into_int(ctx) },
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Int,
                 found: other,
-            })),
+            }
+            .into()),
         }
     }
 }
@@ -1016,9 +1006,8 @@ macro_rules! impl_try_from_value_for_int {
             fn try_from_value(value: V, ctx: &mut Context) -> Result<Self> {
                 let int = i64::try_from_value(value, ctx)?;
 
-                int.try_into().map_err(|_| {
-                    ctx.make_error(TryFromI64Error::<$ty>::new(int))
-                })
+                int.try_into()
+                    .map_err(|_| TryFromI64Error::<$ty>::new(int).into())
             }
         }
     };
@@ -1041,7 +1030,7 @@ macro_rules! impl_try_from_string_value {
     ($ty:ty) => {
         impl<V: StringValue> TryFromValue<V> for $ty
         where
-            V::String: TryInto<Self, Error: ToError>,
+            V::String: TryInto<Self, Error: Into<Error>>,
         {
             #[inline]
             fn try_from_value(mut value: V, ctx: &mut Context) -> Result<Self> {
@@ -1051,12 +1040,13 @@ macro_rules! impl_try_from_string_value {
                     ValueKind::String => {
                         // SAFETY: the value's kind is a string.
                         let string = unsafe { value.into_string(ctx)? };
-                        string.try_into().map_err(|err| ctx.make_error(err))
+                        string.try_into().map_err(Into::into)
                     },
-                    other => Err(ctx.make_error(TypeMismatchError {
+                    other => Err(TypeMismatchError {
                         expected: ValueKind::String,
                         found: other,
-                    })),
+                    }
+                    .into()),
                 }
             }
         }
@@ -1108,10 +1098,11 @@ impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>
                 let os_str = OsStr::from_bytes(cstr.to_bytes());
                 Ok(Path::new(os_str))
             },
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Path,
                 found: other,
-            })),
+            }
+            .into()),
         }
     }
 }
@@ -1144,10 +1135,11 @@ where
                     },
                 }
             },
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Path,
                 found: other,
-            })),
+            }
+            .into()),
         }
     }
 }

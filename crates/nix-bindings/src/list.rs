@@ -223,10 +223,10 @@ impl<'a> TryFromValue<NixValue<'a>> for NixList<'a> {
 
         match value.kind() {
             ValueKind::List => Ok(Self { inner: value }),
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::List,
                 found: other,
-            })),
+            }.into()),
         }
     }
 }

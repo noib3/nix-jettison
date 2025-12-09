@@ -215,10 +215,10 @@ impl<'a> TryFromValue<NixAttrset<'a>> for NixFunctor<'a> {
             ValueKind::Function | ValueKind::Thunk => {
                 Ok(Self { inner: attrset })
             },
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Function,
                 found: other,
-            })),
+            }.into()),
         }
     }
 }
@@ -257,10 +257,10 @@ impl<'a> TryFromValue<NixValue<'a>> for NixLambda<'a> {
 
         match value.kind() {
             ValueKind::Function => Ok(Self { inner: value }),
-            other => Err(ctx.make_error(TypeMismatchError {
+            other => Err(TypeMismatchError {
                 expected: ValueKind::Function,
                 found: other,
-            })),
+            }.into()),
         }
     }
 }

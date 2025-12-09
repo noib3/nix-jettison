@@ -1,4 +1,3 @@
-use core::ffi::CStr;
 use core::fmt::{Display, Write};
 use core::result::Result;
 use std::borrow::Cow;
@@ -265,14 +264,10 @@ impl IntoValue for VendorDir {
     }
 }
 
-impl ToError for VendorDepsError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Nix
-    }
-
-    fn format_to_c_str(&self) -> Cow<'_, CStr> {
-        CString::new(self.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes")
-            .into()
+impl From<VendorDepsError> for NixError {
+    fn from(err: VendorDepsError) -> Self {
+        let message = CString::new(err.to_string())
+            .expect("the Display impl doesn't contain any NUL bytes");
+        Self::new(ErrorKind::Nix, message)
     }
 }
