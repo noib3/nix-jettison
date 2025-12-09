@@ -97,13 +97,12 @@ impl VendorDir {
         let vendored_sources = "vendored-sources";
 
         let mut config_dot_toml = format!(
-            r#"
-            [source.crates-io]
-            replace-with = "{vendored_sources}"
+            r#"[source.crates-io]
+replace-with = "{vendored_sources}"
 
-            [source.{vendored_sources}]
-            directory = "."
-            "#
+[source.{vendored_sources}]
+directory = "."
+"#
         );
 
         for dep_res in deps {
