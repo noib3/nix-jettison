@@ -7,6 +7,7 @@ mod entry;
 mod list;
 mod primop;
 mod try_from_value;
+mod value;
 
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
@@ -66,4 +67,11 @@ pub fn try_from_value(input: TokenStream) -> TokenStream {
     try_from_value::expand(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// TODO: docs
+#[proc_macro_derive(Value)]
+pub fn value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    value::expand(input).unwrap_or_else(syn::Error::into_compile_error).into()
 }
