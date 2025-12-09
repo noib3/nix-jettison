@@ -182,10 +182,13 @@ impl<'src> RequiredBuildCrateArgs<'src> {
             ) -> Result<()> {
                 let args = attrset! {
                     path: self.workspace_root.join(self.path_in_workspace),
-                    name: self
-                        .path_in_workspace
-                        .file_name()
-                        .expect("path is not empty"),
+                    name: self.path_in_workspace.file_name().unwrap_or_else(
+                        || {
+                            self.workspace_root
+                                .file_name()
+                                .expect("workspace root has a file name")
+                        },
+                    ),
                 };
 
                 let path = ctx
