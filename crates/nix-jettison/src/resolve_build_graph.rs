@@ -15,7 +15,7 @@ use cargo::core::{PackageId, PackageIdSpec, Shell, Workspace};
 use cargo::ops::{self, WorkspaceResolve};
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_crate::{
+use crate::build_crate_args::{
     BuildCrateArgs,
     Dependencies,
     OptionalBuildCrateArgs,

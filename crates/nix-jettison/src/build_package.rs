@@ -6,7 +6,7 @@ use std::path::Path;
 
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_crate::BuildCrateArgs;
+use crate::build_crate_args::BuildCrateArgs;
 use crate::resolve_build_graph::{
     ResolveBuildGraph,
     ResolveBuildGraphArgs,
