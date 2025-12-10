@@ -1,3 +1,4 @@
+use core::ops::Not;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -117,7 +118,7 @@ pub(crate) struct OptionalBuildCrateArgsInner {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) links: Option<CompactString>,
 
-    #[attrset(skip_if = core::ops::Not::not)]
+    #[attrset(skip_if = Not::not)]
     pub(crate) proc_macro: bool,
 
     #[attrset(skip_if = Option::is_none)]
@@ -142,14 +143,18 @@ pub(crate) struct Dependencies<Dep> {
 
 /// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
 /// arguments don't depend on the particular crate being built.
-#[derive(Default, nix_bindings::Attrset)]
-#[attrset(rename_all = camelCase, skip_if = Option::is_none)]
+#[derive(cauchy::Default, nix_bindings::Attrset)]
+#[attrset(rename_all = camelCase)]
 pub(crate) struct GlobalBuildCrateArgs<'a> {
-    pub(crate) build_tests: Option<bool>,
-    pub(crate) cargo: Option<NixDerivation<'a>>,
+    #[attrset(skip_if = Not::not)]
+    pub(crate) build_tests: bool,
+    #[attrset(skip_if = Option::is_none)]
     pub(crate) crate_overrides: Option<NixAttrset<'a>>,
-    pub(crate) release: Option<bool>,
-    pub(crate) rust: Option<NixDerivation<'a>>,
+    #[default(true)]
+    #[attrset(skip_if = Clone::clone)]
+    pub(crate) release: bool,
+    #[attrset(rename = "rust", skip_if = Option::is_none)]
+    pub(crate) rustc: Option<NixDerivation<'a>>,
 }
 
 impl<'src> RequiredBuildCrateArgs<'src> {
@@ -359,13 +364,23 @@ impl<Dep> Dependencies<Dep> {
 }
 
 impl<Dep: Value> ToValue for BuildCrateArgs<'_, '_, Dep> {
-    fn to_value(&self) -> impl Value {
-        // SAFETY: the three inner attrsets don't contain any overlapping keys.
+    fn to_value<'this>(
+        &'this self,
+        ctx: &mut Context,
+    ) -> impl Value + use<'this, Dep> {
+        let cargo_is_banned = ctx.builtins().throw(ctx).call(
+            c"buildRustCrate should've received all the arguments it needs to \
+             not use Cargo",
+            ctx,
+        ).ok();
+
+        // SAFETY: the inner attrsets don't contain any overlapping keys.
         unsafe {
             self.required
                 .borrow()
                 .concat(self.optional.to_attrset())
                 .concat(self.global.borrow())
+                .concat(attrset! { cargo: cargo_is_banned })
         }
     }
 }
