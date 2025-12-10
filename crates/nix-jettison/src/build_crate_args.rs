@@ -16,10 +16,10 @@ use crate::vendor_deps::VendorDir;
 /// The arguments accepted by [`pkgs.buildRustCrate`][buildRustCrate].
 ///
 /// [buildRustCrate]: https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/default.nix
-pub(crate) struct BuildCrateArgs<'global, 'src, Dep> {
+pub(crate) struct BuildCrateArgs<'src, Dep> {
     pub(crate) required: RequiredBuildCrateArgs<'src>,
-    pub(crate) optional: OptionalBuildCrateArgs<Dep>,
-    pub(crate) global: GlobalBuildCrateArgs<'global>,
+    pub(crate) optional: OptionalBuildCrateArgs,
+    pub(crate) dependencies: Dependencies<Dep>,
 }
 
 /// The required, crate-specific arguments accepted by `pkgs.buildRustCrate`.
@@ -52,15 +52,9 @@ pub(crate) enum CrateSource<'src> {
 }
 
 /// The optional, crate-specific arguments accepted by `pkgs.buildRustCrate`.
-#[derive(cauchy::Default)]
-pub(crate) struct OptionalBuildCrateArgs<Dep> {
-    pub(crate) inner: OptionalBuildCrateArgsInner,
-    pub(crate) dependencies: Dependencies<Dep>,
-}
-
 #[derive(Default, nix_bindings::Attrset)]
 #[attrset(rename_all = camelCase)]
-pub(crate) struct OptionalBuildCrateArgsInner {
+pub(crate) struct OptionalBuildCrateArgs {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
@@ -142,20 +136,30 @@ pub(crate) struct Dependencies<Dep> {
     pub(crate) build: Vec<Dep>,
 }
 
-/// Unlike [`RequiredBuildCrateArgs`] and [`OptionalBuildCrateArgs`], these
-/// arguments don't depend on the particular crate being built.
-#[derive(cauchy::Default, nix_bindings::Attrset)]
-#[attrset(rename_all = camelCase)]
-pub(crate) struct GlobalBuildCrateArgs<'a> {
-    #[attrset(skip_if = Not::not)]
-    pub(crate) build_tests: bool,
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) crate_overrides: Option<NixAttrset<'a>>,
-    #[default(true)]
-    #[attrset(skip_if = Clone::clone)]
-    pub(crate) release: bool,
-    #[attrset(rename = "rust", skip_if = Option::is_none)]
-    pub(crate) rustc: Option<NixDerivation<'a>>,
+impl<'src, Dep> BuildCrateArgs<'src, Dep> {
+    pub(crate) fn map_deps<NewDep>(
+        self,
+        fun: impl FnMut(Dep) -> NewDep + Clone,
+    ) -> BuildCrateArgs<'src, NewDep> {
+        BuildCrateArgs {
+            required: self.required,
+            optional: self.optional,
+            dependencies: self.dependencies.map(fun),
+        }
+    }
+
+    pub(crate) fn to_attrset(&self) -> impl Attrset + Value
+    where
+        Dep: Value,
+    {
+        // SAFETY: the inner attrsets don't contain any overlapping keys.
+        unsafe {
+            self.required
+                .borrow()
+                .concat(self.optional.borrow())
+                .concat(self.dependencies.borrow())
+        }
+    }
 }
 
 impl<'src> RequiredBuildCrateArgs<'src> {
@@ -249,27 +253,7 @@ impl<'src> CrateSource<'src> {
     }
 }
 
-impl<Dep> OptionalBuildCrateArgs<Dep> {
-    pub(crate) fn map_deps<NewDep>(
-        self,
-        fun: impl FnMut(Dep) -> NewDep + Clone,
-    ) -> OptionalBuildCrateArgs<NewDep> {
-        OptionalBuildCrateArgs {
-            inner: self.inner,
-            dependencies: self.dependencies.map(fun),
-        }
-    }
-
-    fn to_attrset(&self) -> impl Attrset
-    where
-        Dep: ToValue,
-    {
-        // SAFETY: 'inner' and 'dependencies' don't have any overlapping keys.
-        unsafe { self.inner.borrow().concat(self.dependencies.borrow()) }
-    }
-}
-
-impl OptionalBuildCrateArgsInner {
+impl OptionalBuildCrateArgs {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn new(package: &Package, resolve: &Resolve) -> Self {
         let manifest = package.manifest();
@@ -372,24 +356,8 @@ impl<Dep> Dependencies<Dep> {
     }
 }
 
-impl<Dep: Value> ToValue for BuildCrateArgs<'_, '_, Dep> {
-    fn to_value<'this>(
-        &'this self,
-        ctx: &mut Context,
-    ) -> impl Value + use<'this, Dep> {
-        let cargo_is_banned = ctx.builtins().throw(ctx).call(
-            c"buildRustCrate should've received all the arguments it needs to \
-             not use Cargo",
-            ctx,
-        ).ok();
-
-        // SAFETY: the inner attrsets don't contain any overlapping keys.
-        unsafe {
-            self.required
-                .borrow()
-                .concat(self.optional.to_attrset())
-                .concat(self.global.borrow())
-                .concat(attrset! { cargo: cargo_is_banned })
-        }
+impl<Dep: Value> ToValue for BuildCrateArgs<'_, Dep> {
+    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Dep> {
+        self.to_attrset()
     }
 }

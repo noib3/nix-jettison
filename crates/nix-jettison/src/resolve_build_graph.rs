@@ -18,7 +18,6 @@ use crate::build_crate_args::{
     BuildCrateArgs,
     Dependencies,
     OptionalBuildCrateArgs,
-    OptionalBuildCrateArgsInner,
     RequiredBuildCrateArgs,
 };
 
@@ -58,7 +57,7 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
 }
 
 pub(crate) struct BuildGraph<'args> {
-    pub(crate) crates: Vec<BuildCrateArgs<'static, 'args, usize>>,
+    pub(crate) crates: Vec<BuildCrateArgs<'args, usize>>,
     pkg_id_to_idx: HashMap<PackageId, usize>,
 }
 
@@ -152,6 +151,8 @@ impl<'args> BuildGraph<'args> {
         args: &ResolveBuildGraphArgs<'args>,
         ws_resolve: &WorkspaceResolve<'_>,
     ) -> usize {
+        let WorkspaceResolve { targeted_resolve, pkg_set, .. } = ws_resolve;
+
         // Fast path if we've already seen this package.
         if let Some(&idx) = this.pkg_id_to_idx.get(&pkg_id) {
             return idx;
@@ -159,7 +160,7 @@ impl<'args> BuildGraph<'args> {
 
         let mut dependencies = Dependencies::default();
 
-        for (dep_id, dep_set) in ws_resolve.targeted_resolve.deps(pkg_id) {
+        for (dep_id, dep_set) in targeted_resolve.deps(pkg_id) {
             let dep_idx = Self::build_recursive(this, dep_id, args, ws_resolve);
 
             for dep in dep_set {
@@ -171,21 +172,13 @@ impl<'args> BuildGraph<'args> {
             }
         }
 
-        let package = ws_resolve
-            .pkg_set
-            .get_one(pkg_id)
-            .expect("package ID not found in workspace");
+        let package =
+            pkg_set.get_one(pkg_id).expect("package ID not found in workspace");
 
         let build_crate_args = BuildCrateArgs {
             required: RequiredBuildCrateArgs::new(package, args),
-            optional: OptionalBuildCrateArgs {
-                dependencies,
-                inner: OptionalBuildCrateArgsInner::new(
-                    package,
-                    &ws_resolve.targeted_resolve,
-                ),
-            },
-            global: Default::default(),
+            optional: OptionalBuildCrateArgs::new(package, targeted_resolve),
+            dependencies,
         };
 
         let idx = this.crates.len();

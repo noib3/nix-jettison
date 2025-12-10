@@ -4,7 +4,6 @@ use std::path::Path;
 
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_crate_args::BuildCrateArgs;
 use crate::resolve_build_graph::{
     ResolveBuildGraph,
     ResolveBuildGraphArgs,
@@ -20,15 +19,48 @@ pub(crate) struct BuildPackage;
 #[args(flatten, name = "args")]
 #[try_from(rename_all = camelCase)]
 pub(crate) struct BuildPackageArgs<'a> {
-    pkgs: NixAttrset<'a>,
-    src: &'a Path,
+    /// The package's name.
     package: String,
-    #[try_from(default)]
-    features: Vec<String>,
+
+    /// The package set to use.
+    pkgs: NixAttrset<'a>,
+
+    /// The path to the root of the workspace the package is in.
+    src: &'a Path,
+
+    /// Whether to enable all features (equivalent to calling Cargo with the
+    /// `--all-features` CLI flag).
     #[try_from(default)]
     all_features: bool,
+
+    /// TODO: docs.
+    #[try_from(default)]
+    build_tests: bool,
+
+    /// TODO: docs.
+    #[try_from(default)]
+    crate_overrides: Option<NixAttrset<'a>>,
+
+    /// The list of the package's features to enable.
+    #[try_from(default)]
+    features: Vec<String>,
+
+    /// TODO: docs.
+    #[try_from(default)]
+    global_overrides: Option<NixAttrset<'a>>,
+
+    /// Whether to disable the default features (equivalent to calling Cargo
+    /// with the `--no-default-features` CLI flag).
     #[try_from(default)]
     no_default_features: bool,
+
+    /// TODO: docs.
+    #[try_from(default)]
+    release: bool,
+
+    /// TODO: docs.
+    #[try_from(default)]
+    rustc: Option<NixDerivation<'a>>,
 }
 
 /// The type of error that can occur when building a package fails.
@@ -73,34 +105,48 @@ impl Function for BuildPackage {
             ctx,
         )?;
 
-        let build_rust_crate =
+        let default_build_rust_crate =
             args.pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?;
 
-        let mut build_crates: Vec<NixDerivation<'static>> =
+        let build_rust_crate = match args.global_overrides {
+            Some(_attrs) => todo!(),
+            None => default_build_rust_crate,
+        };
+
+        let cargo_is_banned = ctx.builtins().throw(ctx).call(
+            c"buildRustCrate should've received all the arguments it needs to \
+             not use Cargo",
+            ctx,
+        )?;
+
+        let global_args = attrset! {
+            build_tests: args.build_tests,
+            cargo: cargo_is_banned,
+            crate_overrides: args.crate_overrides,
+            release: args.release,
+            rustc: args.rustc,
+        };
+
+        let mut build_crates: Vec<Thunk<'static>> =
             Vec::with_capacity(build_graph.crates.len());
 
         for args in build_graph.crates {
-            let args = BuildCrateArgs {
-                required: args.required,
-                optional: args.optional.map_deps(|idx| build_crates[idx]),
-                global: args.global,
-            };
+            let args = args.map_deps(|graph_idx| build_crates[graph_idx]);
 
-            let derivation = build_rust_crate
-                .call(args.as_into_value(), ctx)
-                .map_err(BuildPackageError::Nix)?
-                // FIXME: does forcing here disable build parallelism?
-                .force(ctx)?;
-
-            build_crates.push(derivation);
+            build_crates.push(build_rust_crate.call(
+                args.to_attrset().merge(Attrset::borrow(&global_args)),
+                ctx,
+            )?);
         }
 
         // The derivation for the requested package is the root of the build
-        // graph, which is the last element in the list.
-        Ok(build_crates
+        // graph, which is the last element in the vector.
+        build_crates
             .into_iter()
             .next_back()
-            .expect("build graph is never empty"))
+            .expect("build graph is never empty")
+            .force(ctx)
+            .map_err(Into::into)
     }
 }
 
