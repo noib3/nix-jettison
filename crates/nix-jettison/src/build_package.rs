@@ -2,6 +2,7 @@ use core::result::Result;
 use std::ffi::CString;
 use std::path::Path;
 
+use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::resolve_build_graph::{
@@ -77,6 +78,38 @@ pub(crate) enum BuildPackageError {
     VendorDeps(#[from] VendorDepsError),
 }
 
+impl<'a> BuildPackageArgs<'a> {
+    /// Returns the `buildRustCrate` function to use for building Rust crates.
+    fn build_rust_crate(
+        &self,
+        ctx: &mut Context,
+    ) -> Result<impl Callable + use<'a>, NixError> {
+        let default_build_rust_crate =
+            self.pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?;
+
+        let Some(overrides) = self.global_overrides else {
+            return Ok(Either::Right(default_build_rust_crate));
+        };
+
+        let wrapped = ctx.eval::<NixLambda>(
+            c"
+            { buildRustCrate, globalOverrides }:
+            args: (buildRustCrate args).overrideAttrs globalOverrides",
+        )?;
+
+        wrapped
+            .call(
+                attrset! {
+                    buildRustCrate: default_build_rust_crate,
+                    globalOverrides: overrides,
+                },
+                ctx,
+            )?
+            .force_into::<NixLambda>(ctx)
+            .map(Either::Left)
+    }
+}
+
 impl Function for BuildPackage {
     type Args<'a> = BuildPackageArgs<'a>;
 
@@ -91,6 +124,8 @@ impl Function for BuildPackage {
 
         let vendor_dir = <VendorDeps as Function>::call(vendor_deps_args, ctx)?;
 
+        let build_rust_crate = args.build_rust_crate(ctx)?;
+
         let resolve_build_graph_args = ResolveBuildGraphArgs {
             vendor_dir: vendor_dir.path().into(),
             src: args.src,
@@ -104,14 +139,6 @@ impl Function for BuildPackage {
             resolve_build_graph_args,
             ctx,
         )?;
-
-        let default_build_rust_crate =
-            args.pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?;
-
-        let build_rust_crate = match args.global_overrides {
-            Some(_attrs) => todo!(),
-            None => default_build_rust_crate,
-        };
 
         let cargo_is_banned = ctx.builtins().throw(ctx).call(
             c"buildRustCrate should've received all the arguments it needs to \
