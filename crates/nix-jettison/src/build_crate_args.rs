@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use cargo::core::compiler::CrateType;
+use cargo::core::manifest::TargetSourcePath;
 use cargo::core::{Package, Resolve, Target, TargetKind};
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
@@ -263,6 +264,7 @@ impl<Dep> OptionalBuildCrateArgs<Dep> {
 }
 
 impl OptionalBuildCrateArgsInner {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn new(package: &Package, resolve: &Resolve) -> Self {
         let manifest = package.manifest();
         let metadata = manifest.metadata();
@@ -312,7 +314,25 @@ impl OptionalBuildCrateArgsInner {
                 (lib_target.name() != package.name().as_str())
                     .then_some(lib_target.name().into())
             }),
-            lib_path: None,
+            lib_path: lib_target
+                .and_then(|(lib_target, _crate_types)| {
+                    match lib_target.src_path() {
+                        TargetSourcePath::Path(path) => Some(&**path),
+                        TargetSourcePath::Metabuild => None,
+                    }
+                })
+                .and_then(|lib_path| {
+                    let package_path = package
+                        .manifest_path()
+                        .parent()
+                        .expect("path to Cargo.toml has a parent");
+                    let lib_path_relative = lib_path
+                        .strip_prefix(package_path)
+                        .expect("library path is under package root");
+                    (lib_path_relative != "src/lib.rs").then(|| {
+                        lib_path_relative.display().to_compact_string()
+                    })
+                }),
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
             proc_macro: package.targets().iter().any(Target::proc_macro),
