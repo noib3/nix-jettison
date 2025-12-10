@@ -12,6 +12,7 @@ use syn::{
     Expr,
     Fields,
     FieldsNamed,
+    Ident,
     Token,
     WherePredicate,
 };
@@ -25,10 +26,12 @@ const MACRO_NAME: &str = "Attrset";
 pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let attrs = Attributes::parse(&input.attrs, AttributePosition::Struct)?;
 
+    let ctx = syn::Ident::new("__ctx", Span::call_site());
+
     let fields = named_fields(&input)?
         .named
         .iter()
-        .map(|field| Field::new(field, &attrs))
+        .map(|field| Field::new(field, &attrs, &ctx))
         .collect::<syn::Result<Vec<_>>>()?;
 
     let keys = fields.iter().map(|field| &field.key_name);
@@ -52,7 +55,6 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
 
     let field_idx = syn::Ident::new("__field_idx", Span::call_site());
     let fun = syn::Ident::new("__fun", Span::call_site());
-    let ctx = syn::Ident::new("__ctx", Span::call_site());
 
     let with_value_arms = fields.iter().enumerate().map(|(idx, field)| {
         let idx_lit = Literal::u32_unsuffixed(idx as u32);
@@ -232,7 +234,11 @@ impl Attributes {
 }
 
 impl Field {
-    fn new(field: &syn::Field, struct_attrs: &Attributes) -> syn::Result<Self> {
+    fn new(
+        field: &syn::Field,
+        struct_attrs: &Attributes,
+        ctx: &Ident,
+    ) -> syn::Result<Self> {
         let field_attrs =
             Attributes::parse(&field.attrs, AttributePosition::Field)?;
 
@@ -268,7 +274,7 @@ impl Field {
         {
             quote! { (#with_value_expr)(self) }
         } else {
-            quote! { ::nix_bindings::value::ToValue::to_value(&self.#field_name) }
+            quote! { ::nix_bindings::value::ToValue::to_value(&self.#field_name, #ctx) }
         };
 
         Ok(Self { key_name, skip_expr, with_value_expr })

@@ -259,7 +259,7 @@ impl Function for VendorDeps {
 }
 
 impl IntoValue for VendorDir {
-    fn into_value(self) -> impl Value {
+    fn into_value(self, _: &mut Context) -> impl Value + use<> {
         self.derivation
     }
 }

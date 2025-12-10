@@ -232,8 +232,8 @@ impl Function for ResolveBuildGraph {
     }
 }
 
-impl IntoValue for BuildGraph<'_> {
-    fn into_value(self) -> impl Value {
+impl<'a> IntoValue for BuildGraph<'a> {
+    fn into_value(self, _: &mut Context) -> impl Value + use<'a> {
         self.crates
     }
 }

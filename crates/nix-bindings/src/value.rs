@@ -170,7 +170,10 @@ pub trait PathValue: Value + Sized {
 /// For fallible conversions, see [`TryIntoValue`].
 pub trait IntoValue {
     /// Converts `self` into a [`Value`].
-    fn into_value(self) -> impl Value;
+    fn into_value<'eval>(
+        self,
+        ctx: &mut Context<'eval>,
+    ) -> impl Value + use<'eval, Self>;
 }
 
 /// A trait for types that can be infallibly converted into [`Value`]s by
@@ -179,16 +182,39 @@ pub trait IntoValue {
 /// For conversions from owned values, see [`IntoValue`].
 pub trait ToValue {
     /// Converts `&self` into a [`Value`].
-    fn to_value(&self) -> impl Value;
+    fn to_value<'this, 'eval>(
+        &'this self,
+        ctx: &mut Context<'eval>,
+    ) -> impl Value + use<'this, 'eval, Self>;
+
+    /// TODO: docs.
+    #[inline(always)]
+    fn as_into_value(&self) -> impl IntoValue {
+        struct RefIntoValue<'a, T: ?Sized> {
+            inner: &'a T,
+        }
+
+        impl<'a, T: ToValue + ?Sized> IntoValue for RefIntoValue<'a, T> {
+            #[inline]
+            fn into_value<'eval>(
+                self,
+                ctx: &mut Context<'eval>,
+            ) -> impl Value + use<'a, 'eval, T> {
+                self.inner.to_value(ctx)
+            }
+        }
+
+        RefIntoValue { inner: self }
+    }
 }
 
 /// A trait for types that can be fallibly converted into [`Value`]s.
 pub trait TryIntoValue {
     /// Attempts to convert this value into a [`Value`].
-    fn try_into_value(
+    fn try_into_value<'eval>(
         self,
-        ctx: &mut Context,
-    ) -> Result<impl Value + use<Self>>;
+        ctx: &mut Context<'eval>,
+    ) -> Result<impl Value + use<'eval, Self>>;
 }
 
 /// A trait for types that can be fallibly converted from [`Value`]s.
@@ -921,22 +947,28 @@ impl<L: Value, R: Value> Value for either::Either<L, R> {
 
 impl<T: Value> IntoValue for T {
     #[inline(always)]
-    fn into_value(self) -> impl Value {
+    fn into_value(self, _: &mut Context) -> impl Value + use<T> {
         self
     }
 }
 
 impl<T: Value> ToValue for T {
     #[inline(always)]
-    fn to_value(&self) -> impl Value {
+    fn to_value<'this>(
+        &'this self,
+        _: &mut Context,
+    ) -> impl Value + use<'this, T> {
         Value::borrow(self)
     }
 }
 
 impl<T: IntoValue> TryIntoValue for T {
     #[inline(always)]
-    fn try_into_value(self, _: &mut Context) -> Result<impl Value + use<T>> {
-        Ok(self.into_value())
+    fn try_into_value<'eval>(
+        self,
+        ctx: &mut Context<'eval>,
+    ) -> Result<impl Value + use<'eval, T>> {
+        Ok(self.into_value(ctx))
     }
 }
 
@@ -944,10 +976,10 @@ impl<T: TryIntoValue, E: Into<Error>> TryIntoValue
     for core::result::Result<T, E>
 {
     #[inline]
-    fn try_into_value(
+    fn try_into_value<'eval>(
         self,
-        ctx: &mut Context,
-    ) -> Result<impl Value + use<T, E>> {
+        ctx: &mut Context<'eval>,
+    ) -> Result<impl Value + use<'eval, T, E>> {
         self.map_err(Into::into).and_then(|value| value.try_into_value(ctx))
     }
 }

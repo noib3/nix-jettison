@@ -348,7 +348,7 @@ where
         fun: impl FnOnceValue<U, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> U {
-        fun.call(self.deref()[idx as usize].to_value(), ctx)
+        fun.call(self.deref()[idx as usize].to_value(ctx), ctx)
     }
 }
 

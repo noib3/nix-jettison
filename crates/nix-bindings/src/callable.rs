@@ -36,19 +36,20 @@ pub trait Callable {
         let dest_ptr = ctx.alloc_value()?;
         let arg_ptr = ctx.alloc_value()?;
 
-        let res = (unsafe { arg.into_value().write_no_primop(arg_ptr, ctx) })
-            .and_then(|()| {
-                ctx.with_raw(|ctx| {
-                    unsafe {
-                        sys::init_apply(
-                            ctx,
-                            dest_ptr.as_ptr(),
-                            self.value().as_raw(),
-                            arg_ptr.as_ptr(),
-                        )
-                    };
-                })
-            });
+        let res =
+            (unsafe { arg.into_value(ctx).write_no_primop(arg_ptr, ctx) })
+                .and_then(|()| {
+                    ctx.with_raw(|ctx| {
+                        unsafe {
+                            sys::init_apply(
+                                ctx,
+                                dest_ptr.as_ptr(),
+                                self.value().as_raw(),
+                                arg_ptr.as_ptr(),
+                            )
+                        };
+                    })
+                });
 
         // Free the argument once we're done with it.
         ctx.with_raw(|ctx| unsafe { sys::value_decref(ctx, arg_ptr.as_ptr()) })
