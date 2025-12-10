@@ -120,11 +120,20 @@ fn try_from_attrset_impl(
 
         field_names.push(field_name);
 
+        let default_attr =
+            field_attrs.default.as_ref().or(struct_attrs.default.as_ref());
+
         field_initializers.extend(
-            if struct_attrs.default || field_attrs.default {
-                quote! {
-                    let #field_name = #attrset.get_opt(#key_name, #ctx)?
-                        .unwrap_or_default();
+            if let Some(attr) = default_attr {
+                match attr {
+                    DefaultAttr::Default => quote! {
+                        let #field_name = #attrset.get_opt(#key_name, #ctx)?
+                            .unwrap_or_default();
+                    },
+                    DefaultAttr::Expr(expr) => quote! {
+                        let #field_name = #attrset.get_opt(#key_name, #ctx)?
+                            .unwrap_or_else(|| #expr);
+                    },
                 }
             } else if let Some(with_expr) = field_attrs.with {
                 quote! {
@@ -150,8 +159,16 @@ fn try_from_attrset_impl(
 #[derive(Clone, Default)]
 struct Attributes {
     rename: Option<Rename>,
-    default: bool,
+    default: Option<DefaultAttr>,
     with: Option<Expr>,
+}
+
+#[derive(Clone)]
+enum DefaultAttr {
+    /// Use the type's `Default` impl.
+    Default,
+    /// Use a custom expression.
+    Expr(Expr),
 }
 
 #[derive(Copy, Clone)]
@@ -208,9 +225,17 @@ impl Attributes {
                              together",
                         ));
                     }
-                    this.default = true;
+
+                    // Check if there's a value assignment (default = {expr}).
+                    if meta.input.peek(syn::Token![=]) {
+                        let value = meta.value()?;
+                        let expr: Expr = value.parse()?;
+                        this.default = Some(DefaultAttr::Expr(expr));
+                    } else {
+                        this.default = Some(DefaultAttr::Default);
+                    }
                 } else if meta.path.is_ident("with") {
-                    if this.default {
+                    if this.default.is_some() {
                         return Err(meta.error(
                             "`with` and `default` attributes cannot be used \
                              together",

@@ -56,7 +56,7 @@ pub(crate) struct BuildPackageArgs<'a> {
     no_default_features: bool,
 
     /// TODO: docs.
-    #[try_from(default)]
+    #[try_from(default = true)]
     release: bool,
 
     /// TODO: docs.
