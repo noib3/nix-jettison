@@ -367,9 +367,9 @@ impl Value for Null {
 impl Value for NixValue<'_> {
     #[inline]
     fn force_inline(&mut self, ctx: &mut Context) -> Result<()> {
-        // TODO: this shouldn't be infallible.
-        unsafe { cpp::force_value(ctx.state_mut().as_ptr(), self.as_raw()) };
-        Ok(())
+        ctx.with_raw_and_state(|ctx, state| unsafe {
+            cpp::force_value(ctx, state.as_ptr(), self.as_raw());
+        })
     }
 
     #[inline]

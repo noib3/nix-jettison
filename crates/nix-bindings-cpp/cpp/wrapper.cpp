@@ -114,8 +114,13 @@ extern "C" nix::Value* alloc_value(nix::EvalState* state) {
     return res;
 }
 
-extern "C" void force_value(nix::EvalState* state, nix::Value* value) {
-    state->forceValue(*value, nix::noPos);
+extern "C" nix_err force_value(nix_c_context* context, nix::EvalState* state, nix::Value* value) {
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        state->forceValue(*value, nix::noPos);
+    }
+    NIXC_CATCH_ERRS
 }
 
 extern "C" void init_path_string(nix::EvalState* state, nix::Value* value, const char* str) {

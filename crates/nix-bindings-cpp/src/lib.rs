@@ -157,7 +157,11 @@ unsafe extern "C" {
     /// Force evaluation of a value using the C++ API.
     ///
     /// This is what `nix_value_force` SHOULD do, but it segfaults.
-    pub fn force_value(state: *mut EvalState, value: *mut Value);
+    pub fn force_value(
+        context: *mut c_context,
+        state: *mut EvalState,
+        value: *mut Value,
+    ) -> err;
 
     /// Initialize a value as a path from a string.
     ///
