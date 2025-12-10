@@ -20,7 +20,7 @@ use syn::{
 #[inline]
 pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let attrs = ArgsAttributes::parse(&input.attrs)?;
-    let fields = named_fields(&input)?;
+    let fields = named_fields(&input, attrs.flatten)?;
 
     let args = Ident::new("__args_list", Span::call_site());
     let ctx = Ident::new("__ctx", Span::call_site());
@@ -57,7 +57,10 @@ enum ArgsAttribute {
     Name(CString),
 }
 
-fn named_fields(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
+fn named_fields(
+    input: &DeriveInput,
+    is_flattened: bool,
+) -> syn::Result<&FieldsNamed> {
     let r#struct = match &input.data {
         Data::Struct(str) => str,
         Data::Enum(_) => {
@@ -82,7 +85,9 @@ fn named_fields(input: &DeriveInput) -> syn::Result<&FieldsNamed> {
                  field",
             )),
 
-            len if len > nix_bindings_sys::MAX_PRIMOP_ARITY as usize => {
+            len if len > nix_bindings_sys::MAX_PRIMOP_ARITY as usize
+                && !is_flattened =>
+            {
                 Err(syn::Error::new(
                     input.span(),
                     format_args!(
