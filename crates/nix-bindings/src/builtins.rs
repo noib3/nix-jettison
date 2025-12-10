@@ -26,6 +26,14 @@ impl<'eval> Builtins<'eval> {
             .expect("builtins.path exists and it's a function")
     }
 
+    /// Returns a handle to the `builtins.throw` function.
+    #[inline]
+    pub fn throw(&self, ctx: &mut Context) -> NixLambda<'eval> {
+        self.inner
+            .get(c"throw", ctx)
+            .expect("builtins.throw exists and it's a function")
+    }
+
     #[inline]
     pub(crate) fn new(inner: NixAttrset<'eval>) -> Self {
         Self { inner }
