@@ -16,6 +16,7 @@ pub trait Lazy<Output> {
 }
 
 /// TODO: docs.
+#[derive(Debug, Copy, Clone)]
 pub struct Thunk<'a> {
     value: NixValue<'a>,
 }
