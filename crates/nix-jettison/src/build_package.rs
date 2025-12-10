@@ -147,12 +147,12 @@ impl Function for BuildPackage {
         )?;
 
         let global_args = attrset! {
-            build_tests: args.build_tests,
+            buildTests: args.build_tests,
             cargo: cargo_is_banned,
-            crate_overrides: args.crate_overrides,
             release: args.release,
-            rustc: args.rustc,
-        };
+        }
+        .merge(args.crate_overrides.map(|ovr| attrset! { crateOverrides: ovr }))
+        .merge(args.rustc.map(|drv| attrset! { rustc: drv }));
 
         let mut build_crates: Vec<Thunk<'static>> =
             Vec::with_capacity(build_graph.crates.len());
