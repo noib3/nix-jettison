@@ -100,7 +100,7 @@ impl ResolveBuildGraph {
 
         // The vendor directory created by `VendorDir::create()` contains a
         // `config.toml` file that configures Cargo to use the vendored
-        // sources, so we can use it at the Cargo home.
+        // sources, so we can use it as the Cargo home.
         let cargo_home = vendor_dir;
 
         let mut ctx = GlobalContext::new(shell, cwd, cargo_home.to_owned());

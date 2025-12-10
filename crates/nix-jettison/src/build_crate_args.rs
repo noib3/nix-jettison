@@ -268,6 +268,16 @@ impl OptionalBuildCrateArgsInner {
         let metadata = manifest.metadata();
         let package_id = package.package_id();
 
+        let lib_target = package
+            .targets()
+            .iter()
+            // A package cannot have multiple library targets, so we can
+            // stop iterating after finding the first one.
+            .find_map(|target| match target.kind() {
+                TargetKind::Lib(crate_types) => Some((target, &**crate_types)),
+                _ => None,
+            });
+
         Self {
             authors: metadata.authors.clone(),
             build: None,
@@ -284,16 +294,8 @@ impl OptionalBuildCrateArgsInner {
                 .map(|feat| feat.as_str().into())
                 .collect(),
             homepage: metadata.homepage.as_deref().map(Into::into),
-            lib_crate_types: package
-                .targets()
-                .iter()
-                // A package cannot have multiple library targets, so we can
-                // stop iterating after finding the first one.
-                .find_map(|target| match target.kind() {
-                    TargetKind::Lib(crate_types) => Some(&**crate_types),
-                    _ => None,
-                })
-                .unwrap_or_default()
+            lib_crate_types: lib_target
+                .map_or(&[][..], |(_target, crate_types)| crate_types)
                 .iter()
                 .filter_map(|crate_type| match crate_type {
                     // Filter out Lib, buildRustCrate already defaults to
@@ -304,7 +306,12 @@ impl OptionalBuildCrateArgsInner {
                     other => Some(other.as_str().into()),
                 })
                 .collect(),
-            lib_name: None,
+            lib_name: lib_target.and_then(|(lib_target, _crate_types)| {
+                // Only set the library name if it differs from the package
+                // name.
+                (lib_target.name() != package.name().as_str())
+                    .then_some(lib_target.name().into())
+            }),
             lib_path: None,
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
