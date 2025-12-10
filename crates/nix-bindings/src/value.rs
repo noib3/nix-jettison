@@ -1111,6 +1111,16 @@ where
     }
 }
 
+impl<'a, T> TryFromValue<NixValue<'a>> for Option<T>
+where
+    T: TryFromValue<NixValue<'a>>,
+{
+    #[inline]
+    fn try_from_value(value: NixValue<'a>, ctx: &mut Context) -> Result<Self> {
+        T::try_from_value(value, ctx).map(Some)
+    }
+}
+
 #[cfg(all(unix, feature = "std"))]
 impl<'a, V: PathValue<Path = &'a CStr>> TryFromValue<V>
     for &'a std::path::Path
