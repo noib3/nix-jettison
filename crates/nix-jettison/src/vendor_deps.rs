@@ -266,8 +266,13 @@ impl IntoValue for VendorDir {
 
 impl From<VendorDepsError> for NixError {
     fn from(err: VendorDepsError) -> Self {
-        let message = CString::new(err.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes");
-        Self::new(ErrorKind::Nix, message)
+        match err {
+            VendorDepsError::Nix(nix_err) => nix_err,
+            other => {
+                let message = CString::new(other.to_string())
+                    .expect("the Display impl doesn't contain any NUL bytes");
+                Self::new(ErrorKind::Nix, message)
+            },
+        }
     }
 }

@@ -179,8 +179,13 @@ impl Function for BuildPackage {
 
 impl From<BuildPackageError> for NixError {
     fn from(err: BuildPackageError) -> Self {
-        let message = CString::new(err.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes");
-        Self::new(ErrorKind::Nix, message)
+        match err {
+            BuildPackageError::Nix(nix_err) => nix_err,
+            other => {
+                let message = CString::new(other.to_string())
+                    .expect("the Display impl doesn't contain any NUL bytes");
+                Self::new(ErrorKind::Nix, message)
+            },
+        }
     }
 }

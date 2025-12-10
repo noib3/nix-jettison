@@ -233,9 +233,14 @@ impl<'a> IntoValue for BuildGraph<'a> {
 
 impl From<ResolveBuildGraphError> for NixError {
     fn from(err: ResolveBuildGraphError) -> Self {
-        let message = CString::new(err.to_string())
-            .expect("the Display impl doesn't contain any NUL bytes");
-        Self::new(ErrorKind::Nix, message)
+        match err {
+            ResolveBuildGraphError::Nix(nix_err) => nix_err,
+            other => {
+                let message = CString::new(other.to_string())
+                    .expect("the Display impl doesn't contain any NUL bytes");
+                Self::new(ErrorKind::Nix, message)
+            },
+        }
     }
 }
 
