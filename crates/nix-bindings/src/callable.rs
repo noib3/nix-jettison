@@ -284,3 +284,18 @@ impl Value for NixLambda<'_> {
         unsafe { self.inner.write(dest, namespace, ctx) }
     }
 }
+
+#[cfg(feature = "either")]
+impl<L, R> Callable for either::Either<L, R>
+where
+    L: Callable,
+    R: Callable,
+{
+    #[inline]
+    fn value(&self) -> NixValue<'_> {
+        match self {
+            Self::Left(l) => l.value(),
+            Self::Right(r) => r.value(),
+        }
+    }
+}
