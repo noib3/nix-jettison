@@ -14,6 +14,7 @@ publish = false
 anyhow = "1"
 bindgen = "0.72"
 cargo = { version = "0.92", default-features = false }
+cargo-util-schemas = "0.10"
 cauchy = { git = "https://github.com/nomad/cauchy.git" }
 cc = "1"
 compact_str = "0.9"

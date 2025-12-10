@@ -5,6 +5,7 @@ use std::path::Path;
 use cargo::core::compiler::CrateType;
 use cargo::core::manifest::TargetSourcePath;
 use cargo::core::{Package, Resolve, Target, TargetKind};
+use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::*;
@@ -287,7 +288,15 @@ impl OptionalBuildCrateArgsInner {
 
         Self {
             authors: metadata.authors.clone(),
-            build: None,
+            build: manifest
+                .original_toml()
+                .package()
+                .and_then(|pkg| pkg.build.as_ref())
+                .and_then(|pkg_build| match pkg_build {
+                    TomlPackageBuild::Auto(_) => None,
+                    TomlPackageBuild::SingleScript(str) => Some((**str).into()),
+                    TomlPackageBuild::MultipleScript(_) => None,
+                }),
             codegen_units: None,
             crate_bin: None,
             crate_renames: Vec::new(),

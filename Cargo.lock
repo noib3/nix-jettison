@@ -2514,6 +2514,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cargo",
+ "cargo-util-schemas",
  "cauchy",
  "compact_str",
  "derive_more",
