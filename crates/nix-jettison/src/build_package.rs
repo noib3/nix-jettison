@@ -2,6 +2,7 @@ use core::result::Result;
 use std::ffi::CString;
 use std::path::Path;
 
+use compact_str::CompactString;
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
@@ -21,7 +22,7 @@ pub(crate) struct BuildPackage;
 #[try_from(rename_all = camelCase)]
 pub(crate) struct BuildPackageArgs<'a> {
     /// The package's name.
-    package: String,
+    package: CompactString,
 
     /// The package set to use.
     pkgs: NixAttrset<'a>,

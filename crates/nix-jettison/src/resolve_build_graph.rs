@@ -11,6 +11,7 @@ use cargo::core::dependency::DepKind;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
 use cargo::core::{PackageId, PackageIdSpec, Shell, Workspace};
 use cargo::ops::{self, WorkspaceResolve};
+use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::build_crate_args::{
@@ -32,7 +33,7 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     pub(crate) src: &'a Path,
 
     /// The package's name.
-    pub(crate) package: String,
+    pub(crate) package: CompactString,
 
     /// The path to the directory where dependencies have been vendored.
     ///
@@ -212,7 +213,7 @@ impl Function for ResolveBuildGraph {
             &mut target_data,
             &[target],
             &args.features()?,
-            &[PackageIdSpec::new(args.package.clone())],
+            &[PackageIdSpec::new(args.package.clone().into())],
             HasDevUnits::No,
             ForceAllTargets::No,
             true,

@@ -59,7 +59,7 @@ pub(crate) struct OptionalBuildCrateArgs {
     pub(crate) authors: Vec<String>,
 
     #[attrset(skip_if = Option::is_none)]
-    pub(crate) build: Option<String>,
+    pub(crate) build: Option<CompactString>,
 
     /// This is derived state which can be specified in Cargo profiles (for
     /// example: `[profile.release] codegen-units = N`).
