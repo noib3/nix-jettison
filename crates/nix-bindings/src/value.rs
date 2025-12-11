@@ -343,6 +343,46 @@ impl NixValue<'_> {
     pub(crate) unsafe fn new(inner: NonNull<sys::Value>) -> Self {
         Self { ptr: inner, _lifetime: PhantomData }
     }
+
+    /// Calls the given callback with the string held by this value.
+    ///
+    /// # Safety
+    ///
+    /// The caller must first ensure that this value's kind is
+    /// [`ValueKind::String`].
+    unsafe fn with_string(
+        &self,
+        mut fun: impl FnMut(&CStr),
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe extern "C" fn get_string_callback(
+            start: *const c_char,
+            n: c_uint,
+            fun_ref: *mut c_void,
+        ) {
+            let num_bytes_including_nul = n + 1;
+            let bytes = unsafe {
+                slice::from_raw_parts(
+                    start as *const u8,
+                    num_bytes_including_nul as usize,
+                )
+            };
+            let cstr = unsafe { CStr::from_bytes_with_nul_unchecked(bytes) };
+            let fun = unsafe { &mut **(fun_ref as *mut &mut dyn FnMut(&CStr)) };
+            fun(cstr);
+        }
+
+        let mut fun_ref = &mut fun as &mut dyn FnMut(&CStr);
+
+        ctx.with_raw(|ctx| unsafe {
+            sys::get_string(
+                ctx,
+                self.as_raw(),
+                Some(get_string_callback),
+                &mut fun_ref as *mut &mut dyn FnMut(&CStr) as *mut c_void,
+            );
+        })
+    }
 }
 
 impl Value for Null {
@@ -439,34 +479,8 @@ impl<'a> StringValue for NixValue<'a> {
 
     #[inline]
     unsafe fn into_string(self, ctx: &mut Context) -> Result<Self::String> {
-        unsafe extern "C" fn get_string_callback(
-            start: *const c_char,
-            n: c_uint,
-            user_data: *mut c_void,
-        ) {
-            let num_bytes_including_nul = n + 1;
-            let bytes = unsafe {
-                slice::from_raw_parts(
-                    start as *const u8,
-                    num_bytes_including_nul as usize,
-                )
-            };
-            let cstr = unsafe { CStr::from_bytes_with_nul_unchecked(bytes) };
-            let buffer = unsafe { &mut *(user_data as *mut CString) };
-            *buffer = cstr.to_owned();
-        }
-
         let mut cstring = CString::default();
-
-        ctx.with_raw(|ctx| unsafe {
-            sys::get_string(
-                ctx,
-                self.as_raw(),
-                Some(get_string_callback),
-                &mut cstring as *mut CString as *mut c_void,
-            );
-        })?;
-
+        unsafe { self.with_string(|cstr| cstring = cstr.to_owned(), ctx)? };
         Ok(cstring)
     }
 }
@@ -918,6 +932,36 @@ impl Value for compact_str::CompactString {
         ctx: &mut Context,
     ) -> Result<()> {
         unsafe { self.as_str().write(dest, namespace, ctx) }
+    }
+}
+
+#[cfg(feature = "compact_str")]
+impl TryFromValue<NixValue<'_>> for compact_str::CompactString {
+    #[inline]
+    fn try_from_value(
+        mut value: NixValue<'_>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        value.force_inline(ctx)?;
+
+        match value.kind() {
+            ValueKind::String => {
+                let mut res = Ok(Self::const_new(""));
+                // SAFETY: the value's kind is a string.
+                unsafe {
+                    value.with_string(
+                        |cstr| res = cstr.to_str().map(Into::into),
+                        ctx,
+                    )?
+                };
+                res.map_err(Into::into)
+            },
+            other => Err(TypeMismatchError {
+                expected: ValueKind::String,
+                found: other,
+            }
+            .into()),
+        }
     }
 }
 
