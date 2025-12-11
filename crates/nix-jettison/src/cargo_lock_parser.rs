@@ -379,7 +379,7 @@ impl GitSource<'_> {
                 // The format of the `[source."..."]` key doesn't actually
                 // matter, as long as it's unique. Cargo uses the URL and the
                 // ref to identify the source.
-                f.write_str("[source.\"")?;
+                f.write_str("\n[source.\"")?;
                 f.write_str(source.url)?;
                 if let Some(r#ref) = source.r#ref {
                     let (key, value) = r#ref.as_key_value();

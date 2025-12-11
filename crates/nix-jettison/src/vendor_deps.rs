@@ -57,6 +57,7 @@ pub(crate) struct VendorDir {
 /// The functions that will have to be called to create the vendor directory.
 struct CreateVendorDirFuns<'pkgs, 'builtins> {
     extract_crate: NixLambda<'static>,
+    wrap_git_src: NixLambda<'static>,
     fetch_git: NixLambda<'builtins>,
     fetchurl: NixFunctor<'pkgs>,
     link_farm: NixLambda<'pkgs>,
@@ -113,14 +114,14 @@ directory = "."
                     LinkPath::Registry(drv)
                 },
                 PackageSource::Git(src) => {
-                    writeln!(
+                    write!(
                         &mut config_dot_toml,
                         "{}",
                         src.into_cargo_config_entry(vendored_sources)
                     )
                     .expect("writing to a String cannot fail");
 
-                    let drv = src.download(funs.fetch_git, ctx)?;
+                    let drv = src.download(&funs, ctx)?;
                     LinkPath::Git(drv)
                 },
             };
@@ -176,10 +177,10 @@ impl<'lock> RegistrySource<'lock> {
             sha256: self.checksum,
         };
 
-        let drv = funs.fetchurl.call(fetchurl_args, ctx)?;
+        let src = funs.fetchurl.call(fetchurl_args, ctx)?;
 
         let extract_crate_args = attrset! {
-            drv: drv,
+            src: src,
             checksum: self.checksum,
             name: format!("{pkg_name}-{pkg_version}"),
             runCommandLocal: funs.run_command_local,
@@ -192,7 +193,7 @@ impl<'lock> RegistrySource<'lock> {
 impl GitSource<'_> {
     fn download(
         &self,
-        fetch_git: NixLambda,
+        funs: &CreateVendorDirFuns,
         ctx: &mut Context,
     ) -> Result<Thunk<'static>, NixError> {
         let r#ref = self.r#ref.and_then(GitSourceRef::format_for_fetch_git);
@@ -201,14 +202,21 @@ impl GitSource<'_> {
             url: self.url,
             rev: self.rev,
             submodules: true,
-            postFetch: "echo '{\"package\":null,\"files\":{}}' > $out/.cargo-checksum.json",
         }
         .merge(match r#ref {
             Some(r#ref) => Either::Left(attrset! { ref: r#ref }),
             None => Either::Right(attrset! { allRefs: true }),
         });
 
-        fetch_git.call(args, ctx)
+        let src = funs.fetch_git.call(args, ctx)?;
+
+        let wrap_args = attrset! {
+            src: src,
+            name: format!("git-{}", &self.rev[..8]),
+            runCommandLocal: funs.run_command_local,
+        };
+
+        funs.wrap_git_src.call(wrap_args, ctx)
     }
 }
 
@@ -237,16 +245,28 @@ impl Function for VendorDeps {
         });
 
         let extract_crate = ctx.eval(c"
-            { drv, checksum, name, runCommandLocal }:
+            { src, checksum, name, runCommandLocal }:
             runCommandLocal name {} ''
               mkdir -p $out
-              tar -xzf ${drv} --strip-components 1 -C $out
+              tar -xzf ${src} --strip-components 1 -C $out
               echo '{\"package\":\"${checksum}\",\"files\":{}}' > $out/.cargo-checksum.json
             ''
         ")?;
 
+        let wrap_git_src = ctx.eval(
+            c"
+            { src, name, runCommandLocal }:
+            runCommandLocal name {} ''
+              cp -r ${src} $out
+              chmod -R +w $out
+              echo '{\"package\":null,\"files\":{}}' > $out/.cargo-checksum.json
+            ''
+        ",
+        )?;
+
         let funs = CreateVendorDirFuns {
             extract_crate,
+            wrap_git_src,
             link_farm: args.pkgs.get(c"linkFarm", ctx)?,
             fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
             fetch_git: ctx.builtins().fetch_git(ctx),
