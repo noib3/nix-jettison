@@ -1,11 +1,10 @@
 use core::result::Result;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::env;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::{env, io};
 
-use anyhow::Context as _;
 use cargo::GlobalContext;
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::dependency::DepKind;
@@ -37,7 +36,7 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
 
     /// The path to the directory where dependencies have been vendored.
     ///
-    /// This can be obtained by calling `(jettison.vendorDeps { ... }).outPath`.
+    /// This can be obtained by calling `jettison.vendorDeps { ... }`.
     #[try_from(with = get_vendor_dir)]
     pub(crate) vendor_dir: Cow<'a, Path>,
 
@@ -75,7 +74,8 @@ pub(crate) enum ResolveBuildGraphError {
     CreateWorkspace(anyhow::Error),
 
     /// Getting the current working directory failed.
-    GetCwd(anyhow::Error),
+    #[display("couldn't get the current directory of the process: {_0}")]
+    GetCwd(io::Error),
 
     /// A Nix runtime error occurred.
     Nix(#[from] NixError),
@@ -93,9 +93,7 @@ impl ResolveBuildGraph {
     ) -> Result<GlobalContext, ResolveBuildGraphError> {
         let shell = Shell::new();
 
-        let cwd = env::current_dir()
-            .context("couldn't get the current directory of the process")
-            .map_err(ResolveBuildGraphError::GetCwd)?;
+        let cwd = env::current_dir().map_err(ResolveBuildGraphError::GetCwd)?;
 
         // The vendor directory created by `VendorDir::create()` contains a
         // `config.toml` file that configures Cargo to use the vendored
