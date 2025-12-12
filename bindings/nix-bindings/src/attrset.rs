@@ -795,7 +795,7 @@ impl<T: Attrset> Value for AttrsetValue<T> {
         let mut pairs = attrset.pairs(ctx);
         let mut builder = ctx.make_attrset_builder(len as usize)?;
 
-        while !pairs.is_exhausted() {
+        for _ in 0..len {
             let key = pairs.key(builder.ctx());
             let new_namespace = namespace.push(key);
             builder.insert(key, |dest, ctx| {
@@ -919,7 +919,7 @@ where
         self.left_pairs.advance(ctx);
 
         if self.left_pairs.is_exhausted() {
-            return self.advance(ctx);
+            return;
         }
 
         let key = self.left_pairs.key(ctx);
