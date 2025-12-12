@@ -4,7 +4,6 @@ use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::token::Comma;
 use syn::{Attribute, Token, braced};
 
 use crate::list::Value;
@@ -75,8 +74,8 @@ impl Parse for Attrset {
             entries.push(AttrsetEntry { attrs, key, value });
 
             // Parse optional comma.
-            if input.peek(Comma) {
-                input.parse::<Comma>()?;
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
             }
         }
 
