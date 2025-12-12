@@ -74,6 +74,11 @@ authors.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# TODO: make this default once https://github.com/NixOS/nixpkgs/pull/469594 is
+# merged and included in a stable Nixpkgs release.
+forbid-cargo = []
+
 [lib]
 crate-type = ["cdylib"]
 

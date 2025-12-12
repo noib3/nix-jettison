@@ -141,7 +141,8 @@ impl Function for BuildPackage {
             ctx,
         )?;
 
-        let cargo_is_banned = ctx.builtins().throw(ctx).call(
+        #[cfg(feature = "forbid-cargo")]
+        let cargo_is_forbidden = ctx.builtins().throw(ctx).call(
             c"buildRustCrate should've received all the arguments it needs to \
              not use Cargo",
             ctx,
@@ -149,7 +150,8 @@ impl Function for BuildPackage {
 
         let global_args = attrset! {
             buildTests: args.build_tests,
-            cargo: cargo_is_banned,
+            #[cfg(feature = "forbid-cargo")]
+            cargo: cargo_is_forbidden,
             release: args.release,
         }
         .merge(args.crate_overrides.map(|ovr| attrset! { crateOverrides: ovr }))
