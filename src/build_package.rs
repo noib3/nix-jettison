@@ -11,7 +11,7 @@ use crate::resolve_build_graph::{
     ResolveBuildGraphArgs,
     ResolveBuildGraphError,
 };
-use crate::vendor_deps::{VendorDeps, VendorDepsArgs, VendorDepsError};
+use crate::vendor_deps::{VendorDeps, VendorDepsError, VendoredSources};
 
 /// Builds a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -118,17 +118,18 @@ impl Function for BuildPackage {
         args: Self::Args<'a>,
         ctx: &mut Context,
     ) -> Result<NixDerivation<'static>, BuildPackageError> {
-        let vendor_deps_args = VendorDepsArgs {
-            pkgs: args.pkgs,
-            cargo_lock: args.src.join("Cargo.lock").into(),
-        };
+        let cargo_lock =
+            VendorDeps::read_cargo_lock(&args.src.join("Cargo.lock"))?;
 
-        let vendor_dir = <VendorDeps as Function>::call(vendor_deps_args, ctx)?;
+        let vendored_sources =
+            VendoredSources::new(&cargo_lock, args.pkgs, ctx)?;
 
         let build_rust_crate = args.build_rust_crate(ctx)?;
 
+        let vendor_dir_drv = vendored_sources.to_dir(args.pkgs, ctx)?;
+
         let resolve_build_graph_args = ResolveBuildGraphArgs {
-            vendor_dir: vendor_dir.path().into(),
+            vendor_dir: vendor_dir_drv.out_path(ctx)?.into(),
             src: args.src,
             package: args.package,
             features: args.features,
@@ -155,18 +156,28 @@ impl Function for BuildPackage {
             release: args.release,
         }
         .merge(args.crate_overrides.map(|ovr| attrset! { crateOverrides: ovr }))
-        .merge(args.rustc.map(|drv| attrset! { rustc: drv }));
+        .merge(args.rustc.map(|rustc| attrset! { rustc: rustc }));
 
         let mut build_crates: Vec<Thunk<'static>> =
-            Vec::with_capacity(build_graph.crates.len());
+            Vec::with_capacity(build_graph.nodes.len());
 
-        for args in build_graph.crates {
-            let args = args.map_deps(|graph_idx| build_crates[graph_idx]);
+        for node in build_graph.nodes {
+            let src = match vendored_sources.get(node.source_id()) {
+                Some(src) => src,
+                None => todo!(
+                    "source is from local path, need to create this using \
+                     builtins.path"
+                ),
+            };
 
-            build_crates.push(build_rust_crate.call(
-                args.to_attrset().merge(Attrset::borrow(&global_args)),
-                ctx,
-            )?);
+            let args = attrset! { src: src }
+                .merge(node.args)
+                .merge(node.dependencies.map(|idx| build_crates[idx]))
+                .merge(Attrset::borrow(&global_args));
+
+            let build_crate_drv = build_rust_crate.call(args, ctx)?;
+
+            build_crates.push(build_crate_drv);
         }
 
         // The derivation for the requested package is the root of the build

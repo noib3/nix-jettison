@@ -1,14 +1,17 @@
-use core::fmt::{Display, Write};
+use core::cell::OnceCell;
+use core::fmt::Write;
+use core::iter;
 use core::result::Result;
 use std::borrow::Cow;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use compact_str::{CompactString, format_compact};
+use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
+use crate::build_crate_args::SourceId;
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,
@@ -34,14 +37,14 @@ pub(crate) struct VendorDepsArgs<'a> {
 
 /// The type of error that can occur when vendoring dependencies fails.
 #[derive(Debug, derive_more::Display, cauchy::From)]
-#[display("{_0}")]
 pub(crate) enum VendorDepsError {
     /// A Nix runtime error occurred.
+    #[display("{_0}")]
     Nix(#[from] NixError),
 
     /// Parsing the contents of the `Cargo.lock` failed.
-    #[display("failed to parse Cargo.lock at {path:?}: {err}")]
-    ParseCargoLock { path: PathBuf, err: CargoLockParseError },
+    #[display("failed to parse Cargo.lock: {_0}")]
+    ParseCargoLock(#[from] CargoLockParseError),
 
     /// Reading the `Cargo.lock` into a string failed.
     #[display("failed to read Cargo.lock at {path:?}: {err}")]
@@ -49,121 +52,154 @@ pub(crate) enum VendorDepsError {
 }
 
 /// TODO: docs.
-pub(crate) struct VendorDir {
-    derivation: NixDerivation<'static>,
-    out_path: PathBuf,
+pub(crate) struct VendoredSources<'lock> {
+    sources: Vec<Source<'lock>>,
+    config_dot_toml: String,
+}
+
+struct Source<'lock> {
+    id: SourceId<'lock>,
+    derivation: Thunk<'static>,
 }
 
 /// The functions that will have to be called to create the vendor directory.
 struct CreateVendorDirFuns<'pkgs, 'builtins> {
-    extract_crate: NixLambda<'static>,
-    wrap_git_src: NixLambda<'static>,
     fetch_git: NixLambda<'builtins>,
     fetchurl: NixFunctor<'pkgs>,
-    link_farm: NixLambda<'pkgs>,
     run_command_local: NixLambda<'pkgs>,
-    write_text_file: NixLambda<'pkgs>,
 }
 
-impl VendorDir {
-    pub(crate) fn dir_name(
-        pkg_name: &str,
-        pkg_version: impl Display,
-    ) -> CompactString {
-        format_compact!("{pkg_name}-{pkg_version}")
+impl VendorDeps {
+    pub(crate) fn read_cargo_lock(
+        cargo_lock_path: &Path,
+    ) -> Result<String, VendorDepsError> {
+        fs::read_to_string(&cargo_lock_path).map_err(|err| {
+            VendorDepsError::ReadCargoLock {
+                path: cargo_lock_path.to_owned(),
+                err,
+            }
+        })
+    }
+}
+
+impl<'lock> VendoredSources<'lock> {
+    pub(crate) fn get(&self, source_id: SourceId) -> Option<Thunk<'static>> {
+        self.sources
+            .binary_search_by_key(&source_id, |probe| probe.id)
+            .ok()
+            .map(|idx| self.sources[idx].derivation)
     }
 
-    pub(crate) fn path(&self) -> &Path {
-        &self.out_path
-    }
-
-    fn create<'a, Err>(
-        deps: impl Iterator<Item = Result<PackageEntry<'a>, Err>>,
-        funs: CreateVendorDirFuns,
+    pub(crate) fn new(
+        cargo_lock: &'lock str,
+        pkgs: NixAttrset,
         ctx: &mut Context,
-    ) -> Result<Self, VendorDepsError>
-    where
-        VendorDepsError: From<Err>,
-    {
-        #[derive(nix_bindings::Value)]
-        enum LinkPath<RegistrySource, GitSource> {
-            Registry(RegistrySource),
-            Git(GitSource),
-            ConfigDotToml(Thunk<'static>),
-        }
+    ) -> Result<Self, VendorDepsError> {
+        let funs = CreateVendorDirFuns {
+            fetchurl: pkgs.get(c"fetchurl", ctx)?,
+            fetch_git: ctx.builtins().fetch_git(ctx),
+            run_command_local: pkgs.get(c"runCommandLocal", ctx)?,
+        };
 
-        let mut links = Vec::new();
+        let replace_with = "vendored-sources";
 
-        let vendored_sources = "vendored-sources";
+        let mut sources = Vec::new();
 
         let mut config_dot_toml = format!(
             r#"[source.crates-io]
-replace-with = "{vendored_sources}"
+replace-with = "{replace_with}"
 
-[source.{vendored_sources}]
+[source.{replace_with}]
 directory = "."
 "#
         );
 
-        for dep_res in deps {
-            let PackageEntry { name, version, source } = dep_res?;
+        for res in CargoLockParser::new(cargo_lock) {
+            let PackageEntry { name, version, source } = res?;
+
             let Some(source) = source else { continue };
-            let link_path = match source {
-                PackageSource::Registry(src) => {
-                    let drv = src.download(name, version, &funs, ctx)?;
-                    LinkPath::Registry(drv)
+
+            let derivation = match source {
+                PackageSource::Registry(source) => {
+                    source.fetch(name, version, &funs, ctx)?
                 },
-                PackageSource::Git(src) => {
+                PackageSource::Git(source) => {
                     write!(
                         &mut config_dot_toml,
                         "{}",
-                        src.into_cargo_config_entry(vendored_sources)
+                        source.into_cargo_config_entry(replace_with)
                     )
                     .expect("writing to a String cannot fail");
-
-                    let drv = src.download(&funs, ctx)?;
-                    LinkPath::Git(drv)
+                    source.fetch(&funs, ctx)?
                 },
             };
-            links.push(attrset! {
-                name: Self::dir_name(name, version),
-                path: link_path,
-            });
+
+            let source_id = SourceId { name, version };
+
+            // Make sure the entries returned by the iterator are already
+            // sorted by source ID, so that we can just push to the vector.
+            debug_assert!(
+                sources
+                    .last()
+                    .map_or(true, |last: &Source| last.id < source_id)
+            );
+
+            sources.push(Source { id: source_id, derivation });
         }
 
-        let config_dot_toml_drv = funs.write_text_file.call(
+        Ok(Self { sources, config_dot_toml })
+    }
+
+    pub(crate) fn to_dir(
+        &self,
+        pkgs: NixAttrset,
+        ctx: &mut Context,
+    ) -> Result<NixDerivation<'static>, NixError> {
+        let write_text_file = pkgs.get::<NixLambda>(c"writeTextFile", ctx)?;
+
+        let config_dot_toml_drv = write_text_file.call(
             attrset! {
                 name: "config.toml",
-                text: config_dot_toml,
+                text: &*self.config_dot_toml,
             },
             ctx,
         )?;
 
-        links.push(attrset! {
-            name: CompactString::const_new(".cargo/config.toml"),
-            path: LinkPath::ConfigDotToml(config_dot_toml_drv),
-        });
+        let entries = self
+            .sources
+            .iter()
+            .map(|source| {
+                attrset! {
+                    name: source.id.to_compact_string(),
+                    path: source.derivation,
+                }
+            })
+            .chain(iter::once(attrset! {
+                name: CompactString::const_new("config.toml"),
+                path: config_dot_toml_drv,
+            }))
+            // TODO: is `Chain` not `ExactSize`?
+            .collect::<Vec<_>>();
 
-        let derivation = funs
-            .link_farm
-            .call_multi((c"vendored-deps", links), ctx)?
-            .force_into::<NixDerivation>(ctx)?;
-
-        let out_path = derivation.out_path(ctx)?;
-
-        Ok(Self { out_path, derivation })
+        pkgs.get::<NixLambda>(c"linkFarm", ctx)?
+            .call_multi((c"vendored-sources", entries), ctx)?
+            .force_into(ctx)
     }
 }
 
 impl<'lock> RegistrySource<'lock> {
     #[allow(clippy::too_many_arguments)]
-    fn download<'pkgs>(
+    fn fetch<'pkgs>(
         &self,
         pkg_name: &'lock str,
         pkg_version: &'lock str,
         funs: &CreateVendorDirFuns<'pkgs, '_>,
         ctx: &mut Context,
-    ) -> Result<impl Value + use<'lock, 'pkgs>, NixError> {
+    ) -> Result<Thunk<'static>, NixError> {
+        thread_local! {
+            static WRAP: OnceCell<NixLambda<'static>> = OnceCell::new();
+        }
+
         match self.kind {
             RegistryKind::CratesIo => {},
             RegistryKind::Other { .. } => {
@@ -179,23 +215,42 @@ impl<'lock> RegistrySource<'lock> {
 
         let src = funs.fetchurl.call(fetchurl_args, ctx)?;
 
-        let extract_crate_args = attrset! {
+        let extract_and_add_checksum_args = attrset! {
             src: src,
             checksum: self.checksum,
             name: format!("{pkg_name}-{pkg_version}"),
             runCommandLocal: funs.run_command_local,
         };
 
-        funs.extract_crate.call(extract_crate_args, ctx)
+        let extract_and_add_checksum = WRAP.with(|cell| match cell.get().copied() {
+            Some(wrap) => Ok::<_, NixError>(wrap),
+            None => {
+                let wrap = ctx.eval::<NixLambda>(c"
+                    { src, checksum, name, runCommandLocal }:
+                    runCommandLocal name {} ''
+                      mkdir -p $out
+                      tar -xzf ${src} --strip-components 1 -C $out
+                      echo '{\"package\":\"${checksum}\",\"files\":{}}' > $out/.cargo-checksum.json
+                    ''
+                ")?;
+                Ok(*cell.get_or_init(|| wrap))
+            },
+        })?;
+
+        extract_and_add_checksum.call(extract_and_add_checksum_args, ctx)
     }
 }
 
 impl GitSource<'_> {
-    fn download(
+    fn fetch(
         &self,
         funs: &CreateVendorDirFuns,
         ctx: &mut Context,
     ) -> Result<Thunk<'static>, NixError> {
+        thread_local! {
+            static WRAP: OnceCell<NixLambda<'static>> = OnceCell::new();
+        }
+
         let r#ref = self.r#ref.and_then(GitSourceRef::format_for_fetch_git);
 
         let args = attrset! {
@@ -210,13 +265,29 @@ impl GitSource<'_> {
 
         let src = funs.fetch_git.call(args, ctx)?;
 
-        let wrap_args = attrset! {
+        let add_checksum_args = attrset! {
             src: src,
             name: format!("git-{}", &self.rev[..8]),
             runCommandLocal: funs.run_command_local,
         };
 
-        funs.wrap_git_src.call(wrap_args, ctx)
+        let add_checksum = WRAP.with(|cell| match cell.get().copied() {
+            Some(wrap) => Ok::<_, NixError>(wrap),
+            None => {
+                let wrap = ctx.eval::<NixLambda>(
+                    c"
+                    { src, name, runCommandLocal }:
+                    runCommandLocal name {} ''
+                      cp -r ${src} $out
+                      chmod +w $out
+                      echo '{\"package\":null,\"files\":{}}' > $out/.cargo-checksum.json
+                    ''
+                ")?;
+                Ok(*cell.get_or_init(|| wrap))
+            },
+        })?;
+
+        add_checksum.call(add_checksum_args, ctx)
     }
 }
 
@@ -226,61 +297,10 @@ impl Function for VendorDeps {
     fn call<'a: 'a>(
         args: Self::Args<'a>,
         ctx: &mut Context,
-    ) -> Result<VendorDir, VendorDepsError> {
-        let cargo_lock = match fs::read_to_string(&args.cargo_lock) {
-            Ok(contents) => contents,
-            Err(err) => {
-                return Err(VendorDepsError::ReadCargoLock {
-                    path: args.cargo_lock.into_owned(),
-                    err,
-                });
-            },
-        };
-
-        let deps = CargoLockParser::new(&cargo_lock).map(|res| {
-            res.map_err(|err| VendorDepsError::ParseCargoLock {
-                path: (*args.cargo_lock).to_owned(),
-                err,
-            })
-        });
-
-        let extract_crate = ctx.eval(c"
-            { src, checksum, name, runCommandLocal }:
-            runCommandLocal name {} ''
-              mkdir -p $out
-              tar -xzf ${src} --strip-components 1 -C $out
-              echo '{\"package\":\"${checksum}\",\"files\":{}}' > $out/.cargo-checksum.json
-            ''
-        ")?;
-
-        let wrap_git_src = ctx.eval(
-            c"
-            { src, name, runCommandLocal }:
-            runCommandLocal name {} ''
-              cp -r ${src} $out
-              chmod -R +w $out
-              echo '{\"package\":null,\"files\":{}}' > $out/.cargo-checksum.json
-            ''
-        ",
-        )?;
-
-        let funs = CreateVendorDirFuns {
-            extract_crate,
-            wrap_git_src,
-            link_farm: args.pkgs.get(c"linkFarm", ctx)?,
-            fetchurl: args.pkgs.get(c"fetchurl", ctx)?,
-            fetch_git: ctx.builtins().fetch_git(ctx),
-            run_command_local: args.pkgs.get(c"runCommandLocal", ctx)?,
-            write_text_file: args.pkgs.get(c"writeTextFile", ctx)?,
-        };
-
-        VendorDir::create(deps, funs, ctx)
-    }
-}
-
-impl IntoValue for VendorDir {
-    fn into_value(self, _: &mut Context) -> impl Value + use<> {
-        self.derivation
+    ) -> Result<NixDerivation<'static>, VendorDepsError> {
+        let cargo_lock = Self::read_cargo_lock(&args.cargo_lock)?;
+        let sources = VendoredSources::new(&cargo_lock, args.pkgs, ctx)?;
+        sources.to_dir(args.pkgs, ctx).map_err(Into::into)
     }
 }
 

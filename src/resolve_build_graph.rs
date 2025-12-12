@@ -14,12 +14,7 @@ use cargo::ops::{self, WorkspaceResolve};
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_crate_args::{
-    BuildCrateArgs,
-    Dependencies,
-    OptionalBuildCrateArgs,
-    RequiredBuildCrateArgs,
-};
+use crate::build_crate_args::{BuildCrateArgs, Dependencies, SourceId};
 
 /// Resolves the build graph of a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -56,9 +51,14 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     pub(crate) no_default_features: bool,
 }
 
-pub(crate) struct BuildGraph<'args> {
-    pub(crate) crates: Vec<BuildCrateArgs<'args, usize>>,
+pub(crate) struct BuildGraph {
+    pub(crate) nodes: Vec<BuildGraphNode<usize>>,
     pkg_id_to_idx: HashMap<PackageId, usize>,
+}
+
+pub(crate) struct BuildGraphNode<Dep> {
+    pub(crate) args: BuildCrateArgs,
+    pub(crate) dependencies: Dependencies<Dep>,
 }
 
 /// The type of error that can occur when resolving a build graph fails.
@@ -120,10 +120,10 @@ impl ResolveBuildGraphArgs<'_> {
     }
 }
 
-impl<'args> BuildGraph<'args> {
+impl BuildGraph {
     fn new(
-        args: &ResolveBuildGraphArgs<'args>,
-        ws_resolve: WorkspaceResolve<'_>,
+        args: &ResolveBuildGraphArgs,
+        ws_resolve: WorkspaceResolve,
     ) -> Result<Self, ResolveBuildGraphError> {
         let root_id = ws_resolve
             .targeted_resolve
@@ -132,7 +132,7 @@ impl<'args> BuildGraph<'args> {
             .expect("root package not found in workspace resolve");
 
         let mut this =
-            Self { crates: Vec::new(), pkg_id_to_idx: HashMap::new() };
+            Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
 
         Self::build_recursive(&mut this, root_id, args, &ws_resolve);
 
@@ -142,8 +142,8 @@ impl<'args> BuildGraph<'args> {
     fn build_recursive(
         this: &mut Self,
         pkg_id: PackageId,
-        args: &ResolveBuildGraphArgs<'args>,
-        ws_resolve: &WorkspaceResolve<'_>,
+        args: &ResolveBuildGraphArgs,
+        ws_resolve: &WorkspaceResolve,
     ) -> usize {
         let WorkspaceResolve { targeted_resolve, pkg_set, .. } = ws_resolve;
 
@@ -169,28 +169,33 @@ impl<'args> BuildGraph<'args> {
         let package =
             pkg_set.get_one(pkg_id).expect("package ID not found in workspace");
 
-        let build_crate_args = BuildCrateArgs {
-            required: RequiredBuildCrateArgs::new(package, args),
-            optional: OptionalBuildCrateArgs::new(package, targeted_resolve),
+        let build_crate_args = BuildGraphNode {
+            args: BuildCrateArgs::new(package, targeted_resolve),
             dependencies,
         };
 
-        let idx = this.crates.len();
+        let idx = this.nodes.len();
 
-        this.crates.push(build_crate_args);
+        this.nodes.push(build_crate_args);
         this.pkg_id_to_idx.insert(pkg_id, idx);
 
         idx
     }
 }
 
+impl<Dep> BuildGraphNode<Dep> {
+    pub(crate) fn source_id(&self) -> SourceId<'_> {
+        self.args.source_id()
+    }
+}
+
 impl Function for ResolveBuildGraph {
     type Args<'a> = ResolveBuildGraphArgs<'a>;
 
-    fn call<'args>(
-        args: Self::Args<'args>,
+    fn call<'a: 'a>(
+        args: Self::Args<'a>,
         _: &mut Context,
-    ) -> Result<BuildGraph<'args>, ResolveBuildGraphError> {
+    ) -> Result<BuildGraph, ResolveBuildGraphError> {
         let manifest_path = args.src.join("Cargo.toml");
 
         let global_ctx = Self::cargo_ctx(args.vendor_dir.join(".cargo"))?;
@@ -215,13 +220,21 @@ impl Function for ResolveBuildGraph {
         )
         .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
 
+        println!("Resolved workspace");
+
         BuildGraph::new(&args, workspace_resolve)
     }
 }
 
-impl<'a> IntoValue for BuildGraph<'a> {
-    fn into_value(self, _: &mut Context) -> impl Value + use<'a> {
-        self.crates
+impl<Dep: Value> ToValue for BuildGraphNode<Dep> {
+    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Dep> {
+        self.args.borrow().merge(self.dependencies.borrow())
+    }
+}
+
+impl IntoValue for BuildGraph {
+    fn into_value(self, _: &mut Context) -> impl Value + use<> {
+        self.nodes
     }
 }
 

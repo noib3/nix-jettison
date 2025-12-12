@@ -1,6 +1,6 @@
+use core::cmp::Ordering;
+use core::fmt::Display;
 use core::ops::Not;
-use std::borrow::Cow;
-use std::path::Path;
 
 use cargo::core::compiler::CrateType;
 use cargo::core::manifest::TargetSourcePath;
@@ -9,42 +9,13 @@ use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use nix_bindings::prelude::*;
 
-use crate::resolve_build_graph::ResolveBuildGraphArgs;
-use crate::vendor_deps::VendorDir;
-
-/// The arguments accepted by [`pkgs.buildRustCrate`][buildRustCrate].
+/// The crate-specific arguments accepted by
+/// [`pkgs.buildRustCrate`][buildRustCrate].
 ///
 /// [buildRustCrate]: https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/default.nix
-pub(crate) struct BuildCrateArgs<'src, Dep> {
-    pub(crate) required: RequiredBuildCrateArgs<'src>,
-    pub(crate) optional: OptionalBuildCrateArgs,
-    pub(crate) dependencies: Dependencies<Dep>,
-}
-
-/// The required, crate-specific arguments accepted by `pkgs.buildRustCrate`.
 #[derive(nix_bindings::Attrset)]
 #[attrset(rename_all = camelCase)]
-pub(crate) struct RequiredBuildCrateArgs<'src> {
-    pub(crate) crate_name: CompactString,
-    #[attrset(with_value = Self::src_path)]
-    pub(crate) src: CrateSource<'src>,
-    pub(crate) version: CompactString,
-}
-
-/// The path to a crate's source directory.
-pub(crate) enum CrateSource<'src> {
-    /// The crate's source is at the given path.
-    Path(Cow<'src, Path>),
-
-    /// The crate is a 3rd-party dependency which has been vendored under the
-    /// given directory.
-    Vendored(Cow<'src, Path>),
-}
-
-/// The optional, crate-specific arguments accepted by `pkgs.buildRustCrate`.
-#[derive(Default, nix_bindings::Attrset)]
-#[attrset(rename_all = camelCase)]
-pub(crate) struct OptionalBuildCrateArgs {
+pub(crate) struct BuildCrateArgs {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
@@ -60,6 +31,9 @@ pub(crate) struct OptionalBuildCrateArgs {
     /// crate.
     #[attrset(skip_if = Option::is_none)]
     pub(crate) crate_bin: Option<Null>,
+
+    /// TODO: docs.
+    pub(crate) crate_name: CompactString,
 
     /// This is derived state from the dependencies section of the Cargo.toml
     /// of the crate.
@@ -114,6 +88,9 @@ pub(crate) struct OptionalBuildCrateArgs {
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) rust_version: Option<CompactString>,
+
+    /// TODO: docs.
+    pub(crate) version: CompactString,
 }
 
 #[derive(cauchy::Default, nix_bindings::Attrset)]
@@ -126,75 +103,13 @@ pub(crate) struct Dependencies<Dep> {
     pub(crate) build: Vec<Dep>,
 }
 
-impl<'src, Dep> BuildCrateArgs<'src, Dep> {
-    pub(crate) fn map_deps<NewDep>(
-        self,
-        fun: impl FnMut(Dep) -> NewDep + Clone,
-    ) -> BuildCrateArgs<'src, NewDep> {
-        BuildCrateArgs {
-            required: self.required,
-            optional: self.optional,
-            dependencies: self.dependencies.map(fun),
-        }
-    }
-
-    pub(crate) fn to_attrset(&self) -> impl Attrset + Value
-    where
-        Dep: Value,
-    {
-        // SAFETY: the inner attrsets don't contain any overlapping keys.
-        unsafe {
-            self.required
-                .borrow()
-                .concat(self.optional.borrow())
-                .concat(self.dependencies.borrow())
-        }
-    }
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceId<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) version: &'a str,
 }
 
-impl<'src> RequiredBuildCrateArgs<'src> {
-    pub(crate) fn new(
-        package: &Package,
-        args: &ResolveBuildGraphArgs<'src>,
-    ) -> Self {
-        Self {
-            crate_name: package.name().as_str().into(),
-            src: CrateSource::new(package, args),
-            version: package.version().to_compact_string(),
-        }
-    }
-
-    fn src_path(&self) -> Cow<'_, Path> {
-        self.src.to_path(&self.crate_name, &self.version)
-    }
-}
-
-impl<'src> CrateSource<'src> {
-    fn new(package: &Package, args: &ResolveBuildGraphArgs<'src>) -> Self {
-        if package.package_id().source_id().is_path() {
-            let package_root = package.root();
-            let path = if package_root == args.src {
-                Cow::Borrowed(args.src)
-            } else {
-                Cow::Owned(package.root().to_owned())
-            };
-            Self::Path(path)
-        } else {
-            Self::Vendored(args.vendor_dir.clone())
-        }
-    }
-
-    fn to_path<'a>(&'a self, crate_name: &str, version: &str) -> Cow<'a, Path> {
-        match self {
-            Self::Path(path) => Cow::Borrowed(&**path),
-            Self::Vendored(vendor_dir) => Cow::Owned(
-                vendor_dir.join(VendorDir::dir_name(crate_name, version)),
-            ),
-        }
-    }
-}
-
-impl OptionalBuildCrateArgs {
+impl BuildCrateArgs {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn new(package: &Package, resolve: &Resolve) -> Self {
         let manifest = package.manifest();
@@ -224,6 +139,7 @@ impl OptionalBuildCrateArgs {
                 }),
             codegen_units: None,
             crate_bin: None,
+            crate_name: CompactString::const_new(package.name().as_str()),
             crate_renames: Vec::new(),
             description: metadata.description.as_deref().map(Into::into),
             edition: Some(manifest.edition().to_compact_string()),
@@ -277,7 +193,12 @@ impl OptionalBuildCrateArgs {
                 .rust_version
                 .as_ref()
                 .map(|v| v.to_compact_string()),
+            version: package.version().to_compact_string(),
         }
+    }
+
+    pub(crate) fn source_id(&self) -> SourceId<'_> {
+        SourceId { name: &self.crate_name, version: &self.version }
     }
 }
 
@@ -293,8 +214,30 @@ impl<Dep> Dependencies<Dep> {
     }
 }
 
-impl<Dep: Value> ToValue for BuildCrateArgs<'_, Dep> {
-    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Dep> {
-        self.to_attrset()
+impl Display for SourceId<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}-{}", self.name, self.version)
+    }
+}
+
+impl PartialEq for SourceId<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for SourceId<'_> {}
+
+impl PartialOrd for SourceId<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SourceId<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name
+            .cmp(&other.name)
+            .then_with(|| self.version.cmp(&other.version))
     }
 }
