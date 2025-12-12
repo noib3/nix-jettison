@@ -141,7 +141,15 @@ impl BuildCrateArgs {
             crate_bin: None,
             crate_name: CompactString::const_new(package.name().as_str()),
             crate_renames: Vec::new(),
-            description: metadata.description.as_deref().map(Into::into),
+            // Replace newlines and escape double quotes because buildRustCrate
+            // exports the description as a bash environment variable without
+            // proper escaping, which breaks when the description contains
+            // newlines or double quotes.
+            // See https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/configure-crate.nix#L144
+            description: metadata
+                .description
+                .as_deref()
+                .map(|s| s.replace('\n', " ").replace('"', "\\\"").into()),
             edition: Some(manifest.edition().to_compact_string()),
             extra_rustc_opts: Vec::new(),
             extra_rustc_opts_for_build_rs: Vec::new(),
