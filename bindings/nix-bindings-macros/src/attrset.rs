@@ -4,15 +4,35 @@ use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::punctuated::Punctuated;
 use syn::token::Comma;
-use syn::{Token, braced};
+use syn::{Attribute, Token, braced};
 
 use crate::list::Value;
 
 #[inline]
 pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
-    let Attrset { keys, values } = syn::parse2(input)?;
+    let Attrset { entries } = syn::parse2(input)?;
+
+    let mut keys = TokenStream::new();
+    let mut values = TokenStream::new();
+    let comma = <Token![,]>::default();
+
+    for (idx, entry) in entries.iter().enumerate() {
+        // Add the entry's attributes to both keys and values.
+        for attr in &entry.attrs {
+            attr.to_tokens(&mut keys);
+            attr.to_tokens(&mut values);
+        }
+
+        entry.key.to_tokens(&mut keys);
+        entry.value.to_tokens(&mut values);
+
+        // Add a comma if this is not the last entry.
+        if idx + 1 < entries.len() {
+            comma.to_tokens(&mut keys);
+            comma.to_tokens(&mut values);
+        }
+    }
 
     Ok(quote! {
         ::nix_bindings::attrset::LiteralAttrset::new(
@@ -23,8 +43,13 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
 }
 
 struct Attrset {
-    keys: Punctuated<Key, Comma>,
-    values: Punctuated<Value, Comma>,
+    entries: Vec<AttrsetEntry>,
+}
+
+struct AttrsetEntry {
+    attrs: Vec<Attribute>,
+    key: Key,
+    value: Value,
 }
 
 enum Key {
@@ -34,25 +59,28 @@ enum Key {
 
 impl Parse for Attrset {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut keys = Punctuated::new();
-        let mut values = Punctuated::new();
+        let mut entries = Vec::new();
 
         while !input.is_empty() {
+            // Parse attributes (e.g., #[cfg(...)]).
+            let attrs = input.call(Attribute::parse_outer)?;
+
+            // Parse key.
             let key = input.parse()?;
             input.parse::<Token![:]>()?;
+
+            // Parse value.
             let value = input.parse()?;
 
-            keys.push(key);
-            values.push(value);
+            entries.push(AttrsetEntry { attrs, key, value });
 
+            // Parse optional comma.
             if input.peek(Comma) {
-                let comma = input.parse()?;
-                keys.push_punct(comma);
-                values.push_punct(comma);
+                input.parse::<Comma>()?;
             }
         }
 
-        Ok(Self { keys, values })
+        Ok(Self { entries })
     }
 }
 
