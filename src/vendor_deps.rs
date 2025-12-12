@@ -140,7 +140,7 @@ directory = "."
         )?;
 
         links.push(attrset! {
-            name: CompactString::const_new("config.toml"),
+            name: CompactString::const_new(".cargo/config.toml"),
             path: LinkPath::ConfigDotToml(config_dot_toml_drv),
         });
 

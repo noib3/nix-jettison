@@ -90,18 +90,13 @@ pub(crate) enum ResolveBuildGraphError {
 
 impl ResolveBuildGraph {
     fn cargo_ctx(
-        vendor_dir: &Path,
+        cargo_home: PathBuf,
     ) -> Result<GlobalContext, ResolveBuildGraphError> {
         let shell = Shell::new();
 
         let cwd = env::current_dir().map_err(ResolveBuildGraphError::GetCwd)?;
 
-        // The vendor directory created by `VendorDir::create()` contains a
-        // `config.toml` file that configures Cargo to use the vendored
-        // sources, so we can use it as the Cargo home.
-        let cargo_home = vendor_dir;
-
-        let mut ctx = GlobalContext::new(shell, cwd, cargo_home.to_owned());
+        let mut ctx = GlobalContext::new(shell, cwd, cargo_home);
 
         ctx.configure(0, false, None, true, true, true, &None, &[], &[])
             .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
@@ -198,7 +193,7 @@ impl Function for ResolveBuildGraph {
     ) -> Result<BuildGraph<'args>, ResolveBuildGraphError> {
         let manifest_path = args.src.join("Cargo.toml");
 
-        let global_ctx = Self::cargo_ctx(&args.vendor_dir)?;
+        let global_ctx = Self::cargo_ctx(args.vendor_dir.join(".cargo"))?;
 
         let workspace = Workspace::new(&manifest_path, &global_ctx)
             .map_err(ResolveBuildGraphError::CreateWorkspace)?;
