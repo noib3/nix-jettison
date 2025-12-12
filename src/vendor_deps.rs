@@ -62,13 +62,6 @@ struct Source<'lock> {
     derivation: Thunk<'static>,
 }
 
-/// The functions that will have to be called to create the vendor directory.
-struct CreateVendorDirFuns<'pkgs, 'builtins> {
-    fetch_git: NixLambda<'builtins>,
-    fetchurl: NixFunctor<'pkgs>,
-    run_command_local: NixLambda<'pkgs>,
-}
-
 impl VendorDeps {
     pub(crate) fn read_cargo_lock(
         cargo_lock_path: &Path,
@@ -95,12 +88,6 @@ impl<'lock> VendoredSources<'lock> {
         pkgs: NixAttrset,
         ctx: &mut Context,
     ) -> Result<Self, VendorDepsError> {
-        let funs = CreateVendorDirFuns {
-            fetchurl: pkgs.get(c"fetchurl", ctx)?,
-            fetch_git: ctx.builtins().fetch_git(ctx),
-            run_command_local: pkgs.get(c"runCommandLocal", ctx)?,
-        };
-
         let replace_with = "vendored-sources";
 
         let mut sources = Vec::new();
@@ -114,15 +101,23 @@ directory = "."
 "#
         );
 
+        let fetch_git = ctx.builtins().fetch_git(ctx);
+        let fetchurl = pkgs.get(c"fetchurl", ctx)?;
+        let run_command_local = pkgs.get(c"runCommandLocal", ctx)?;
+
         for res in CargoLockParser::new(cargo_lock) {
             let PackageEntry { name, version, source } = res?;
 
             let Some(source) = source else { continue };
 
             let derivation = match source {
-                PackageSource::Registry(source) => {
-                    source.fetch(name, version, &funs, ctx)?
-                },
+                PackageSource::Registry(source) => source.fetch(
+                    name,
+                    version,
+                    fetchurl,
+                    run_command_local,
+                    ctx,
+                )?,
                 PackageSource::Git(source) => {
                     write!(
                         &mut config_dot_toml,
@@ -130,7 +125,7 @@ directory = "."
                         source.into_cargo_config_entry(replace_with)
                     )
                     .expect("writing to a String cannot fail");
-                    source.fetch(&funs, ctx)?
+                    source.fetch(fetch_git, run_command_local, ctx)?
                 },
             };
 
@@ -175,7 +170,7 @@ directory = "."
                 }
             })
             .chain(iter::once(attrset! {
-                name: CompactString::const_new("config.toml"),
+                name: CompactString::const_new(".cargo/config.toml"),
                 path: config_dot_toml_drv,
             }))
             // TODO: is `Chain` not `ExactSize`?
@@ -189,11 +184,12 @@ directory = "."
 
 impl<'lock> RegistrySource<'lock> {
     #[allow(clippy::too_many_arguments)]
-    fn fetch<'pkgs>(
+    fn fetch(
         &self,
-        pkg_name: &'lock str,
-        pkg_version: &'lock str,
-        funs: &CreateVendorDirFuns<'pkgs, '_>,
+        pkg_name: &str,
+        pkg_version: &str,
+        fetchurl: NixFunctor,
+        run_command_local: NixLambda,
         ctx: &mut Context,
     ) -> Result<Thunk<'static>, NixError> {
         thread_local! {
@@ -213,13 +209,11 @@ impl<'lock> RegistrySource<'lock> {
             sha256: self.checksum,
         };
 
-        let src = funs.fetchurl.call(fetchurl_args, ctx)?;
-
         let extract_and_add_checksum_args = attrset! {
-            src: src,
+            src: fetchurl.call(fetchurl_args, ctx)?,
             checksum: self.checksum,
             name: format!("{pkg_name}-{pkg_version}"),
-            runCommandLocal: funs.run_command_local,
+            runCommandLocal: run_command_local,
         };
 
         let extract_and_add_checksum = WRAP.with(|cell| match cell.get().copied() {
@@ -244,7 +238,8 @@ impl<'lock> RegistrySource<'lock> {
 impl GitSource<'_> {
     fn fetch(
         &self,
-        funs: &CreateVendorDirFuns,
+        fetch_git: NixLambda,
+        run_command_local: NixLambda,
         ctx: &mut Context,
     ) -> Result<Thunk<'static>, NixError> {
         thread_local! {
@@ -263,12 +258,10 @@ impl GitSource<'_> {
             None => Either::Right(attrset! { allRefs: true }),
         });
 
-        let src = funs.fetch_git.call(args, ctx)?;
-
         let add_checksum_args = attrset! {
-            src: src,
+            src: fetch_git.call(args, ctx)?,
             name: format!("git-{}", &self.rev[..8]),
-            runCommandLocal: funs.run_command_local,
+            runCommandLocal: run_command_local,
         };
 
         let add_checksum = WRAP.with(|cell| match cell.get().copied() {

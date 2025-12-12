@@ -88,23 +88,6 @@ pub(crate) enum ResolveBuildGraphError {
     ResolveWorkspace(anyhow::Error),
 }
 
-impl ResolveBuildGraph {
-    fn cargo_ctx(
-        cargo_home: PathBuf,
-    ) -> Result<GlobalContext, ResolveBuildGraphError> {
-        let shell = Shell::new();
-
-        let cwd = env::current_dir().map_err(ResolveBuildGraphError::GetCwd)?;
-
-        let mut ctx = GlobalContext::new(shell, cwd, cargo_home);
-
-        ctx.configure(0, false, None, true, true, true, &None, &[], &[])
-            .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
-
-        Ok(ctx)
-    }
-}
-
 impl ResolveBuildGraphArgs<'_> {
     fn compile_target(&self) -> Result<CompileKind, ResolveBuildGraphError> {
         Ok(CompileKind::Host)
@@ -121,22 +104,34 @@ impl ResolveBuildGraphArgs<'_> {
 }
 
 impl BuildGraph {
-    fn new(
+    pub(crate) fn resolve(
         args: &ResolveBuildGraphArgs,
-        ws_resolve: WorkspaceResolve,
     ) -> Result<Self, ResolveBuildGraphError> {
-        let root_id = ws_resolve
-            .targeted_resolve
-            .iter()
-            .find(|id| id.name().as_str() == args.package)
-            .expect("root package not found in workspace resolve");
+        let manifest_path = args.src.join("Cargo.toml");
 
-        let mut this =
-            Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
+        let global_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
 
-        Self::build_recursive(&mut this, root_id, args, &ws_resolve);
+        let workspace = Workspace::new(&manifest_path, &global_ctx)
+            .map_err(ResolveBuildGraphError::CreateWorkspace)?;
 
-        Ok(this)
+        let target = args.compile_target()?;
+
+        let mut target_data = RustcTargetData::new(&workspace, &[target])
+            .map_err(ResolveBuildGraphError::CreateTargetData)?;
+
+        let workspace_resolve = ops::resolve_ws_with_opts(
+            &workspace,
+            &mut target_data,
+            &[target],
+            &args.features()?,
+            &[PackageIdSpec::new(args.package.clone().into())],
+            HasDevUnits::No,
+            ForceAllTargets::No,
+            true,
+        )
+        .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
+
+        Self::new(&args, workspace_resolve)
     }
 
     fn build_recursive(
@@ -181,6 +176,24 @@ impl BuildGraph {
 
         idx
     }
+
+    fn new(
+        args: &ResolveBuildGraphArgs,
+        ws_resolve: WorkspaceResolve,
+    ) -> Result<Self, ResolveBuildGraphError> {
+        let root_id = ws_resolve
+            .targeted_resolve
+            .iter()
+            .find(|id| id.name().as_str() == args.package)
+            .expect("root package not found in workspace resolve");
+
+        let mut this =
+            Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
+
+        Self::build_recursive(&mut this, root_id, args, &ws_resolve);
+
+        Ok(this)
+    }
 }
 
 impl<Dep> BuildGraphNode<Dep> {
@@ -196,33 +209,7 @@ impl Function for ResolveBuildGraph {
         args: Self::Args<'a>,
         _: &mut Context,
     ) -> Result<BuildGraph, ResolveBuildGraphError> {
-        let manifest_path = args.src.join("Cargo.toml");
-
-        let global_ctx = Self::cargo_ctx(args.vendor_dir.join(".cargo"))?;
-
-        let workspace = Workspace::new(&manifest_path, &global_ctx)
-            .map_err(ResolveBuildGraphError::CreateWorkspace)?;
-
-        let target = args.compile_target()?;
-
-        let mut target_data = RustcTargetData::new(&workspace, &[target])
-            .map_err(ResolveBuildGraphError::CreateTargetData)?;
-
-        let workspace_resolve = ops::resolve_ws_with_opts(
-            &workspace,
-            &mut target_data,
-            &[target],
-            &args.features()?,
-            &[PackageIdSpec::new(args.package.clone().into())],
-            HasDevUnits::No,
-            ForceAllTargets::No,
-            true,
-        )
-        .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
-
-        println!("Resolved workspace");
-
-        BuildGraph::new(&args, workspace_resolve)
+        BuildGraph::resolve(&args)
     }
 }
 
@@ -249,6 +236,21 @@ impl From<ResolveBuildGraphError> for NixError {
             },
         }
     }
+}
+
+fn cargo_ctx(
+    cargo_home: PathBuf,
+) -> Result<GlobalContext, ResolveBuildGraphError> {
+    let shell = Shell::new();
+
+    let cwd = env::current_dir().map_err(ResolveBuildGraphError::GetCwd)?;
+
+    let mut ctx = GlobalContext::new(shell, cwd, cargo_home);
+
+    ctx.configure(0, false, None, true, true, true, &None, &[], &[])
+        .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
+
+    Ok(ctx)
 }
 
 fn get_vendor_dir<'a>(

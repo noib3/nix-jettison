@@ -7,7 +7,7 @@ use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::resolve_build_graph::{
-    ResolveBuildGraph,
+    BuildGraph,
     ResolveBuildGraphArgs,
     ResolveBuildGraphError,
 };
@@ -137,10 +137,7 @@ impl Function for BuildPackage {
             no_default_features: args.no_default_features,
         };
 
-        let build_graph = <ResolveBuildGraph as Function>::call(
-            resolve_build_graph_args,
-            ctx,
-        )?;
+        let build_graph = BuildGraph::resolve(&resolve_build_graph_args)?;
 
         #[cfg(feature = "forbid-cargo")]
         let cargo_is_forbidden = ctx.builtins().throw(ctx).call(
