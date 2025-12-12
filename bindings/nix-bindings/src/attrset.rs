@@ -1,7 +1,9 @@
 //! TODO: docs.
 
+use alloc::borrow::ToOwned;
 use alloc::ffi::CString;
-use alloc::string::String;
+use alloc::format;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::ffi::{CStr, c_uint};

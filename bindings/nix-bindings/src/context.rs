@@ -1,5 +1,6 @@
 //! TODO: docs.
 
+use alloc::borrow::ToOwned;
 use core::ffi::CStr;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
