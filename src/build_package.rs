@@ -88,26 +88,54 @@ impl<'a> BuildPackageArgs<'a> {
         let default_build_rust_crate =
             self.pkgs.get::<NixFunctor>(c"buildRustCrate", ctx)?;
 
-        let Some(overrides) = self.global_overrides else {
-            return Ok(Either::Right(default_build_rust_crate));
-        };
+        let mut build_rust_crate = Either::Right(default_build_rust_crate);
 
-        let wrapped = ctx.eval::<NixLambda>(
-            c"
-            { buildRustCrate, globalOverrides }:
-            args: (buildRustCrate args).overrideAttrs globalOverrides",
-        )?;
+        // NOTE: ideally we would just include the crateOverrides in the global
+        // arguments passed to `buildRustCrate`, but because upstream has a bug
+        // where the crateOverrides are not included in the `processedAttrs`,
+        // they end up leaking through to the attributes given to
+        // `mkDerivation`, which causes an error.
+        //
+        // To get around that we need to override `buildRustCrate`.
+        if let Some(crate_overrides) = self.crate_overrides {
+            let apply_crate_overrides = ctx.eval::<NixLambda>(
+                c"{ buildRustCrate, crateOverrides }:
+                buildRustCrate.override { defaultCrateOverrides = crateOverrides; }",
+            )?;
 
-        wrapped
-            .call(
-                attrset! {
-                    buildRustCrate: default_build_rust_crate,
-                    globalOverrides: overrides,
-                },
-                ctx,
-            )?
-            .force_into::<NixLambda>(ctx)
-            .map(Either::Left)
+            let wrapped = apply_crate_overrides
+                .call(
+                    attrset! {
+                        buildRustCrate: build_rust_crate,
+                        crateOverrides: crate_overrides,
+                    },
+                    ctx,
+                )?
+                .force_into::<NixFunctor>(ctx)?;
+
+            build_rust_crate = Either::Right(wrapped);
+        }
+
+        if let Some(global_overrides) = self.global_overrides {
+            let apply_global_overrides = ctx.eval::<NixLambda>(
+                c"{ buildRustCrate, globalOverrides }:
+                args: (buildRustCrate args).overrideAttrs globalOverrides",
+            )?;
+
+            let wrapped = apply_global_overrides
+                .call(
+                    attrset! {
+                        buildRustCrate: build_rust_crate,
+                        globalOverrides: global_overrides,
+                    },
+                    ctx,
+                )?
+                .force_into::<NixLambda>(ctx)?;
+
+            build_rust_crate = Either::Left(wrapped);
+        }
+
+        Ok(build_rust_crate)
     }
 }
 
@@ -152,7 +180,6 @@ impl Function for BuildPackage {
             cargo: cargo_is_forbidden,
             release: args.release,
         }
-        .merge(args.crate_overrides.map(|ovr| attrset! { crateOverrides: ovr }))
         .merge(args.rustc.map(|rustc| attrset! { rustc }));
 
         let mut build_crates: Vec<Thunk<'static>> =
