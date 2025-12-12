@@ -158,13 +158,17 @@ impl Function for BuildPackage {
         let mut build_crates: Vec<Thunk<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
 
+        let make_path = ctx.builtins().path(ctx);
+
         for node in build_graph.nodes {
-            let src = match vendored_sources.get(node.source_id()) {
-                Some(src) => src,
-                None => todo!(
-                    "source is from local path, need to create this using \
-                     builtins.path"
-                ),
+            let src = match node.local_source_path.as_deref() {
+                Some(path) => {
+                    let name = path.file_name().expect("path has a file name");
+                    make_path.call(attrset! { path: path, name: name }, ctx)?
+                },
+                None => vendored_sources
+                    .get(node.source_id())
+                    .expect("source is not local, so it must've been vendored"),
             };
 
             let args = attrset! { src: src }

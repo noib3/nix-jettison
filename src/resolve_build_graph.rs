@@ -59,6 +59,7 @@ pub(crate) struct BuildGraph {
 pub(crate) struct BuildGraphNode<Dep> {
     pub(crate) args: BuildCrateArgs,
     pub(crate) dependencies: Dependencies<Dep>,
+    pub(crate) local_source_path: Option<PathBuf>,
 }
 
 /// The type of error that can occur when resolving a build graph fails.
@@ -109,9 +110,9 @@ impl BuildGraph {
     ) -> Result<Self, ResolveBuildGraphError> {
         let manifest_path = args.src.join("Cargo.toml");
 
-        let global_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
+        let cargo_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
 
-        let workspace = Workspace::new(&manifest_path, &global_ctx)
+        let workspace = Workspace::new(&manifest_path, &cargo_ctx)
             .map_err(ResolveBuildGraphError::CreateWorkspace)?;
 
         let target = args.compile_target()?;
@@ -167,6 +168,11 @@ impl BuildGraph {
         let build_crate_args = BuildGraphNode {
             args: BuildCrateArgs::new(package, targeted_resolve),
             dependencies,
+            local_source_path: package
+                .package_id()
+                .source_id()
+                .is_path()
+                .then(|| package.root().to_owned()),
         };
 
         let idx = this.nodes.len();
@@ -215,7 +221,13 @@ impl Function for ResolveBuildGraph {
 
 impl<Dep: Value> ToValue for BuildGraphNode<Dep> {
     fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Dep> {
-        self.args.borrow().merge(self.dependencies.borrow())
+        self.args.borrow().merge(self.dependencies.borrow()).merge(
+            self.local_source_path.as_deref().map(|path| {
+                attrset! {
+                    localSourcePath: path,
+                }
+            }),
+        )
     }
 }
 
