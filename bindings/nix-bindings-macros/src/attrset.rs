@@ -4,7 +4,7 @@ use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Token, braced};
+use syn::{Attribute, Token, braced, parse_quote};
 
 use crate::list::Value;
 
@@ -64,12 +64,28 @@ impl Parse for Attrset {
             // Parse attributes (e.g., #[cfg(...)]).
             let attrs = input.call(Attribute::parse_outer)?;
 
+            // Try to get the key ident to support shorthand syntax.
+            let key_ident = if !input.peek(syn::token::Brace) {
+                Some(input.fork().call(syn::Ident::parse_any)?)
+            } else {
+                None
+            };
+
             // Parse key.
             let key = input.parse()?;
-            input.parse::<Token![:]>()?;
 
-            // Parse value.
-            let value = input.parse()?;
+            let value = if input.peek(Token![:]) {
+                input.parse::<Token![:]>()?;
+                input.parse()?
+            } else if let Some(ident) = key_ident {
+                // Shorthand syntax: use key ident as value.
+                Value::Expr(parse_quote! { #ident })
+            } else {
+                return Err(syn::Error::new(
+                    input.span(),
+                    "expected `:` after attribute set key",
+                ));
+            };
 
             entries.push(AttrsetEntry { attrs, key, value });
 

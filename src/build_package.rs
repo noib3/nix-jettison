@@ -153,7 +153,7 @@ impl Function for BuildPackage {
             release: args.release,
         }
         .merge(args.crate_overrides.map(|ovr| attrset! { crateOverrides: ovr }))
-        .merge(args.rustc.map(|rustc| attrset! { rustc: rustc }));
+        .merge(args.rustc.map(|rustc| attrset! { rustc }));
 
         let mut build_crates: Vec<Thunk<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
@@ -164,14 +164,14 @@ impl Function for BuildPackage {
             let src = match node.local_source_path.as_deref() {
                 Some(path) => {
                     let name = path.file_name().expect("path has a file name");
-                    make_path.call(attrset! { path: path, name: name }, ctx)?
+                    make_path.call(attrset! { path, name }, ctx)?
                 },
                 None => vendored_sources
                     .get(node.source_id())
                     .expect("source is not local, so it must've been vendored"),
             };
 
-            let args = attrset! { src: src }
+            let args = attrset! { src }
                 .merge(node.args)
                 .merge(node.dependencies.map(|idx| build_crates[idx]))
                 .merge(Attrset::borrow(&global_args));
