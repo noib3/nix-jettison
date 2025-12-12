@@ -7,7 +7,6 @@ use cargo::core::manifest::TargetSourcePath;
 use cargo::core::{Package, Resolve, Target, TargetKind};
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
-use either::Either;
 use nix_bindings::prelude::*;
 
 use crate::resolve_build_graph::ResolveBuildGraphArgs;
@@ -27,28 +26,19 @@ pub(crate) struct BuildCrateArgs<'src, Dep> {
 #[attrset(rename_all = camelCase)]
 pub(crate) struct RequiredBuildCrateArgs<'src> {
     pub(crate) crate_name: CompactString,
-    #[attrset(with_value = Self::src_value)]
+    #[attrset(with_value = Self::src_path)]
     pub(crate) src: CrateSource<'src>,
     pub(crate) version: CompactString,
 }
 
 /// The path to a crate's source directory.
 pub(crate) enum CrateSource<'src> {
+    /// The crate's source is at the given path.
+    Path(Cow<'src, Path>),
+
     /// The crate is a 3rd-party dependency which has been vendored under the
     /// given directory.
-    Vendored { vendor_dir: Cow<'src, Path> },
-
-    /// The crate source is in the workspace of the root package being built.
-    Workspace {
-        /// An absolute path in the Nix store pointing to the root of the
-        /// workspace (this is usually the value of the `src` argument given
-        /// to `jettison.buildPackage`).
-        workspace_root: &'src Path,
-
-        /// The relative path in the workspace to the crate's source (e.g.
-        /// `"crates/my_crate"`).
-        path_in_workspace: CompactString,
-    },
+    Vendored(Cow<'src, Path>),
 }
 
 /// The optional, crate-specific arguments accepted by `pkgs.buildRustCrate`.
@@ -174,81 +164,32 @@ impl<'src> RequiredBuildCrateArgs<'src> {
         }
     }
 
-    fn src_value(&self) -> impl Value {
-        struct WorkspacePath<'a> {
-            workspace_root: &'a Path,
-            path_in_workspace: &'a Path,
-        }
-
-        impl Value for WorkspacePath<'_> {
-            fn kind(&self) -> ValueKind {
-                ValueKind::String
-            }
-
-            unsafe fn write(
-                &self,
-                dest: core::ptr::NonNull<nix_bindings::sys::Value>,
-                namespace: impl nix_bindings::namespace::Namespace,
-                ctx: &mut Context,
-            ) -> Result<()> {
-                let args = attrset! {
-                    path: self.workspace_root.join(self.path_in_workspace),
-                    name: self.path_in_workspace.file_name().unwrap_or_else(
-                        || {
-                            self.workspace_root
-                                .file_name()
-                                .expect("workspace root has a file name")
-                        },
-                    ),
-                };
-
-                let path = ctx
-                    .builtins()
-                    .path(ctx)
-                    .call(args, ctx)
-                    .expect(
-                        "arguments are valid and builtins.path returns a \
-                         string",
-                    )
-                    .force_into::<String>(ctx)?;
-
-                // SAFETY: up to the caller.
-                unsafe { path.write(dest, namespace, ctx) }
-            }
-        }
-
-        match &self.src {
-            CrateSource::Vendored { vendor_dir } => {
-                Either::Left(vendor_dir.join(VendorDir::dir_name(
-                    self.crate_name.as_str(),
-                    &self.version,
-                )))
-            },
-
-            CrateSource::Workspace { workspace_root, path_in_workspace } => {
-                Either::Right(WorkspacePath {
-                    workspace_root,
-                    path_in_workspace: Path::new(path_in_workspace.as_str()),
-                })
-            },
-        }
+    fn src_path(&self) -> Cow<'_, Path> {
+        self.src.to_path(&self.crate_name, &self.version)
     }
 }
 
 impl<'src> CrateSource<'src> {
     fn new(package: &Package, args: &ResolveBuildGraphArgs<'src>) -> Self {
         if package.package_id().source_id().is_path() {
-            let workspace_root = args.src;
-            let path_in_workspace = package
-                .root()
-                .strip_prefix(workspace_root)
-                .expect("package root is under workspace root")
-                .to_str()
-                .expect("workspace-relative path is valid UTF-8")
-                .into();
-            Self::Workspace { workspace_root, path_in_workspace }
+            let package_root = package.root();
+            let path = if package_root == args.src {
+                Cow::Borrowed(args.src)
+            } else {
+                Cow::Owned(package.root().to_owned())
+            };
+            Self::Path(path)
         } else {
-            Self::Vendored { vendor_dir: args.vendor_dir.clone() }
+            Self::Vendored(args.vendor_dir.clone())
+        }
+    }
+
+    fn to_path<'a>(&'a self, crate_name: &str, version: &str) -> Cow<'a, Path> {
+        match self {
+            Self::Path(path) => Cow::Borrowed(&**path),
+            Self::Vendored(vendor_dir) => Cow::Owned(
+                vendor_dir.join(VendorDir::dir_name(crate_name, version)),
+            ),
         }
     }
 }
@@ -320,12 +261,8 @@ impl OptionalBuildCrateArgs {
                     }
                 })
                 .and_then(|lib_path| {
-                    let package_path = package
-                        .manifest_path()
-                        .parent()
-                        .expect("path to Cargo.toml has a parent");
                     let lib_path_relative = lib_path
-                        .strip_prefix(package_path)
+                        .strip_prefix(package.root())
                         .expect("library path is under package root");
                     (lib_path_relative != "src/lib.rs").then(|| {
                         lib_path_relative.display().to_compact_string()
