@@ -245,13 +245,13 @@ impl Function for ResolveBuildGraph {
 
 impl<Dep: Value> ToValue for BuildGraphNode<Dep> {
     fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Dep> {
-        self.args.borrow().merge(self.dependencies.borrow()).merge(
-            self.local_source_path.as_deref().map(|path| {
+        Attrset::borrow(&self.args)
+            .merge(Attrset::borrow(&self.dependencies))
+            .merge(self.local_source_path.as_deref().map(|path| {
                 attrset! {
                     localSourcePath: path,
                 }
-            }),
-        )
+            }))
     }
 }
 

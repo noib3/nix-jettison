@@ -102,6 +102,25 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
                 }
             }
         }
+
+        impl #impl_generics ::nix_bindings::value::Value for #struct_name #ty_generics #extended_where_clause {
+            #[inline]
+            fn kind(&self) -> ::nix_bindings::value::ValueKind {
+                ::nix_bindings::value::ValueKind::Attrset
+            }
+
+            #[inline]
+            unsafe fn write(
+                &self,
+                dest: ::core::ptr::NonNull<::nix_bindings::sys::Value>,
+                namespace: impl ::nix_bindings::namespace::Namespace,
+                ctx: &mut ::nix_bindings::context::Context,
+            ) -> ::nix_bindings::error::Result<()> {
+                let attrset = ::nix_bindings::attrset::Attrset::borrow(self);
+                let value = ::nix_bindings::attrset::Attrset::into_value(attrset);
+                unsafe { value.write(dest, namespace, ctx) }
+            }
+        }
     })
 }
 
