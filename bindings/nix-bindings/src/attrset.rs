@@ -19,6 +19,8 @@ use crate::context::EvalState;
 use crate::error::{Error, ErrorKind, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
+#[cfg(feature = "std")]
+use crate::value::ToValue;
 use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
 
 /// TODO: docs.
@@ -1128,6 +1130,85 @@ impl<L: Pairs, R: Pairs> Pairs for either::Either<L, R> {
         match self {
             Self::Left(l) => l.with_value(fun, ctx),
             Self::Right(r) => r.with_value(fun, ctx),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<K, V, S> Attrset for std::collections::HashMap<K, V, S>
+where
+    K: Eq + core::hash::Hash + core::borrow::Borrow<str>,
+    V: ToValue,
+    S: core::hash::BuildHasher,
+{
+    #[inline]
+    fn len(&self, _: &mut Context) -> c_uint {
+        self.len() as c_uint
+    }
+
+    #[inline]
+    fn pairs<'this>(
+        &'this self,
+        _: &mut Context,
+    ) -> impl Pairs + use<'this, K, V, S> {
+        struct Todo;
+
+        impl Pairs for Todo {
+            fn advance(&mut self, _: &mut Context) {
+                todo!()
+            }
+
+            fn is_exhausted(&self) -> bool {
+                todo!()
+            }
+
+            fn key(&self, _: &mut Context) -> &CStr {
+                todo!()
+            }
+
+            fn with_value<'ctx, 'eval, T>(
+                &self,
+                _: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+                _: &'ctx mut Context<'eval>,
+            ) -> T {
+                todo!()
+            }
+        }
+
+        Todo
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        key: &CStr,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> Option<T> {
+        let key = key.to_str().expect("TODO: make key a Utf8CStr");
+        Some(fun.call(self.get(key)?.to_value(ctx), ctx))
+    }
+}
+
+#[cfg(feature = "std")]
+impl<K, V, S> Value for std::collections::HashMap<K, V, S>
+where
+    Self: Attrset,
+{
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::Attrset
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<nix_bindings_sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe {
+            Attrset::borrow(self).into_value().write(dest, namespace, ctx)
         }
     }
 }
