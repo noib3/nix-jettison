@@ -132,7 +132,7 @@ impl BuildGraph {
         )
         .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
 
-        Self::new(&args, workspace_resolve)
+        Self::new(&args, workspace_resolve, &target_data, target)
     }
 
     fn build_recursive(
@@ -140,6 +140,8 @@ impl BuildGraph {
         pkg_id: PackageId,
         args: &ResolveBuildGraphArgs,
         ws_resolve: &WorkspaceResolve,
+        target_data: &RustcTargetData,
+        target: CompileKind,
     ) -> usize {
         let WorkspaceResolve { targeted_resolve, pkg_set, .. } = ws_resolve;
 
@@ -151,9 +153,22 @@ impl BuildGraph {
         let mut dependencies = Dependencies::default();
 
         for (dep_id, dep_set) in targeted_resolve.deps(pkg_id) {
-            let dep_idx = Self::build_recursive(this, dep_id, args, ws_resolve);
+            let dep_idx = Self::build_recursive(
+                this,
+                dep_id,
+                args,
+                ws_resolve,
+                target_data,
+                target,
+            );
 
             for dep in dep_set {
+                // Filter out dependencies that don't match our target
+                // platform.
+                if !target_data.dep_platform_activated(dep, target) {
+                    continue;
+                }
+
                 match dep.kind() {
                     DepKind::Normal => dependencies.normal.push(dep_idx),
                     DepKind::Development => {},
@@ -186,6 +201,8 @@ impl BuildGraph {
     fn new(
         args: &ResolveBuildGraphArgs,
         ws_resolve: WorkspaceResolve,
+        target_data: &RustcTargetData,
+        target: CompileKind,
     ) -> Result<Self, ResolveBuildGraphError> {
         let root_id = ws_resolve
             .targeted_resolve
@@ -196,7 +213,14 @@ impl BuildGraph {
         let mut this =
             Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
 
-        Self::build_recursive(&mut this, root_id, args, &ws_resolve);
+        Self::build_recursive(
+            &mut this,
+            root_id,
+            args,
+            &ws_resolve,
+            target_data,
+            target,
+        );
 
         Ok(this)
     }
