@@ -264,6 +264,14 @@ struct MergePairs<'a, L, R, Lp, Rp> {
     is_current_key_conflicting: bool,
 }
 
+/// The [`Pairs`] implementation returned by
+/// [`std::collections::HashMap::pairs()`].
+#[cfg(feature = "std")]
+struct HashMapPairs<'a, K, V> {
+    key_value: Option<(&'a K, &'a V)>,
+    iter: std::collections::hash_map::Iter<'a, K, V>,
+}
+
 impl<'a> NixAttrset<'a> {
     /// TODO: docs.
     #[inline]
@@ -1151,31 +1159,9 @@ where
         &'this self,
         _: &mut Context,
     ) -> impl Pairs + use<'this, K, V, S> {
-        struct Todo;
-
-        impl Pairs for Todo {
-            fn advance(&mut self, _: &mut Context) {
-                todo!()
-            }
-
-            fn is_exhausted(&self) -> bool {
-                todo!()
-            }
-
-            fn key(&self, _: &mut Context) -> &CStr {
-                todo!()
-            }
-
-            fn with_value<'ctx, 'eval, T>(
-                &self,
-                _: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-                _: &'ctx mut Context<'eval>,
-            ) -> T {
-                todo!()
-            }
-        }
-
-        Todo
+        let mut iter = self.iter();
+        let key_value = iter.next();
+        HashMapPairs { key_value, iter }
     }
 
     #[inline]
@@ -1187,6 +1173,47 @@ where
     ) -> Option<T> {
         let key = key.to_str().expect("TODO: make key a Utf8CStr");
         Some(fun.call(self.get(key)?.to_value(ctx), ctx))
+    }
+}
+
+#[cfg(feature = "std")]
+impl<K, V> Pairs for HashMapPairs<'_, K, V>
+where
+    K: core::borrow::Borrow<str>,
+    V: ToValue,
+{
+    #[inline]
+    fn advance(&mut self, _: &mut Context) {
+        self.key_value = self.iter.next();
+    }
+
+    #[inline]
+    fn is_exhausted(&self) -> bool {
+        self.key_value.is_none()
+    }
+
+    #[inline]
+    fn key(&self, _: &mut Context) -> &CStr {
+        let _key = self
+            .key_value
+            .expect("attempted to get value from exhausted pairs")
+            .0
+            .borrow();
+        todo!();
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        let value = self
+            .key_value
+            .expect("attempted to get value from exhausted pairs")
+            .1
+            .to_value(ctx);
+        fun.call(value, ctx)
     }
 }
 
