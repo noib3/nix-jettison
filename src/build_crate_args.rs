@@ -1,10 +1,12 @@
 use core::cmp::Ordering;
 use core::fmt::Display;
+use core::mem;
 use core::ops::Not;
+use std::collections::{HashMap, hash_map};
 
 use cargo::core::compiler::CrateType;
 use cargo::core::manifest::TargetSourcePath;
-use cargo::core::{Package, Resolve, Target, TargetKind};
+use cargo::core::{Package, PackageId, Resolve, Target, TargetKind};
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use nix_bindings::prelude::*;
@@ -37,8 +39,8 @@ pub(crate) struct BuildCrateArgs {
 
     /// This is derived state from the dependencies section of the Cargo.toml
     /// of the crate.
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) crate_renames: Vec<Null>,
+    #[attrset(skip_if = HashMap::is_empty)]
+    pub(crate) crate_renames: HashMap<CompactString, CrateRename>,
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) description: Option<CompactString>,
@@ -93,6 +95,19 @@ pub(crate) struct BuildCrateArgs {
     pub(crate) version: CompactString,
 }
 
+#[derive(nix_bindings::Value)]
+pub(crate) enum CrateRename {
+    Simple(CompactString),
+    Extended(Vec<CrateRenameWithVersion>),
+}
+
+/// Represents a version-specific rename for the extended crateRenames format.
+#[derive(nix_bindings::Attrset)]
+pub(crate) struct CrateRenameWithVersion {
+    pub(crate) rename: CompactString,
+    pub(crate) version: CompactString,
+}
+
 #[derive(cauchy::Default, nix_bindings::Attrset)]
 #[attrset(bounds = { Dep: ToValue })]
 pub(crate) struct Dependencies<Dep> {
@@ -140,7 +155,7 @@ impl BuildCrateArgs {
             codegen_units: None,
             crate_bin: None,
             crate_name: CompactString::const_new(package.name().as_str()),
-            crate_renames: Vec::new(),
+            crate_renames: Self::new_crate_renames(package_id, resolve),
             // Replace newlines and escape double quotes because buildRustCrate
             // exports the description as a bash environment variable without
             // proper escaping, which breaks when the description contains
@@ -203,6 +218,61 @@ impl BuildCrateArgs {
                 .map(|v| v.to_compact_string()),
             version: package.version().to_compact_string(),
         }
+    }
+
+    fn new_crate_renames(
+        package_id: PackageId,
+        resolve: &Resolve,
+    ) -> HashMap<CompactString, CrateRename> {
+        let mut renames = HashMap::new();
+
+        for (_dep_id, dep_set) in resolve.deps(package_id) {
+            for dep in dep_set {
+                // TODO: skip dependency if it doesn't match target platform.
+                let Some(name_in_toml) = dep.explicit_name_in_toml() else {
+                    continue;
+                };
+
+                let rename_with_version = CrateRenameWithVersion {
+                    rename: CompactString::const_new(name_in_toml.as_str()),
+                    version: dep.version_req().to_compact_string(),
+                };
+
+                match renames.entry(dep.package_name().as_str().into()) {
+                    hash_map::Entry::Occupied(mut entry) => {
+                        let CrateRename::Extended(versions) = entry.get_mut()
+                        else {
+                            unreachable!(
+                                "we only create extended renames on the first \
+                                 pass"
+                            );
+                        };
+                        versions.push(rename_with_version);
+                    },
+                    hash_map::Entry::Vacant(entry) => {
+                        // TODO: use smallvec with an inline capacity of 1.
+                        entry.insert(CrateRename::Extended(vec![
+                            rename_with_version,
+                        ]));
+                    },
+                }
+            }
+        }
+
+        renames.values_mut().for_each(|rename| {
+            let CrateRename::Extended(versions) = rename else { return };
+            if versions.len() > 1 {
+                return;
+            }
+            let name_in_toml = mem::take(versions)
+                .into_iter()
+                .next()
+                .expect("checked length")
+                .rename;
+            *rename = CrateRename::Simple(name_in_toml);
+        });
+
+        renames
     }
 
     pub(crate) fn source_id(&self) -> SourceId<'_> {
