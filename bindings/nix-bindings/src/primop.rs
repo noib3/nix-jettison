@@ -288,8 +288,7 @@ impl Args<'_> for NoArgs {
     const NAMES: &'static [*const c_char] = &[core::ptr::null()];
 
     #[inline]
-    unsafe fn from_raw(args: ArgsList<'_>, _: &mut Context) -> Result<Self> {
-        debug_assert! { unsafe { *args.inner.offset(0).as_ptr() }.is_null() };
+    unsafe fn from_raw(_: ArgsList<'_>, _: &mut Context) -> Result<Self> {
         Ok(Self)
     }
 }
