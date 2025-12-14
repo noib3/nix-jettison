@@ -268,8 +268,9 @@ struct MergePairs<'a, L, R, Lp, Rp> {
 /// [`std::collections::HashMap::pairs()`].
 #[cfg(feature = "std")]
 struct HashMapPairs<'a, K, V> {
-    key_value: Option<(&'a K, &'a V)>,
     iter: std::collections::hash_map::Iter<'a, K, V>,
+    key: Vec<u8>,
+    value: Option<&'a V>,
 }
 
 impl<'a> NixAttrset<'a> {
@@ -420,6 +421,26 @@ impl NixDerivation<'_> {
     #[inline]
     pub fn out_path_as_string(&self, ctx: &mut Context) -> Result<String> {
         self.inner.get(c"outPath", ctx)
+    }
+}
+
+#[cfg(feature = "std")]
+impl<K, V> HashMapPairs<'_, K, V> {
+    #[inline]
+    fn store_key(&mut self, key: &str) {
+        self.key.clear();
+        for &byte in key.as_bytes() {
+            // The key will need to be turned into a CStr, so we need to
+            // replace the NUL bytes.
+            if byte == 0 {
+                // The replacement character is 3 bytes long.
+                self.key.reserve(3);
+                core::char::REPLACEMENT_CHARACTER.encode_utf8(&mut self.key);
+            } else {
+                self.key.push(byte);
+            }
+        }
+        self.key.push(0);
     }
 }
 
@@ -1160,8 +1181,19 @@ where
         _: &mut Context,
     ) -> impl Pairs + use<'this, K, V, S> {
         let mut iter = self.iter();
-        let key_value = iter.next();
-        HashMapPairs { key_value, iter }
+        let (key, value) = match iter.next() {
+            Some((key, value)) => (Some(key), Some(value)),
+            None => (None, None),
+        };
+        let mut this = HashMapPairs {
+            key: Vec::with_capacity(key.map_or(0, |s| s.borrow().len() + 1)),
+            value,
+            iter,
+        };
+        if let Some(key) = key {
+            this.store_key(key.borrow());
+        }
+        this
     }
 
     #[inline]
@@ -1184,22 +1216,24 @@ where
 {
     #[inline]
     fn advance(&mut self, _: &mut Context) {
-        self.key_value = self.iter.next();
+        self.value = None;
+        let Some((key, value)) = self.iter.next() else { return };
+        self.store_key(key.borrow());
+        self.value = Some(value);
     }
 
     #[inline]
     fn is_exhausted(&self) -> bool {
-        self.key_value.is_none()
+        self.value.is_none()
     }
 
     #[inline]
     fn key(&self, _: &mut Context) -> &CStr {
-        let _key = self
-            .key_value
-            .expect("attempted to get value from exhausted pairs")
-            .0
-            .borrow();
-        todo!();
+        if self.key.is_empty() {
+            panic!("attempted to get key from exhausted pairs");
+        }
+        // SAFETY: we always store a valid NUL-terminated CStr in the vector.
+        unsafe { CStr::from_bytes_with_nul_unchecked(&self.key) }
     }
 
     #[inline]
@@ -1209,9 +1243,8 @@ where
         ctx: &'ctx mut Context<'eval>,
     ) -> T {
         let value = self
-            .key_value
+            .value
             .expect("attempted to get value from exhausted pairs")
-            .1
             .to_value(ctx);
         fun.call(value, ctx)
     }
