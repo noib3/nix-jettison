@@ -5,12 +5,11 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{env, io};
 
-use cargo::GlobalContext;
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::dependency::DepKind;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{PackageId, PackageIdSpec, Shell, Workspace};
-use cargo::ops::{self, WorkspaceResolve};
+use cargo::core::{Dependency, PackageId, PackageIdSpec, Shell, Workspace};
+use cargo::{GlobalContext, ops};
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
@@ -62,6 +61,12 @@ pub(crate) struct BuildGraphNode<Dep> {
     pub(crate) local_source_path: Option<PathBuf>,
 }
 
+pub(crate) struct WorkspaceResolve<'a> {
+    inner: ops::WorkspaceResolve<'a>,
+    target_data: RustcTargetData<'a>,
+    target: CompileKind,
+}
+
 /// The type of error that can occur when resolving a build graph fails.
 #[derive(Debug, derive_more::Display, cauchy::From)]
 #[display("{_0}")]
@@ -104,23 +109,45 @@ impl ResolveBuildGraphArgs<'_> {
     }
 }
 
-impl BuildGraph {
-    pub(crate) fn resolve(
+impl<'ws> WorkspaceResolve<'ws> {
+    pub(crate) fn deps(
+        &self,
+        pkg_id: PackageId,
+    ) -> impl Iterator<Item = (PackageId, impl Iterator<Item = &Dependency>)> + '_
+    {
+        self.inner.targeted_resolve.deps(pkg_id).map(|(dep_id, dep_set)| {
+            (
+                dep_id,
+                // Filter out dependencies that don't match our target
+                // platform.
+                dep_set.iter().filter(|&dep| {
+                    self.target_data.dep_platform_activated(dep, self.target)
+                }),
+            )
+        })
+    }
+
+    pub(crate) fn features(
+        &self,
+        pkg_id: PackageId,
+    ) -> impl Iterator<Item = &str> {
+        self.inner.targeted_resolve.features(pkg_id).iter().map(|s| s.as_str())
+    }
+
+    fn get_package(&self, pkg_id: PackageId) -> Option<&cargo::core::Package> {
+        self.inner.pkg_set.get_one(pkg_id).ok()
+    }
+
+    fn new(
+        workspace: Workspace<'ws>,
         args: &ResolveBuildGraphArgs,
     ) -> Result<Self, ResolveBuildGraphError> {
-        let manifest_path = args.src.join("Cargo.toml");
-
-        let cargo_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
-
-        let workspace = Workspace::new(&manifest_path, &cargo_ctx)
-            .map_err(ResolveBuildGraphError::CreateWorkspace)?;
-
         let target = args.compile_target()?;
 
         let mut target_data = RustcTargetData::new(&workspace, &[target])
             .map_err(ResolveBuildGraphError::CreateTargetData)?;
 
-        let workspace_resolve = ops::resolve_ws_with_opts(
+        let inner = ops::resolve_ws_with_opts(
             &workspace,
             &mut target_data,
             &[target],
@@ -132,19 +159,39 @@ impl BuildGraph {
         )
         .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
 
-        Self::new(args, workspace_resolve, &target_data, target)
+        Ok(Self { inner, target_data, target })
+    }
+}
+
+impl BuildGraph {
+    pub(crate) fn resolve(
+        args: &ResolveBuildGraphArgs,
+    ) -> Result<Self, ResolveBuildGraphError> {
+        let manifest_path = args.src.join("Cargo.toml");
+
+        let cargo_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
+
+        let workspace = Workspace::new(&manifest_path, &cargo_ctx)
+            .map_err(ResolveBuildGraphError::CreateWorkspace)?;
+
+        let package_id = workspace
+            .members()
+            .find_map(|package| {
+                (package.name().as_str() == args.package)
+                    .then(|| package.package_id())
+            })
+            .expect("root package not found in workspace");
+
+        let resolve = WorkspaceResolve::new(workspace, args)?;
+
+        Self::new(&resolve, package_id)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn build_recursive(
         this: &mut Self,
         pkg_id: PackageId,
-        ws_resolve: &WorkspaceResolve,
-        target_data: &RustcTargetData,
-        target: CompileKind,
+        resolve: &WorkspaceResolve,
     ) -> usize {
-        let WorkspaceResolve { targeted_resolve, pkg_set, .. } = ws_resolve;
-
         // Fast path if we've already seen this package.
         if let Some(&idx) = this.pkg_id_to_idx.get(&pkg_id) {
             return idx;
@@ -152,22 +199,13 @@ impl BuildGraph {
 
         let mut dependencies = Dependencies::default();
 
-        for (dep_id, dep_set) in targeted_resolve.deps(pkg_id) {
-            let dep_idx = Self::build_recursive(
-                this,
-                dep_id,
-                ws_resolve,
-                target_data,
-                target,
-            );
+        for (dep_id, dep_set) in resolve.deps(pkg_id) {
+            // TODO: shouldn't this go inside the loop below? The dep_set is an
+            // iterator bc the same dependency can be under `[dependencies]`,
+            // `[build-dependencies]`, and `[dev-dependencies]`.
+            let dep_idx = Self::build_recursive(this, dep_id, resolve);
 
             for dep in dep_set {
-                // Filter out dependencies that don't match our target
-                // platform.
-                if !target_data.dep_platform_activated(dep, target) {
-                    continue;
-                }
-
                 match dep.kind() {
                     DepKind::Normal => dependencies.normal.push(dep_idx),
                     DepKind::Development => {},
@@ -176,11 +214,12 @@ impl BuildGraph {
             }
         }
 
-        let package =
-            pkg_set.get_one(pkg_id).expect("package ID not found in workspace");
+        let package = resolve
+            .get_package(pkg_id)
+            .expect("package ID not found in workspace");
 
         let build_crate_args = BuildGraphNode {
-            args: BuildCrateArgs::new(package, targeted_resolve),
+            args: BuildCrateArgs::new(package, resolve),
             dependencies,
             local_source_path: package
                 .package_id()
@@ -198,27 +237,13 @@ impl BuildGraph {
     }
 
     fn new(
-        args: &ResolveBuildGraphArgs,
-        ws_resolve: WorkspaceResolve,
-        target_data: &RustcTargetData,
-        target: CompileKind,
+        resolve: &WorkspaceResolve,
+        root_id: PackageId,
     ) -> Result<Self, ResolveBuildGraphError> {
-        let root_id = ws_resolve
-            .targeted_resolve
-            .iter()
-            .find(|id| id.name().as_str() == args.package)
-            .expect("root package not found in workspace resolve");
-
         let mut this =
             Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
 
-        Self::build_recursive(
-            &mut this,
-            root_id,
-            &ws_resolve,
-            target_data,
-            target,
-        );
+        Self::build_recursive(&mut this, root_id, resolve);
 
         Ok(this)
     }

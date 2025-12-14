@@ -5,11 +5,14 @@ use core::ops::Not;
 use std::collections::{HashMap, hash_map};
 
 use cargo::core::compiler::CrateType;
+use cargo::core::dependency::DepKind;
 use cargo::core::manifest::TargetSourcePath;
-use cargo::core::{Package, PackageId, Resolve, Target, TargetKind};
+use cargo::core::{Package, PackageId, Target, TargetKind};
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use nix_bindings::prelude::*;
+
+use crate::resolve_build_graph::WorkspaceResolve;
 
 /// The crate-specific arguments accepted by
 /// [`pkgs.buildRustCrate`][buildRustCrate].
@@ -126,7 +129,7 @@ pub(crate) struct SourceId<'a> {
 
 impl BuildCrateArgs {
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn new(package: &Package, resolve: &Resolve) -> Self {
+    pub(crate) fn new(package: &Package, resolve: &WorkspaceResolve) -> Self {
         let manifest = package.manifest();
         let metadata = manifest.metadata();
         let package_id = package.package_id();
@@ -168,11 +171,7 @@ impl BuildCrateArgs {
             edition: Some(manifest.edition().to_compact_string()),
             extra_rustc_opts: Vec::new(),
             extra_rustc_opts_for_build_rs: Vec::new(),
-            features: resolve
-                .features(package_id)
-                .iter()
-                .map(|feat| feat.as_str().into())
-                .collect(),
+            features: resolve.features(package_id).map(Into::into).collect(),
             homepage: metadata.homepage.as_deref().map(Into::into),
             lib_crate_types: lib_target
                 .map_or(&[][..], |(_target, crate_types)| crate_types)
@@ -222,13 +221,17 @@ impl BuildCrateArgs {
 
     fn new_crate_renames(
         package_id: PackageId,
-        resolve: &Resolve,
+        resolve: &WorkspaceResolve,
     ) -> HashMap<CompactString, CrateRename> {
         let mut renames = HashMap::new();
 
         for (_dep_id, dep_set) in resolve.deps(package_id) {
             for dep in dep_set {
-                // TODO: skip dependency if it doesn't match target platform.
+                // Skip dev-dependencies since we're not building tests.
+                if dep.kind() == DepKind::Development {
+                    continue;
+                }
+
                 let Some(name_in_toml) = dep.explicit_name_in_toml() else {
                     continue;
                 };
