@@ -314,8 +314,6 @@ impl PartialOrd for SourceId<'_> {
 
 impl Ord for SourceId<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.name
-            .cmp(&other.name)
-            .then_with(|| self.version.cmp(&other.version))
+        self.name.cmp(other.name).then_with(|| self.version.cmp(other.version))
     }
 }

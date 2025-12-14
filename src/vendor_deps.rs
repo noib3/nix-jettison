@@ -66,7 +66,7 @@ impl VendorDeps {
     pub(crate) fn read_cargo_lock(
         cargo_lock_path: &Path,
     ) -> Result<String, VendorDepsError> {
-        fs::read_to_string(&cargo_lock_path).map_err(|err| {
+        fs::read_to_string(cargo_lock_path).map_err(|err| {
             VendorDepsError::ReadCargoLock {
                 path: cargo_lock_path.to_owned(),
                 err,
@@ -134,9 +134,7 @@ directory = "."
             // Make sure the entries returned by the iterator are already
             // sorted by source ID, so that we can just push to the vector.
             debug_assert!(
-                sources
-                    .last()
-                    .map_or(true, |last: &Source| last.id < source_id)
+                sources.last().is_none_or(|last: &Source| last.id < source_id)
             );
 
             sources.push(Source { id: source_id, derivation });
@@ -193,7 +191,7 @@ impl<'lock> RegistrySource<'lock> {
         ctx: &mut Context,
     ) -> Result<Thunk<'static>, NixError> {
         thread_local! {
-            static WRAP: OnceCell<NixLambda<'static>> = OnceCell::new();
+            static WRAP: OnceCell<NixLambda<'static>> = const { OnceCell::new() };
         }
 
         match self.kind {
@@ -243,7 +241,7 @@ impl GitSource<'_> {
         ctx: &mut Context,
     ) -> Result<Thunk<'static>, NixError> {
         thread_local! {
-            static WRAP: OnceCell<NixLambda<'static>> = OnceCell::new();
+            static WRAP: OnceCell<NixLambda<'static>> = const { OnceCell::new() };
         }
 
         let r#ref = self.r#ref.and_then(GitSourceRef::format_for_fetch_git);

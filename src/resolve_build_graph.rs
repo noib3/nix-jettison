@@ -132,13 +132,13 @@ impl BuildGraph {
         )
         .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
 
-        Self::new(&args, workspace_resolve, &target_data, target)
+        Self::new(args, workspace_resolve, &target_data, target)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_recursive(
         this: &mut Self,
         pkg_id: PackageId,
-        args: &ResolveBuildGraphArgs,
         ws_resolve: &WorkspaceResolve,
         target_data: &RustcTargetData,
         target: CompileKind,
@@ -156,7 +156,6 @@ impl BuildGraph {
             let dep_idx = Self::build_recursive(
                 this,
                 dep_id,
-                args,
                 ws_resolve,
                 target_data,
                 target,
@@ -216,7 +215,6 @@ impl BuildGraph {
         Self::build_recursive(
             &mut this,
             root_id,
-            args,
             &ws_resolve,
             target_data,
             target,
