@@ -180,7 +180,7 @@ impl Function for BuildPackage {
             cargo: cargo_is_forbidden,
             release: args.release,
         }
-        .merge(args.rustc.map(|rustc| attrset! { rustc }));
+        .merge(args.rustc.map(|rustc| attrset! { rust: rustc }));
 
         let mut build_crates: Vec<Thunk<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
