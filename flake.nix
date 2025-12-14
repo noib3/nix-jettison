@@ -2,12 +2,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    crate2nix = {
-      url = "github:nix-community/crate2nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-parts.follows = "flake-parts";
-    };
-
     flake-parts.url = "github:hercules-ci/flake-parts";
 
     rust-overlay = {
@@ -29,7 +23,6 @@
       imports = [
         ./nix/lib.nix
         ./nix/packages.nix
-        ./nix/packages2.nix
         ./nix/repl.nix
         ./nix/shell.nix
       ];
