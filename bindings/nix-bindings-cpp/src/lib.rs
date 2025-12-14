@@ -15,6 +15,7 @@ use nix_bindings_sys::{
     Value,
     c_context,
     err,
+    realised_string,
 };
 
 /// Opaque type representing an attribute set iterator.
@@ -142,6 +143,19 @@ unsafe extern "C" {
     ///
     /// This frees the builder automatically.
     pub fn make_list(ret: *mut Value, builder: *mut ListBuilder);
+}
+
+// String realization (IFD).
+unsafe extern "C" {
+    /// Realise a string value, building any derivations in its context.
+    ///
+    /// This is what `nix_string_realise` SHOULD do, but it segfaults.
+    pub fn string_realise(
+        context: *mut c_context,
+        state: *mut EvalState,
+        value: *mut Value,
+        isIFD: bool,
+    ) -> *mut realised_string;
 }
 
 // Values.

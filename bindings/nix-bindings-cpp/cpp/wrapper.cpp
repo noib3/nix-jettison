@@ -1,7 +1,10 @@
-#include "nix/expr/primops.hh"
 #include "nix/expr/eval.hh"
-#include "nix_api_util_internal.h"
+#include "nix/expr/primops.hh"
 #include "nix_api_expr.h"
+#include "nix_api_expr_internal.h"
+#include "nix_api_util_internal.h"
+#include "nix_api_value.h"
+#include "nix_api_store_internal.h"
 
 // Attrsets.
 
@@ -104,6 +107,30 @@ extern "C" void list_builder_insert(nix::ListBuilder* builder, size_t index, nix
 extern "C" void make_list(nix::Value* v, nix::ListBuilder* builder) {
     v->mkList(*builder);
     delete builder;
+}
+
+// String realization (IFD).
+
+extern "C" nix_realised_string* string_realise(
+    nix_c_context* context,
+    nix::EvalState* state,
+    nix::Value* value,
+    bool isIFD
+) {
+    if (context)
+        context->last_err_code = NIX_OK;
+    try {
+        nix::StorePathSet storePaths;
+        auto s = state->realiseString(*value, &storePaths, isIFD);
+
+        std::vector<StorePath> vec;
+        for (auto & sp : storePaths) {
+            vec.push_back(StorePath{sp});
+        }
+
+        return new nix_realised_string{.str = s, .storePaths = vec};
+    }
+    NIXC_CATCH_ERRS_NULL
 }
 
 // Values.

@@ -377,7 +377,7 @@ impl NixDerivation<'_> {
         let string_drv = ctx.eval::<NixLambda>(expr)?.call(self.inner, ctx)?;
         let value = string_drv.into_inner();
         let realised_str = ctx.with_raw_and_state(|ctx, state| unsafe {
-            sys::string_realise(ctx, state.as_ptr(), value.as_raw(), true)
+            cpp::string_realise(ctx, state.as_ptr(), value.as_raw(), true)
         })?;
         unsafe {
             sys::realised_string_free(realised_str);
