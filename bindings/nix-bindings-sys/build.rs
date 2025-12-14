@@ -32,6 +32,7 @@ fn main() {
         .expect("Could not find nix-util-c via pkg-config");
 
     let mut builder = bindgen::Builder::default()
+        .use_core()
         .formatter(bindgen::Formatter::Rustfmt)
         .rustfmt_configuration_file(
             std::fs::canonicalize("../rustfmt.toml").ok(),
