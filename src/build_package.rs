@@ -156,6 +156,8 @@ impl Function for BuildPackage {
 
         let vendor_dir_drv = vendored_sources.to_dir(args.pkgs, ctx)?;
 
+        vendor_dir_drv.realise(ctx)?;
+
         let resolve_build_graph_args = ResolveBuildGraphArgs {
             vendor_dir: vendor_dir_drv.out_path(ctx)?.into(),
             src: args.src,

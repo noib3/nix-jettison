@@ -33,6 +33,12 @@ impl<'a> Thunk<'a> {
 
     /// TODO: docs.
     #[inline(always)]
+    pub fn into_inner(self) -> NixValue<'a> {
+        self.value
+    }
+
+    /// TODO: docs.
+    #[inline(always)]
     pub fn into_lazy<T>(self) -> impl Lazy<T>
     where
         T: TryFromValue<NixValue<'a>>,

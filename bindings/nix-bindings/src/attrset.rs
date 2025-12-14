@@ -18,7 +18,15 @@ use {nix_bindings_cpp as cpp, nix_bindings_sys as sys};
 use crate::context::EvalState;
 use crate::error::{Error, ErrorKind, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
-use crate::prelude::{Context, Result, Utf8CStr, Value, ValueKind};
+use crate::prelude::{
+    Callable,
+    Context,
+    NixLambda,
+    Result,
+    Utf8CStr,
+    Value,
+    ValueKind,
+};
 #[cfg(feature = "std")]
 use crate::value::ToValue;
 use crate::value::{FnOnceValue, NixValue, TryFromValue, Values};
@@ -200,6 +208,12 @@ pub struct LiteralAttrset<Keys, Values> {
     values: Values,
 }
 
+/// TODO: docs.
+#[derive(Copy, Clone)]
+pub struct NixDerivation<'attr> {
+    inner: NixAttrset<'attr>,
+}
+
 /// The attribute set type created by [`concat`](Attrset::concat)enating two
 /// attribute sets.
 pub struct Concat<Left, Right> {
@@ -215,12 +229,6 @@ pub struct Merge<Left, Right> {
     /// The conflicting keys between `left` and `right`, sorted in ascending
     /// order.
     conflicts: OnceCell<Vec<CString>>,
-}
-
-/// TODO: docs.
-#[derive(Copy, Clone)]
-pub struct NixDerivation<'attr> {
-    inner: NixAttrset<'attr>,
 }
 
 /// The type of error returned when an expected attribute is missing from
@@ -358,6 +366,23 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
             }
         }
         self.keys.with_key(idx, GetKey)
+    }
+}
+
+impl NixDerivation<'_> {
+    /// TODO: docs.
+    #[inline]
+    pub fn realise(&self, ctx: &mut Context) -> Result<()> {
+        let expr = c"drv: \"${drv}\"";
+        let string_drv = ctx.eval::<NixLambda>(expr)?.call(self.inner, ctx)?;
+        let value = string_drv.into_inner();
+        let realised_str = ctx.with_raw_and_state(|ctx, state| unsafe {
+            sys::string_realise(ctx, state.as_ptr(), value.as_raw(), true)
+        })?;
+        unsafe {
+            sys::realised_string_free(realised_str);
+        }
+        Ok(())
     }
 }
 
