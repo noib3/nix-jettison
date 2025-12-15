@@ -139,7 +139,7 @@ impl<'ws> WorkspaceResolve<'ws> {
     }
 
     fn new(
-        workspace: Workspace<'ws>,
+        workspace: &Workspace<'ws>,
         args: &ResolveBuildGraphArgs,
     ) -> Result<Self, ResolveBuildGraphError> {
         let target = args.compile_target()?;
@@ -182,13 +182,14 @@ impl BuildGraph {
             })
             .expect("root package not found in workspace");
 
-        let resolve = WorkspaceResolve::new(workspace, args)?;
+        let resolve = WorkspaceResolve::new(&workspace, args)?;
 
-        Self::new(&resolve, package_id)
+        Self::new(&workspace, package_id, &resolve)
     }
 
     fn build_recursive(
         this: &mut Self,
+        workspace: &Workspace,
         pkg_id: PackageId,
         resolve: &WorkspaceResolve,
     ) -> usize {
@@ -203,7 +204,8 @@ impl BuildGraph {
             // TODO: shouldn't this go inside the loop below? The dep_set is an
             // iterator bc the same dependency can be under `[dependencies]`,
             // `[build-dependencies]`, and `[dev-dependencies]`.
-            let dep_idx = Self::build_recursive(this, dep_id, resolve);
+            let dep_idx =
+                Self::build_recursive(this, workspace, dep_id, resolve);
 
             for dep in dep_set {
                 match dep.kind() {
@@ -219,7 +221,7 @@ impl BuildGraph {
             .expect("package ID not found in workspace");
 
         let build_crate_args = BuildGraphNode {
-            args: BuildCrateArgs::new(package, resolve),
+            args: BuildCrateArgs::new(workspace, package, resolve),
             dependencies,
             local_source_path: package
                 .package_id()
@@ -237,14 +239,13 @@ impl BuildGraph {
     }
 
     fn new(
-        resolve: &WorkspaceResolve,
+        workspace: &Workspace,
         root_id: PackageId,
+        resolve: &WorkspaceResolve,
     ) -> Result<Self, ResolveBuildGraphError> {
         let mut this =
             Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
-
-        Self::build_recursive(&mut this, root_id, resolve);
-
+        Self::build_recursive(&mut this, workspace, root_id, resolve);
         Ok(this)
     }
 }
