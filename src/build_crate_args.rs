@@ -34,10 +34,12 @@ pub(crate) struct BuildCrateArgs {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) codegen_units: Option<u32>,
 
-    /// This is derived state from the Cargo.toml/source structure of the
-    /// crate.
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) crate_bin: Option<Null>,
+    /// NOTE: this field should always be kept, even if empty. Not setting it
+    /// will cause `buildRustCrate` to go looking for binaries to build under
+    /// `src/main.rs` and `src/bin`. See [this][source] for details.
+    ///
+    /// [source]: https://github.com/NixOS/nixpkgs/blob/d792a6e0cd4ba35c90ea787b717d72410f56dc40/pkgs/build-support/rust/build-rust-crate/build-crate.nix#L146-L157
+    pub(crate) crate_bin: Vec<CrateBinInfos>,
 
     /// TODO: docs.
     pub(crate) crate_name: CompactString,
@@ -100,8 +102,17 @@ pub(crate) struct BuildCrateArgs {
     pub(crate) version: CompactString,
 
     /// TODO: docs.
-    #[attrset(skip_if = Option::is_none)]
+    #[attrset(rename = "workspace_member", skip_if = Option::is_none)]
     pub(crate) workspace_member: Option<CompactString>,
+}
+
+#[derive(nix_bindings::Attrset)]
+#[attrset(rename_all = camelCase)]
+pub(crate) struct CrateBinInfos {
+    name: CompactString,
+    path: CompactString,
+    #[attrset(skip_if = Vec::is_empty)]
+    required_features: Vec<CompactString>,
 }
 
 #[derive(nix_bindings::Value)]
@@ -168,7 +179,11 @@ impl BuildCrateArgs {
                     TomlPackageBuild::MultipleScript(_) => None,
                 }),
             codegen_units: None,
-            crate_bin: None,
+            // Only set crate_bin for the root package, as only the root
+            // package's binaries should be built.
+            crate_bin: (&package_id == resolve.root_id())
+                .then(|| Self::new_crate_bin(package))
+                .unwrap_or_default(),
             crate_name: CompactString::const_new(package.name().as_str()),
             crate_renames: Self::new_crate_renames(package_id, resolve),
             // Replace newlines and escape double quotes because buildRustCrate
@@ -244,6 +259,39 @@ impl BuildCrateArgs {
 
     pub(crate) fn source_id(&self) -> SourceId<'_> {
         SourceId { name: &self.crate_name, version: &self.version }
+    }
+
+    fn new_crate_bin(package: &Package) -> Vec<CrateBinInfos> {
+        package
+            .targets()
+            .iter()
+            .filter_map(|target| match target.src_path() {
+                TargetSourcePath::Path(src_path) => {
+                    target.is_bin().then(|| (target, &**src_path))
+                },
+                TargetSourcePath::Metabuild => None,
+            })
+            .map(|(target, src_path)| {
+                let path = src_path
+                    .strip_prefix(package.root())
+                    .expect("binary path is under package root")
+                    .display()
+                    .to_compact_string();
+
+                let required_features = target
+                    .required_features()
+                    .iter()
+                    .flat_map(|feats| feats.iter())
+                    .map(|feat| (**feat).into())
+                    .collect();
+
+                CrateBinInfos {
+                    name: target.name().into(),
+                    path,
+                    required_features,
+                }
+            })
+            .collect()
     }
 
     fn new_crate_renames(

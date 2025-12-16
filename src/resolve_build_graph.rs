@@ -64,6 +64,7 @@ pub(crate) struct BuildGraphNode<Dep> {
 
 pub(crate) struct WorkspaceResolve<'a> {
     inner: ops::WorkspaceResolve<'a>,
+    package_id: PackageId,
     target_data: RustcTargetData<'a>,
     target: CompileKind,
 }
@@ -148,6 +149,11 @@ impl<'ws> WorkspaceResolve<'ws> {
         self.inner.targeted_resolve.features(pkg_id).iter().map(|s| s.as_str())
     }
 
+    /// The [`PackageId`] of the package at the root of the build graph.
+    pub(crate) fn root_id(&self) -> &PackageId {
+        &self.package_id
+    }
+
     fn get_package(&self, pkg_id: PackageId) -> Option<&cargo::core::Package> {
         self.inner.pkg_set.get_one(pkg_id).ok()
     }
@@ -174,7 +180,7 @@ impl<'ws> WorkspaceResolve<'ws> {
         )
         .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
 
-        Ok(Self { inner, target_data, target })
+        Ok(Self { inner, package_id, target_data, target })
     }
 }
 
