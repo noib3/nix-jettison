@@ -21,9 +21,6 @@ pub(crate) struct BuildPackage;
 #[args(flatten, name = "args")]
 #[try_from(rename_all = camelCase)]
 pub(crate) struct BuildPackageArgs<'a> {
-    /// The package's name.
-    package: CompactString,
-
     /// The package set to use.
     pkgs: NixAttrset<'a>,
 
@@ -55,6 +52,10 @@ pub(crate) struct BuildPackageArgs<'a> {
     /// with the `--no-default-features` CLI flag).
     #[try_from(default)]
     no_default_features: bool,
+
+    /// The package's name.
+    #[try_from(default)]
+    package: Option<CompactString>,
 
     /// TODO: docs.
     #[try_from(default = true)]

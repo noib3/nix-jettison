@@ -29,7 +29,6 @@
           buildInputs = common.mkBuildInputs targetPkgs;
           env = common.mkEnv targetPkgs;
           jettison = self.lib.buildPackage {
-            package = packageName;
             pkgs = targetPkgs;
             src = ../.;
             crateOverrides = targetPkgs.defaultCrateOverrides // {

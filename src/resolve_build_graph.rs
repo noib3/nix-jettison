@@ -8,7 +8,7 @@ use std::{env, io};
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::dependency::DepKind;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{Dependency, PackageId, PackageIdSpec, Shell, Workspace};
+use cargo::core::{Dependency, MaybePackage, PackageId, Shell, Workspace};
 use cargo::{GlobalContext, ops};
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
@@ -26,28 +26,29 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The path to the root of the workspace the package is in.
     pub(crate) src: &'a Path,
 
-    /// The package's name.
-    pub(crate) package: CompactString,
-
     /// The path to the directory where dependencies have been vendored.
     ///
     /// This can be obtained by calling `jettison.vendorDeps { ... }`.
     #[try_from(with = get_vendor_dir)]
     pub(crate) vendor_dir: Cow<'a, Path>,
 
-    /// The list of the package's features to enable.
-    #[try_from(default)]
-    pub(crate) features: Vec<String>,
-
     /// Whether to enable all features (equivalent to calling Cargo with the
     /// `--all-features` CLI flag).
     #[try_from(default)]
     pub(crate) all_features: bool,
 
+    /// The list of the package's features to enable.
+    #[try_from(default)]
+    pub(crate) features: Vec<String>,
+
     /// Whether to disable the default features (equivalent to calling Cargo
     /// with the `--no-default-features` CLI flag).
     #[try_from(default)]
     pub(crate) no_default_features: bool,
+
+    /// The package's name.
+    #[try_from(default)]
+    pub(crate) package: Option<CompactString>,
 }
 
 pub(crate) struct BuildGraph {
@@ -84,6 +85,11 @@ pub(crate) enum ResolveBuildGraphError {
     #[display("couldn't get the current directory of the process: {_0}")]
     GetCwd(io::Error),
 
+    /// The `package` argument provided by the user didn't match the name of
+    /// any package in the workspace.
+    #[display("no package named '{_0}' found in the workspace")]
+    InvalidPackageName(CompactString),
+
     /// A Nix runtime error occurred.
     Nix(#[from] NixError),
 
@@ -92,6 +98,14 @@ pub(crate) enum ResolveBuildGraphError {
 
     /// Resolving the [`Workspace`] failed.
     ResolveWorkspace(anyhow::Error),
+
+    /// The user didn't specify a package name, and the workspace manifest is a
+    /// virtual manifest with no root package.
+    #[display(
+        "couldn't determine the root package: no `package` was set, and the \
+         workspace has a virtual manifest with no root package'"
+    )]
+    VirtualManifestNoRootPackage,
 }
 
 impl ResolveBuildGraphArgs<'_> {
@@ -140,6 +154,7 @@ impl<'ws> WorkspaceResolve<'ws> {
 
     fn new(
         workspace: &Workspace<'ws>,
+        package_id: PackageId,
         args: &ResolveBuildGraphArgs,
     ) -> Result<Self, ResolveBuildGraphError> {
         let target = args.compile_target()?;
@@ -152,7 +167,7 @@ impl<'ws> WorkspaceResolve<'ws> {
             &mut target_data,
             &[target],
             &args.features()?,
-            &[PackageIdSpec::new(args.package.clone().into())],
+            &[package_id.to_spec()],
             HasDevUnits::No,
             ForceAllTargets::No,
             true,
@@ -174,15 +189,28 @@ impl BuildGraph {
         let workspace = Workspace::new(&manifest_path, &cargo_ctx)
             .map_err(ResolveBuildGraphError::CreateWorkspace)?;
 
-        let package_id = workspace
-            .members()
-            .find_map(|package| {
-                (package.name().as_str() == args.package)
-                    .then(|| package.package_id())
-            })
-            .expect("root package not found in workspace");
+        let package =
+            match args.package.as_deref() {
+                Some(package_name) => workspace
+                    .members()
+                    .find(|package| package.name() == package_name)
+                    .ok_or_else(|| {
+                        ResolveBuildGraphError::InvalidPackageName(
+                            package_name.into(),
+                        )
+                    })?,
 
-        let resolve = WorkspaceResolve::new(&workspace, args)?;
+                None => match workspace.root_maybe() {
+                    MaybePackage::Package(package) => package,
+                    MaybePackage::Virtual(_) => return Err(
+                        ResolveBuildGraphError::VirtualManifestNoRootPackage,
+                    ),
+                },
+            };
+
+        let package_id = package.package_id();
+
+        let resolve = WorkspaceResolve::new(&workspace, package_id, args)?;
 
         Self::new(&workspace, package_id, &resolve)
     }
