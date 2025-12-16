@@ -24,6 +24,8 @@ pub(crate) struct BuildCrateArgs {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
+    /// The path to the build script from the root of the crate. `None` if
+    /// there's no build script or if its path is just the default `build.rs`.
     #[attrset(skip_if = Option::is_none)]
     pub(crate) build: Option<CompactString>,
 
@@ -160,7 +162,9 @@ impl BuildCrateArgs {
                 .and_then(|pkg| pkg.build.as_ref())
                 .and_then(|pkg_build| match pkg_build {
                     TomlPackageBuild::Auto(_) => None,
-                    TomlPackageBuild::SingleScript(str) => Some((**str).into()),
+                    TomlPackageBuild::SingleScript(str) => {
+                        (str != "build.rs").then(|| (**str).into())
+                    },
                     TomlPackageBuild::MultipleScript(_) => None,
                 }),
             codegen_units: None,
