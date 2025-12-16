@@ -7,7 +7,7 @@ use std::collections::{HashMap, hash_map};
 use cargo::core::compiler::CrateType;
 use cargo::core::dependency::DepKind;
 use cargo::core::manifest::TargetSourcePath;
-use cargo::core::{Package, PackageId, Target, TargetKind, Workspace};
+use cargo::core::{Package, PackageId, Target, TargetKind};
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use nix_bindings::prelude::*;
@@ -101,7 +101,9 @@ pub(crate) struct BuildCrateArgs {
     /// TODO: docs.
     pub(crate) version: CompactString,
 
-    /// TODO: docs.
+    /// TODO: this is used by `buildRustCrate` to `cd` from the `src`
+    /// directory. We should only set for Git dependencies when the path from
+    /// the repo's root to the package root is non-empty.
     #[attrset(rename = "workspace_member", skip_if = Option::is_none)]
     pub(crate) workspace_member: Option<CompactString>,
 }
@@ -146,11 +148,7 @@ pub(crate) struct SourceId<'a> {
 
 impl BuildCrateArgs {
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn new(
-        workspace: &Workspace,
-        package: &Package,
-        resolve: &WorkspaceResolve,
-    ) -> Self {
+    pub(crate) fn new(package: &Package, resolve: &WorkspaceResolve) -> Self {
         let manifest = package.manifest();
         let metadata = manifest.metadata();
         let package_id = package.package_id();
@@ -243,17 +241,7 @@ impl BuildCrateArgs {
                 .as_ref()
                 .map(|v| v.to_compact_string()),
             version: package.version().to_compact_string(),
-            workspace_member: if workspace.is_member_id(package_id) {
-                let path_in_workspace = package
-                    .root()
-                    .strip_prefix(workspace.root())
-                    .expect("package root is under workspace root");
-
-                (!path_in_workspace.as_os_str().is_empty())
-                    .then(|| path_in_workspace.display().to_compact_string())
-            } else {
-                None
-            },
+            workspace_member: None,
         }
     }
 

@@ -218,12 +218,11 @@ impl BuildGraph {
 
         let resolve = WorkspaceResolve::new(&workspace, package_id, args)?;
 
-        Self::new(&workspace, package_id, &resolve)
+        Self::new(package_id, &resolve)
     }
 
     fn build_recursive(
         this: &mut Self,
-        workspace: &Workspace,
         pkg_id: PackageId,
         resolve: &WorkspaceResolve,
     ) -> usize {
@@ -238,8 +237,7 @@ impl BuildGraph {
             // TODO: shouldn't this go inside the loop below? The dep_set is an
             // iterator bc the same dependency can be under `[dependencies]`,
             // `[build-dependencies]`, and `[dev-dependencies]`.
-            let dep_idx =
-                Self::build_recursive(this, workspace, dep_id, resolve);
+            let dep_idx = Self::build_recursive(this, dep_id, resolve);
 
             for dep in dep_set {
                 match dep.kind() {
@@ -255,7 +253,7 @@ impl BuildGraph {
             .expect("package ID not found in workspace");
 
         let build_crate_args = BuildGraphNode {
-            args: BuildCrateArgs::new(workspace, package, resolve),
+            args: BuildCrateArgs::new(package, resolve),
             dependencies,
             local_source_path: package
                 .package_id()
@@ -273,13 +271,12 @@ impl BuildGraph {
     }
 
     fn new(
-        workspace: &Workspace,
         root_id: PackageId,
         resolve: &WorkspaceResolve,
     ) -> Result<Self, ResolveBuildGraphError> {
         let mut this =
             Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
-        Self::build_recursive(&mut this, workspace, root_id, resolve);
+        Self::build_recursive(&mut this, root_id, resolve);
         Ok(this)
     }
 }
