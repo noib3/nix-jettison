@@ -16,8 +16,12 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    nix.settings.plugin-files = [
-      self.packages.${pkgs.stdenv.hostPlatform.system}.default
-    ];
+    nix.settings.plugin-files =
+      let
+        packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+      in
+      [
+        (if builtins ? jettison then packages.default else packages.bootstrapped)
+      ];
   };
 }
