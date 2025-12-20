@@ -7,6 +7,7 @@ use std::{env, io};
 
 use cargo::core::compiler::{CompileKind, RustcTargetData};
 use cargo::core::dependency::DepKind;
+use cargo::core::profiles::Profiles;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
 use cargo::core::{Dependency, MaybePackage, PackageId, Shell, Workspace};
 use cargo::{GlobalContext, ops};
@@ -49,6 +50,10 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The package's name.
     #[try_from(default)]
     pub(crate) package: Option<CompactString>,
+
+    /// The profile to use when building the package.
+    #[try_from(default = CompactString::const_new("release"))]
+    pub(crate) profile: CompactString,
 }
 
 pub(crate) struct BuildGraph {
@@ -62,11 +67,13 @@ pub(crate) struct BuildGraphNode<Dep> {
     pub(crate) local_source_path: Option<PathBuf>,
 }
 
-pub(crate) struct WorkspaceResolve<'a> {
-    inner: ops::WorkspaceResolve<'a>,
+pub(crate) struct WorkspaceResolve<'ws> {
+    inner: ops::WorkspaceResolve<'ws>,
     package_id: PackageId,
-    target_data: RustcTargetData<'a>,
+    profiles: Profiles,
+    target_data: RustcTargetData<'ws>,
     target: CompileKind,
+    workspace: Workspace<'ws>,
 }
 
 /// The type of error that can occur when resolving a build graph fails.
@@ -96,6 +103,9 @@ pub(crate) enum ResolveBuildGraphError {
 
     /// Parsing the features failed.
     ParseFeatures(anyhow::Error),
+
+    /// Creating the [`Profiles`] failed.
+    ResolveProfiles(anyhow::Error),
 
     /// Resolving the [`Workspace`] failed.
     ResolveWorkspace(anyhow::Error),
@@ -149,9 +159,22 @@ impl<'ws> WorkspaceResolve<'ws> {
         self.inner.targeted_resolve.features(pkg_id).iter().map(|s| s.as_str())
     }
 
+    pub(crate) fn profiles(&self) -> &Profiles {
+        &self.profiles
+    }
+
+    /// The [`CompileKind`] for the root of the build graph.
+    pub(crate) fn root_compile_kind(&self) -> CompileKind {
+        self.target
+    }
+
     /// The [`PackageId`] of the package at the root of the build graph.
     pub(crate) fn root_id(&self) -> &PackageId {
         &self.package_id
+    }
+
+    pub(crate) fn workspace(&self) -> &Workspace<'ws> {
+        &self.workspace
     }
 
     fn get_package(&self, pkg_id: PackageId) -> Option<&cargo::core::Package> {
@@ -159,7 +182,7 @@ impl<'ws> WorkspaceResolve<'ws> {
     }
 
     fn new(
-        workspace: &Workspace<'ws>,
+        workspace: Workspace<'ws>,
         package_id: PackageId,
         args: &ResolveBuildGraphArgs,
     ) -> Result<Self, ResolveBuildGraphError> {
@@ -180,7 +203,10 @@ impl<'ws> WorkspaceResolve<'ws> {
         )
         .map_err(ResolveBuildGraphError::ResolveWorkspace)?;
 
-        Ok(Self { inner, package_id, target_data, target })
+        let profiles = Profiles::new(&workspace, args.profile.as_str().into())
+            .map_err(ResolveBuildGraphError::ResolveProfiles)?;
+
+        Ok(Self { inner, package_id, profiles, target_data, target, workspace })
     }
 }
 
@@ -216,7 +242,7 @@ impl BuildGraph {
 
         let package_id = package.package_id();
 
-        let resolve = WorkspaceResolve::new(&workspace, package_id, args)?;
+        let resolve = WorkspaceResolve::new(workspace, package_id, args)?;
 
         Self::new(package_id, &resolve)
     }

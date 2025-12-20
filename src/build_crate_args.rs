@@ -4,9 +4,10 @@ use core::mem;
 use core::ops::Not;
 use std::collections::{HashMap, hash_map};
 
-use cargo::core::compiler::CrateType;
+use cargo::core::compiler::{CompileKind, CrateType};
 use cargo::core::dependency::DepKind;
 use cargo::core::manifest::TargetSourcePath;
+use cargo::core::profiles::UnitFor;
 use cargo::core::{Package, PackageId, Target, TargetKind};
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
@@ -163,6 +164,20 @@ impl BuildCrateArgs {
                 _ => None,
             });
 
+        let proc_macro = package.targets().iter().any(Target::proc_macro);
+
+        let profile = resolve.profiles().get_profile(
+            package_id,
+            resolve.workspace().is_member_id(package_id),
+            package_id.source_id().is_path(),
+            UnitFor::new_normal(resolve.root_compile_kind()),
+            if proc_macro {
+                CompileKind::Host
+            } else {
+                resolve.root_compile_kind()
+            },
+        );
+
         Self {
             authors: metadata.authors.clone(),
             build: manifest
@@ -176,7 +191,7 @@ impl BuildCrateArgs {
                     },
                     TomlPackageBuild::MultipleScript(_) => None,
                 }),
-            codegen_units: None,
+            codegen_units: profile.codegen_units,
             // Only set crate_bin for the root package, as only the root
             // package's binaries should be built.
             crate_bin: (&package_id == resolve.root_id())
@@ -233,7 +248,7 @@ impl BuildCrateArgs {
                 }),
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
-            proc_macro: package.targets().iter().any(Target::proc_macro),
+            proc_macro,
             readme: metadata.readme.as_deref().map(Into::into),
             repository: metadata.repository.as_deref().map(Into::into),
             rust_version: metadata

@@ -160,12 +160,17 @@ impl Function for BuildPackage {
         vendor_dir_drv.realise(ctx)?;
 
         let resolve_build_graph_args = ResolveBuildGraphArgs {
-            vendor_dir: vendor_dir_drv.out_path(ctx)?.into(),
             src: args.src,
-            package: args.package,
-            features: args.features,
+            vendor_dir: vendor_dir_drv.out_path(ctx)?.into(),
             all_features: args.all_features,
+            features: args.features,
             no_default_features: args.no_default_features,
+            package: args.package,
+            profile: CompactString::const_new(if args.release {
+                "release"
+            } else {
+                "dev"
+            }),
         };
 
         let build_graph = BuildGraph::resolve(&resolve_build_graph_args)?;
