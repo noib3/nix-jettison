@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 mod build_crate_args;
+mod build_lib;
 mod build_package;
 mod cargo_lock_parser;
 mod jettison;
