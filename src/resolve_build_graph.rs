@@ -173,6 +173,10 @@ impl<'ws> WorkspaceResolve<'ws> {
         &self.package_id
     }
 
+    pub(crate) fn target_data(&self) -> &RustcTargetData<'ws> {
+        &self.target_data
+    }
+
     pub(crate) fn workspace(&self) -> &Workspace<'ws> {
         &self.workspace
     }

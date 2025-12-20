@@ -164,19 +164,43 @@ impl BuildCrateArgs {
                 _ => None,
             });
 
-        let proc_macro = package.targets().iter().any(Target::proc_macro);
+        let is_for_host =
+            package.targets().iter().any(|target| target.for_host());
+
+        let unit_for = if is_for_host {
+            UnitFor::new_host(true, CompileKind::Host)
+        } else {
+            UnitFor::new_normal(resolve.root_compile_kind())
+        };
+
+        let compile_kind = if is_for_host {
+            CompileKind::Host
+        } else {
+            resolve.root_compile_kind()
+        };
 
         let profile = resolve.profiles().get_profile(
             package_id,
             resolve.workspace().is_member_id(package_id),
             package_id.source_id().is_path(),
-            UnitFor::new_normal(resolve.root_compile_kind()),
-            if proc_macro {
-                CompileKind::Host
-            } else {
-                resolve.root_compile_kind()
-            },
+            unit_for,
+            compile_kind,
         );
+
+        let rustflags = profile
+            .rustflags
+            .iter()
+            .map(|s| s.as_str())
+            .chain(
+                resolve
+                    .target_data()
+                    .get_info(compile_kind)
+                    .map_or(&[][..], |info| &*info.rustflags)
+                    .iter()
+                    .map(|s| &**s),
+            )
+            .map(Into::into)
+            .collect::<Vec<_>>();
 
         Self {
             authors: metadata.authors.clone(),
@@ -209,7 +233,7 @@ impl BuildCrateArgs {
                 .as_deref()
                 .map(|s| s.replace('\n', " ").replace('"', "\\\"").into()),
             edition: Some(manifest.edition().to_compact_string()),
-            extra_rustc_opts: Vec::new(),
+            extra_rustc_opts: rustflags,
             extra_rustc_opts_for_build_rs: Vec::new(),
             features: resolve.features(package_id).map(Into::into).collect(),
             homepage: metadata.homepage.as_deref().map(Into::into),
@@ -248,7 +272,7 @@ impl BuildCrateArgs {
                 }),
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
-            proc_macro,
+            proc_macro: package.targets().iter().any(Target::proc_macro),
             readme: metadata.readme.as_deref().map(Into::into),
             repository: metadata.repository.as_deref().map(Into::into),
             rust_version: metadata
