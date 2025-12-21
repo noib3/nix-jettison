@@ -118,6 +118,10 @@ impl Function for BuildPackage {
             None => args.pkgs.get::<NixDerivation>(c"rustc", ctx)?,
         };
 
+        let build_inputs = &[rustc];
+
+        let native_build_inputs = &[];
+
         let mut build_nodes: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
 
@@ -137,34 +141,31 @@ impl Function for BuildPackage {
             let dependencies =
                 node.dependencies.iter().map(|&idx| build_nodes[idx].clone());
 
-            let node_args = node.args.to_mk_derivation_args(
-                src,
-                &[rustc],
-                &[],
-                dependencies,
-                args.release,
+            let base_args = node
+                .args
+                .to_mk_derivation_args(
+                    src,
+                    build_inputs,
+                    native_build_inputs,
+                    dependencies,
+                    args.release,
+                    ctx,
+                )
+                .merge(args.global_overrides);
+
+            let mk_derivation_args = if let Some(override_fun) = override_fun(
+                &args.crate_overrides,
+                &node.args.package_name,
                 ctx,
-            );
+            )? {
+                let new_attrs = override_fun
+                    .call(Value::borrow(&base_args), ctx)?
+                    .force_into::<NixAttrset>(ctx)?;
 
-            let mut mk_derivation_args =
-                Either::Left(node_args.merge(args.global_overrides));
-
-            if let Some(overrides) = &args.global_overrides {
-                let package_name =
-                    CString::new(node.args.package_name.as_str())
-                        .expect("package name doesn't contain NUL bytes");
-
-                if let Some(lambda) =
-                    overrides.get_opt::<NixLambda>(&*package_name, ctx)?
-                {
-                    let new_attrs = lambda
-                        .call(Value::borrow(&mk_derivation_args), ctx)?
-                        .force_into::<NixAttrset>(ctx)?;
-
-                    mk_derivation_args =
-                        Either::Right(mk_derivation_args.merge(new_attrs));
-                }
-            }
+                Either::Right(base_args.merge(new_attrs))
+            } else {
+                Either::Left(base_args)
+            };
 
             let build_crate_drv =
                 mk_derivation.call(mk_derivation_args, ctx)?.force_into(ctx)?;
@@ -192,4 +193,21 @@ impl From<BuildPackageError> for NixError {
             },
         }
     }
+}
+
+/// Returns the function to call to override the `mkDerivation` arguments
+/// for crates in the given package, if any.
+fn override_fun<'a>(
+    overrides: &Option<NixAttrset<'a>>,
+    package_name: &str,
+    ctx: &mut Context,
+) -> Result<Option<NixLambda<'a>>, NixError> {
+    let Some(overrides) = overrides else {
+        return Ok(None);
+    };
+
+    let package_name_cstr = CString::new(package_name)
+        .expect("package name doesn't contain NUL bytes");
+
+    overrides.get_opt::<NixLambda>(&*package_name_cstr, ctx)
 }
