@@ -149,12 +149,13 @@ enum CrateType<'a> {
     BuildScript(&'a CompactString),
 }
 
-/// TODO: docs.
+/// The attrset used as the `passthru` attribute given to `mkDerivation`.
 #[derive(nix_bindings::Attrset, nix_bindings::TryFromValue)]
 #[attrset(rename_all = camelCase)]
 #[try_from(rename_all = camelCase)]
-struct MkDerivationPassthroughArgs {
+struct PassthruArgs {
     is_proc_macro: bool,
+    #[try_from(default)]
     lib_name: Option<CompactString>,
     package_name: CompactString,
     version: CompactString,
@@ -335,7 +336,7 @@ impl BuildNodeArgs {
             dontStrip: false,
             // See https://github.com/NixOS/nixpkgs/issues/218712.
             stripExclude: [ c"*.rlib" ].into_value(),
-            passthrough: MkDerivationPassthroughArgs {
+            passthru: PassthruArgs {
                 is_proc_macro: self.r#type.is_proc_macro(),
                 lib_name: match &self.r#type {
                     DerivationType::Lib(lib) => Some(lib.name.clone()),
@@ -408,7 +409,7 @@ impl BuildNodeArgs {
             edition_as_str(self.edition),
             "--cap-lints allow", // Suppress all lints from dependencies.
             "--remap-path-prefix $NIX_BUILD_TOP=/",
-            "--colors always",
+            "--color always",
             "--codegen",
             if release { "opt-level=3" } else { "debuginfo=2" },
             "--codegen",
@@ -461,8 +462,8 @@ impl BuildNodeArgs {
             .into_iter()
             .map(|dep_drv| {
                 let dep = dep_drv
-                    .get::<MkDerivationPassthroughArgs>(c"passthrough", ctx)
-                    .expect("dependency must have passthrough args");
+                    .get::<PassthruArgs>(c"passthru", ctx)
+                    .expect("dependency must have passthru args");
 
                 let dep_lib_name = dep
                     .lib_name
