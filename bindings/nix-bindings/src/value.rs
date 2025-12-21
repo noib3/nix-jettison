@@ -935,6 +935,24 @@ impl Value for compact_str::CompactString {
     }
 }
 
+#[cfg(feature = "smallvec")]
+impl<T: ToValue, const N: usize> Value for smallvec::SmallVec<[T; N]> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::List
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.as_slice().write(dest, namespace, ctx) }
+    }
+}
+
 #[cfg(feature = "compact_str")]
 impl TryFromValue<NixValue<'_>> for compact_str::CompactString {
     #[inline]

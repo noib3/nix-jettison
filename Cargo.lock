@@ -2487,6 +2487,7 @@ dependencies = [
  "nix-bindings-macros",
  "nix-bindings-sys",
  "rustc_version",
+ "smallvec",
 ]
 
 [[package]]
@@ -2532,6 +2533,7 @@ dependencies = [
  "memchr",
  "nix-bindings",
  "percent-encoding",
+ "smallvec",
 ]
 
 [[package]]

@@ -28,6 +28,7 @@ percent-encoding = "2"
 pkg-config = "0.3"
 proc-macro2 = "1"
 quote = "1"
+smallvec = "1"
 syn = "2"
 
 # Internal dependencies.
@@ -93,8 +94,14 @@ derive_more = { workspace = true }
 either = { workspace = true }
 indoc = { workspace = true }
 memchr = { workspace = true }
-nix-bindings = { workspace = true, features = ["compact_str", "either", "std"] }
+nix-bindings = { workspace = true, features = [
+  "compact_str",
+  "either",
+  "smallvec",
+  "std",
+] }
 percent-encoding = { workspace = true }
+smallvec = { workspace = true }
 
 [lints]
 workspace = true
