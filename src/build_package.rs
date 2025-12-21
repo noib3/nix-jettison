@@ -111,7 +111,7 @@ impl Function for BuildPackage {
         let mk_derivation = args
             .pkgs
             .get::<NixAttrset>(c"stdenv", ctx)?
-            .get::<NixFunctor>(c"mkDerivation", ctx)?;
+            .get::<NixLambda>(c"mkDerivation", ctx)?;
 
         let rustc = match args.rustc {
             Some(rustc) => rustc,
