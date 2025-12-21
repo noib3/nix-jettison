@@ -248,7 +248,7 @@ impl BuildNodeArgs {
         let metadata = manifest.metadata();
 
         let args = Self {
-            // These fields are the same across all units.
+            // These fields are the same across all nodes in the same package.
             authors: metadata.authors.clone(),
             description: metadata.description.clone(),
             edition: manifest.edition(),
@@ -263,7 +263,7 @@ impl BuildNodeArgs {
                 .as_ref()
                 .map(|v| v.to_compact_string()),
             version: package.version().to_compact_string(),
-            // These fields differ across units. We're initializing them to
+            // These fields differ across nodes. We're initializing them to
             // dummy values here, and will override them below.
             codegen_units: Default::default(),
             crate_renames: Default::default(),
@@ -283,15 +283,22 @@ impl BuildNodeArgs {
         SourceId { package_name: &self.package_name, version: &self.version }
     }
 
-    pub(crate) fn to_mk_derivation_args<'dep, Src: Value, Drv: ToValue>(
-        &self,
+    pub(crate) fn to_mk_derivation_args<
+        'this,
+        'input,
+        'dep,
+        Src: Value,
+        Drv: ToValue,
+        Deps: Iterator<Item = NixDerivation<'dep>> + Clone,
+    >(
+        &'this self,
         src: Src,
-        build_inputs: &[Drv],
-        native_build_inputs: &[Drv],
-        dependencies: impl Iterator<Item = NixDerivation<'dep>> + Clone,
+        build_inputs: &'input [Drv],
+        native_build_inputs: &'input [Drv],
+        dependencies: Deps,
         release: bool,
         ctx: &mut Context,
-    ) -> impl Attrset + Value {
+    ) -> impl Attrset + Value + use<'this, 'dep, 'input, Src, Drv, Deps> {
         let name_suffix = match &self.r#type {
             DerivationType::Bin(_) => "bin",
             DerivationType::Lib(_) => "lib",

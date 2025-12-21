@@ -1,5 +1,4 @@
 use core::result::Result;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -27,11 +26,11 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The path to the root of the workspace the package is in.
     pub(crate) src: &'a Path,
 
-    /// The path to the directory where dependencies have been vendored.
+    /// The derivation for the directory containing all the vendored
+    /// dependencies.
     ///
     /// This can be obtained by calling `jettison.vendorDeps { ... }`.
-    #[try_from(with = get_vendor_dir)]
-    pub(crate) vendor_dir: Cow<'a, Path>,
+    pub(crate) vendor_dir: NixDerivation<'a>,
 
     /// Whether to enable all features (equivalent to calling Cargo with the
     /// `--all-features` CLI flag).
@@ -215,42 +214,6 @@ impl<'ws> WorkspaceResolve<'ws> {
 }
 
 impl BuildGraph {
-    pub(crate) fn resolve(
-        args: &ResolveBuildGraphArgs,
-    ) -> Result<Self, ResolveBuildGraphError> {
-        let manifest_path = args.src.join("Cargo.toml");
-
-        let cargo_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
-
-        let workspace = Workspace::new(&manifest_path, &cargo_ctx)
-            .map_err(ResolveBuildGraphError::CreateWorkspace)?;
-
-        let package =
-            match args.package.as_deref() {
-                Some(package_name) => workspace
-                    .members()
-                    .find(|package| package.name() == package_name)
-                    .ok_or_else(|| {
-                        ResolveBuildGraphError::InvalidPackageName(
-                            package_name.into(),
-                        )
-                    })?,
-
-                None => match workspace.root_maybe() {
-                    MaybePackage::Package(package) => package,
-                    MaybePackage::Virtual(_) => return Err(
-                        ResolveBuildGraphError::VirtualManifestNoRootPackage,
-                    ),
-                },
-            };
-
-        let package_id = package.package_id();
-
-        let resolve = WorkspaceResolve::new(workspace, package_id, args)?;
-
-        Self::new(package_id, &resolve)
-    }
-
     fn build_recursive(
         this: &mut Self,
         pkg_id: PackageId,
@@ -360,9 +323,42 @@ impl Function for ResolveBuildGraph {
 
     fn call<'a: 'a>(
         args: Self::Args<'a>,
-        _: &mut Context,
+        ctx: &mut Context,
     ) -> Result<BuildGraph, ResolveBuildGraphError> {
-        BuildGraph::resolve(&args)
+        let manifest_path = args.src.join("Cargo.toml");
+
+        args.vendor_dir.realise(ctx)?;
+
+        let cargo_ctx =
+            cargo_ctx(args.vendor_dir.out_path(ctx)?.join(".cargo"))?;
+
+        let workspace = Workspace::new(&manifest_path, &cargo_ctx)
+            .map_err(ResolveBuildGraphError::CreateWorkspace)?;
+
+        let package =
+            match args.package.as_deref() {
+                Some(package_name) => workspace
+                    .members()
+                    .find(|package| package.name() == package_name)
+                    .ok_or_else(|| {
+                        ResolveBuildGraphError::InvalidPackageName(
+                            package_name.into(),
+                        )
+                    })?,
+
+                None => match workspace.root_maybe() {
+                    MaybePackage::Package(package) => package,
+                    MaybePackage::Virtual(_) => return Err(
+                        ResolveBuildGraphError::VirtualManifestNoRootPackage,
+                    ),
+                },
+            };
+
+        let package_id = package.package_id();
+
+        let resolve = WorkspaceResolve::new(workspace, package_id, &args)?;
+
+        BuildGraph::new(package_id, &resolve)
     }
 }
 
@@ -415,24 +411,15 @@ fn cargo_ctx(
 fn get_vendor_dir<'a>(
     mut value: NixValue<'a>,
     ctx: &mut Context,
-) -> Result<Cow<'a, Path>, NixError> {
+) -> Result<NixDerivation<'a>, NixError> {
     value.force_inline(ctx)?;
 
     match value.kind() {
-        ValueKind::Attrset => NixDerivation::try_from_value(value, ctx)
-            .and_then(|drv| drv.out_path(ctx))
-            .map(Cow::Owned),
-
-        ValueKind::Path => {
-            <&'a Path>::try_from_value(value, ctx).map(Cow::Borrowed)
-        },
-
-        ValueKind::String => <String>::try_from_value(value, ctx)
-            .map(|s| Cow::Owned(PathBuf::from(s))),
+        ValueKind::Attrset => NixDerivation::try_from_value(value, ctx),
 
         _ => Err(NixError::new(
             ErrorKind::Nix,
-            c"expected \"vendorDir\" to be a derivation, path, or string",
+            c"expected \"vendorDir\" to be a derivation",
         )),
     }
 }
