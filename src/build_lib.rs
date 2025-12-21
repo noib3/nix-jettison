@@ -104,9 +104,9 @@ pub(crate) struct CrateRenameWithVersion {
 #[attrset(rename_all = camelCase)]
 #[try_from(rename_all = camelCase)]
 struct MkDerivationPassthroughArgs {
-    crate_name: CompactString,
-    lib_name: CompactString,
     is_proc_macro: bool,
+    lib_name: CompactString,
+    package_name: CompactString,
     version: CompactString,
 }
 
@@ -160,9 +160,9 @@ impl BuildLibArgs {
             stripExclude: [ c"*.rlib" ].into_value(),
             outputs: [ c"out", c"lib" ].into_value(),
             passthrough: MkDerivationPassthroughArgs {
-                crate_name: self.package_name.clone(),
-                lib_name: self.lib_name.clone(),
                 is_proc_macro: self.is_proc_macro,
+                lib_name: self.lib_name.clone(),
+                package_name: self.package_name.clone(),
                 version: self.version.clone(),
             },
         }
@@ -182,19 +182,20 @@ impl BuildLibArgs {
                     .get::<MkDerivationPassthroughArgs>(c"passthrough", ctx)
                     .expect("dependency must have passthrough args");
 
-                let lib_name = match self.crate_renames.get(&dep.crate_name) {
-                    Some(CrateRename::Simple(rename)) => rename,
-                    Some(CrateRename::Extended(renames)) => renames
-                        .iter()
-                        .find_map(
-                            |CrateRenameWithVersion { rename, version }| {
-                                (version == dep.version).then(|| rename)
-                            },
-                        )
-                        .unwrap_or_else(|| &dep.crate_name),
-                    None => &dep.crate_name,
-                }
-                .clone();
+                let lib_name =
+                    match self.crate_renames.get(&dep.package_name) {
+                        Some(CrateRename::Simple(rename)) => rename,
+                        Some(CrateRename::Extended(renames)) => renames
+                            .iter()
+                            .find_map(
+                                |CrateRenameWithVersion { rename, version }| {
+                                    (version == dep.version).then(|| rename)
+                                },
+                            )
+                            .unwrap_or_else(|| &dep.lib_name),
+                        None => &dep.lib_name,
+                    }
+                    .clone();
 
                 let out_path = dep_drv
                     .out_path(ctx)
