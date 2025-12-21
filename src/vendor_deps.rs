@@ -11,7 +11,7 @@ use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_crate_args::SourceId;
+use crate::build_node_args::SourceId;
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,
@@ -129,7 +129,7 @@ directory = "."
                 },
             };
 
-            let source_id = SourceId { name, version };
+            let source_id = SourceId { package_name: name, version };
 
             // Make sure the entries returned by the iterator are already
             // sorted by source ID, so that we can just push to the vector.

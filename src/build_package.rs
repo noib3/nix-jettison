@@ -206,10 +206,15 @@ impl Function for BuildPackage {
                     .expect("source is not local, so it must've been vendored"),
             };
 
-            let args = attrset! { src }
-                .merge(node.args)
-                .merge(node.dependencies.map(|idx| build_crates[idx]))
-                .merge(Attrset::borrow(&global_args));
+            let args = attrset! {
+                src,
+                dependencies: node.dependencies
+                        .iter()
+                        .map(|&idx| build_crates[idx])
+                        .into_value(),
+            }
+            .merge(node.args)
+            .merge(Attrset::borrow(&global_args));
 
             let build_crate_drv = build_rust_crate.call(args, ctx)?;
 

@@ -1,4 +1,5 @@
-use core::iter;
+use core::cmp::Ordering;
+use core::{fmt, iter};
 use std::collections::HashMap;
 use std::env::consts::DLL_EXTENSION;
 
@@ -14,9 +15,10 @@ use smallvec::SmallVec;
 
 use crate::resolve_build_graph::WorkspaceResolve;
 
+/// The build arguments for a single node in the build graph.
 #[derive(nix_bindings::Attrset, Clone)]
 #[attrset(rename_all = camelCase)]
-pub(crate) struct BuildUnitArgs {
+pub(crate) struct BuildNodeArgs {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
@@ -33,16 +35,16 @@ pub(crate) struct BuildUnitArgs {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) description: Option<String>,
 
-    /// The Rust edition specified by the package this crate is in.
+    /// The Rust edition specified by the package this node is in.
     #[attrset(with_value = |&ed| edition_as_str(ed))]
     pub(crate) edition: Edition,
 
     /// Extra command-line arguments to pass to `rustc` when building the
-    /// crate.
+    /// node.
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) extra_rustc_args: Vec<CompactString>,
 
-    /// The list of features to enable when building this unit.
+    /// The list of features to enable when building this node.
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) features: Vec<CompactString>,
 
@@ -55,7 +57,7 @@ pub(crate) struct BuildUnitArgs {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) links: Option<CompactString>,
 
-    /// The name of the package this crate is in.
+    /// The name of the package this node is in.
     pub(crate) package_name: CompactString,
 
     #[attrset(skip_if = Option::is_none)]
@@ -69,7 +71,7 @@ pub(crate) struct BuildUnitArgs {
 
     pub(crate) r#type: DerivationType,
 
-    /// The version of the package this is in.
+    /// This node's package's version.
     pub(crate) version: CompactString,
 }
 
@@ -112,7 +114,7 @@ pub(crate) struct BinCrate {
 #[attrset(rename_all = camelCase)]
 pub(crate) struct LibCrate {
     /// The name of the library target. This is usually the
-    /// [`package_name`](BuildUnitArgs::package_name) with dashes replaced by
+    /// [`package_name`](BuildNodeArgs::package_name) with dashes replaced by
     /// underscores.
     pub(crate) name: CompactString,
 
@@ -133,6 +135,12 @@ pub(crate) enum LibFormat {
     ProcMacro,
     Rlib,
     Staticlib,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceId<'a> {
+    pub(crate) package_name: &'a str,
+    pub(crate) version: &'a str,
 }
 
 enum CrateType<'a> {
@@ -230,7 +238,7 @@ impl<'a> CrateType<'a> {
     }
 }
 
-impl BuildUnitArgs {
+impl BuildNodeArgs {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn new(
         package: &Package,
@@ -269,6 +277,10 @@ impl BuildUnitArgs {
             Self::new_for_lib(package, resolve, || args.clone()),
             Self::new_for_bins(package, resolve, || args.clone()),
         ]
+    }
+
+    pub(crate) fn source_id(&self) -> SourceId<'_> {
+        SourceId { package_name: &self.package_name, version: &self.version }
     }
 
     pub(crate) fn to_mk_derivation_args<'dep, Src: Value, Drv: ToValue>(
@@ -667,6 +679,34 @@ impl ToValue for DerivationType {
 impl ToValue for LibFormat {
     fn to_value(&self, _: &mut Context) -> impl Value + use<> {
         self.as_str()
+    }
+}
+
+impl fmt::Display for SourceId<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.package_name, self.version)
+    }
+}
+
+impl PartialEq for SourceId<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for SourceId<'_> {}
+
+impl PartialOrd for SourceId<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SourceId<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.package_name
+            .cmp(other.package_name)
+            .then_with(|| self.version.cmp(other.version))
     }
 }
 
