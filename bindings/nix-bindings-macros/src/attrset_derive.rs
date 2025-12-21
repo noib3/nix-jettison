@@ -271,6 +271,11 @@ impl Field {
 
         let mut key_name_str = field_name.to_string();
 
+        // Strip the `r#` prefix from raw identifiers.
+        if let Some(stripped) = key_name_str.strip_prefix("r#") {
+            key_name_str = stripped.to_owned();
+        }
+
         if let Some(rename) = rename {
             rename.clone().apply(&mut key_name_str);
         }
