@@ -291,7 +291,7 @@ impl Field {
         let with_value_expr = if let Some(with_value_expr) =
             field_attrs.with_value.as_ref()
         {
-            quote! { (#with_value_expr)(self) }
+            quote! { (#with_value_expr)(&self.#field_name) }
         } else {
             quote! { ::nix_bindings::value::ToValue::to_value(&self.#field_name, #ctx) }
         };
