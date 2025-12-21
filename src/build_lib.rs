@@ -2,17 +2,21 @@ use core::iter;
 use std::collections::HashMap;
 use std::env::consts::DLL_EXTENSION;
 
-use cargo::core::Edition;
-use cargo::core::compiler::CompileTarget;
-use compact_str::{CompactString, format_compact};
+use cargo::core::compiler::{CompileTarget, CrateType as CargoCrateType};
+use cargo::core::manifest::TargetSourcePath;
+use cargo::core::{Edition, Package, TargetKind};
+use cargo_util_schemas::manifest::TomlPackageBuild;
+use compact_str::{CompactString, ToCompactString, format_compact};
 use either::Either;
 use indoc::formatdoc;
 use nix_bindings::prelude::*;
 use smallvec::SmallVec;
 
-#[derive(nix_bindings::Attrset)]
+use crate::resolve_build_graph::WorkspaceResolve;
+
+#[derive(nix_bindings::Attrset, Clone)]
 #[attrset(rename_all = camelCase)]
-pub(crate) struct BuildLibArgs {
+pub(crate) struct BuildUnitArgs {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
@@ -27,23 +31,23 @@ pub(crate) struct BuildLibArgs {
     pub(crate) crate_renames: HashMap<CompactString, CrateRename>,
 
     #[attrset(skip_if = Option::is_none)]
-    pub(crate) description: Option<CompactString>,
+    pub(crate) description: Option<String>,
 
-    /// The Rust edition specified by the package this library is in.
+    /// The Rust edition specified by the package this crate is in.
     #[attrset(with_value = |&ed| edition_as_str(ed))]
     pub(crate) edition: Edition,
 
-    /// Extra command-line arguments to pass to `rustc` when building this
-    /// library.
+    /// Extra command-line arguments to pass to `rustc` when building the
+    /// crate.
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) extra_rustc_args: Vec<CompactString>,
 
-    /// The list of features to enable when building this library.
+    /// The list of features to enable when building this unit.
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) features: Vec<CompactString>,
 
     #[attrset(skip_if = Option::is_none)]
-    pub(crate) homepage: Option<CompactString>,
+    pub(crate) homepage: Option<String>,
 
     #[attrset(skip_if = Option::is_none)]
     pub(crate) license_file: Option<CompactString>,
@@ -65,29 +69,24 @@ pub(crate) struct BuildLibArgs {
 
     pub(crate) r#type: DerivationType,
 
-    /// The version of the package this library is in.
+    /// The version of the package this is in.
     pub(crate) version: CompactString,
-
-    /// TODO: this is used by `buildRustCrate` to `cd` from the `src`
-    /// directory. We should only set for Git dependencies when the path from
-    /// the repo's root to the package root is non-empty.
-    #[attrset(rename = "workspace_member", skip_if = Option::is_none)]
-    pub(crate) workspace_member: Option<CompactString>,
 }
 
-#[derive(nix_bindings::Value)]
+#[derive(nix_bindings::Value, Clone)]
 pub(crate) enum CrateRename {
     Simple(CompactString),
     Extended(Vec<CrateRenameWithVersion>),
 }
 
 /// Represents a version-specific rename for the extended crateRenames format.
-#[derive(nix_bindings::Attrset)]
+#[derive(nix_bindings::Attrset, Clone)]
 pub(crate) struct CrateRenameWithVersion {
     pub(crate) rename: CompactString,
     pub(crate) version: CompactString,
 }
 
+#[derive(Clone)]
 pub(crate) enum DerivationType {
     /// The derivation will build one or more binary crates.
     Bin(SmallVec<[BinCrate; 1]>),
@@ -100,7 +99,7 @@ pub(crate) enum DerivationType {
     BuildScript(CompactString),
 }
 
-#[derive(nix_bindings::Attrset)]
+#[derive(nix_bindings::Attrset, Clone)]
 #[attrset(rename_all = camelCase)]
 pub(crate) struct BinCrate {
     name: CompactString,
@@ -109,11 +108,11 @@ pub(crate) struct BinCrate {
     required_features: Vec<CompactString>,
 }
 
-#[derive(nix_bindings::Attrset)]
+#[derive(nix_bindings::Attrset, Clone)]
 #[attrset(rename_all = camelCase)]
 pub(crate) struct LibCrate {
     /// The name of the library target. This is usually the
-    /// [`package_name`](BuildLibArgs::package_name) with dashes replaced by
+    /// [`package_name`](BuildUnitArgs::package_name) with dashes replaced by
     /// underscores.
     pub(crate) name: CompactString,
 
@@ -231,10 +230,46 @@ impl<'a> CrateType<'a> {
     }
 }
 
-impl BuildLibArgs {
-    /// The relative path to the output directory where the built library files
-    /// will be placed from the root of the build directory.
-    const OUT_DIR: &'static str = "target/lib";
+impl BuildUnitArgs {
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn new(
+        package: &Package,
+        resolve: &WorkspaceResolve,
+    ) -> [Option<Self>; 3] {
+        let manifest = package.manifest();
+        let metadata = manifest.metadata();
+
+        let args = Self {
+            // These fields are the same across all units.
+            authors: metadata.authors.clone(),
+            description: metadata.description.clone(),
+            edition: manifest.edition(),
+            homepage: metadata.homepage.clone(),
+            license_file: metadata.license_file.as_deref().map(Into::into),
+            links: metadata.links.as_deref().map(Into::into),
+            package_name: package.name().as_str().into(),
+            readme: metadata.readme.as_deref().map(Into::into),
+            repository: metadata.repository.as_deref().map(Into::into),
+            rust_version: metadata
+                .rust_version
+                .as_ref()
+                .map(|v| v.to_compact_string()),
+            version: package.version().to_compact_string(),
+            // These fields differ across units. We're initializing them to
+            // dummy values here, and will override them below.
+            codegen_units: Default::default(),
+            crate_renames: Default::default(),
+            extra_rustc_args: Default::default(),
+            features: Default::default(),
+            r#type: DerivationType::BuildScript(CompactString::default()),
+        };
+
+        [
+            Self::new_for_build_script(package, resolve, || args.clone()),
+            Self::new_for_lib(package, resolve, || args.clone()),
+            Self::new_for_bins(package, resolve, || args.clone()),
+        ]
+    }
 
     pub(crate) fn to_mk_derivation_args<'dep, Src: Value, Drv: ToValue>(
         &self,
@@ -245,8 +280,14 @@ impl BuildLibArgs {
         release: bool,
         ctx: &mut Context,
     ) -> impl Attrset + Value {
+        let name_suffix = match &self.r#type {
+            DerivationType::Bin(_) => "bin",
+            DerivationType::Lib(_) => "lib",
+            DerivationType::BuildScript(_) => "build",
+        };
+
         attrset! {
-            name: format_compact!("{}-{}-lib", self.package_name, self.version),
+            name: format_compact!("{}-{}-{name_suffix}", self.package_name, self.version),
             version: &*self.version,
             src,
             buildInputs: build_inputs,
@@ -268,13 +309,13 @@ impl BuildLibArgs {
             ),
             installPhase: formatdoc!("
                 runHook preInstall
-                mkdir -p $lib/lib
-                cp -r {}/* $lib/lib
+                mkdir -p $out
+                cp -r {}/* $out
                 runHook postInstall
-            ", Self::OUT_DIR),
+            ", self.out_dir()),
             dontStrip: false,
+            // See https://github.com/NixOS/nixpkgs/issues/218712.
             stripExclude: [ c"*.rlib" ].into_value(),
-            outputs: [ c"out", c"lib" ].into_value(),
             passthrough: MkDerivationPassthroughArgs {
                 is_proc_macro: self.r#type.is_proc_macro(),
                 lib_name: match &self.r#type {
@@ -343,7 +384,7 @@ impl BuildLibArgs {
             "--crate-name",
             crate_type.crate_name_arg(),
             "--out-dir",
-            Self::OUT_DIR,
+            self.out_dir(),
             "--edition",
             edition_as_str(self.edition),
             "--cap-lints allow", // Suppress all lints from dependencies.
@@ -442,6 +483,158 @@ impl BuildLibArgs {
                     format_compact!("{}={}", lib_name, lib_path),
                 ]
             })
+    }
+
+    fn new_for_bins(
+        package: &Package,
+        resolve: &WorkspaceResolve,
+        make_common_args: impl FnOnce() -> Self,
+    ) -> Option<Self> {
+        // We only build binaries for the root of the build graph.
+        if &package.package_id() != resolve.root_id() {
+            return None;
+        }
+
+        let bin_targets = package.targets().iter().filter_map(|target| {
+            match target.src_path() {
+                TargetSourcePath::Path(src_path) => {
+                    target.is_bin().then(|| (target, &**src_path))
+                },
+                TargetSourcePath::Metabuild => None,
+            }
+        });
+
+        let bin_crates = bin_targets
+            .map(|(target, src_path)| {
+                let path = src_path
+                    .strip_prefix(package.root())
+                    .expect("binary path is under package root")
+                    .display()
+                    .to_compact_string();
+
+                let required_features = target
+                    .required_features()
+                    .iter()
+                    .flat_map(|feats| feats.iter())
+                    .map(|feat| (**feat).into())
+                    .collect();
+
+                BinCrate { name: target.name().into(), path, required_features }
+            })
+            .collect::<SmallVec<_>>();
+
+        if bin_crates.is_empty() {
+            return None;
+        }
+
+        let mut args = make_common_args();
+
+        args.codegen_units = Default::default();
+        args.crate_renames = Default::default();
+        args.extra_rustc_args = Default::default();
+        args.features = Default::default();
+        args.r#type = DerivationType::Bin(bin_crates);
+
+        Some(args)
+    }
+
+    fn new_for_build_script(
+        package: &Package,
+        _resolve: &WorkspaceResolve,
+        make_common_args: impl FnOnce() -> Self,
+    ) -> Option<Self> {
+        let Some(build_script) = package
+            .manifest()
+            .original_toml()
+            .package()
+            .and_then(|pkg| pkg.build.as_ref())
+        else {
+            return None;
+        };
+
+        let build_script_path = match build_script {
+            TomlPackageBuild::Auto(_) => CompactString::const_new("build.rs"),
+            TomlPackageBuild::SingleScript(path) => path.into(),
+            TomlPackageBuild::MultipleScript(_) => {
+                panic!("multiple build scripts are not yet supported")
+            },
+        };
+
+        let mut args = make_common_args();
+
+        args.codegen_units = Default::default();
+        args.crate_renames = Default::default();
+        args.extra_rustc_args = Default::default();
+        args.r#type = DerivationType::BuildScript(build_script_path);
+
+        Some(args)
+    }
+
+    fn new_for_lib(
+        package: &Package,
+        _resolve: &WorkspaceResolve,
+        make_common_args: impl FnOnce() -> Self,
+    ) -> Option<Self> {
+        let (lib_target, crate_types) =
+            package.targets().iter().find_map(|target| {
+                match target.kind() {
+                    TargetKind::Lib(crate_types) => {
+                        Some((target, &**crate_types))
+                    },
+                    _ => None,
+                }
+            })?;
+
+        let lib_path = match lib_target.src_path() {
+            TargetSourcePath::Path(src_path) => src_path
+                .strip_prefix(package.root())
+                .expect("library path is under package root")
+                .display()
+                .to_compact_string(),
+
+            TargetSourcePath::Metabuild => {
+                panic!("library target cannot have a metabuild source path")
+            },
+        };
+
+        let lib_formats = crate_types
+            .iter()
+            .map(|crate_type| match crate_type {
+                CargoCrateType::Lib => LibFormat::Lib,
+                CargoCrateType::Rlib => LibFormat::Rlib,
+                CargoCrateType::Dylib => LibFormat::Dylib,
+                CargoCrateType::Cdylib => LibFormat::Cdylib,
+                CargoCrateType::Staticlib => LibFormat::Staticlib,
+                CargoCrateType::ProcMacro => LibFormat::ProcMacro,
+                other => unreachable!("{other:?} is not a library crate type"),
+            })
+            .collect();
+
+        let lib_crate = LibCrate {
+            name: lib_target.name().into(),
+            path: lib_path,
+            formats: lib_formats,
+        };
+
+        let mut args = make_common_args();
+
+        args.codegen_units = Default::default();
+        args.crate_renames = Default::default();
+        args.extra_rustc_args = Default::default();
+        args.features = Default::default();
+        args.r#type = DerivationType::Lib(lib_crate);
+
+        Some(args)
+    }
+
+    /// Returns the relative path from the root of the build directory to the
+    /// directory containing the build artifacts.
+    fn out_dir(&self) -> &'static str {
+        match &self.r#type {
+            DerivationType::Bin(_) => "target/bin",
+            DerivationType::Lib(_) => "target/lib",
+            DerivationType::BuildScript(_) => "target/build",
+        }
     }
 }
 
