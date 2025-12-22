@@ -233,7 +233,7 @@ impl BuildNodeArgs {
         &self,
         release: bool,
         crate_type: CrateType<'_>,
-        dependencies: impl Iterator<Item = (NixDerivation<'dep>, &'dep Self)>,
+        dependencies: impl Iterator<Item = (&'dep Self, NixDerivation<'dep>)>,
         compile_target: Option<&CompileTarget>,
         ctx: &mut Context,
     ) -> impl IntoIterator<Item = impl AsRef<str>> {
@@ -367,24 +367,24 @@ impl BuildNodeArgs {
     /// arguments for the given dependencies to pass to `rustc`.
     fn dependencies_args<'dep>(
         &self,
-        dependencies: impl IntoIterator<Item = (NixDerivation<'dep>, &'dep Self)>,
+        dependencies: impl Iterator<Item = (&'dep Self, NixDerivation<'dep>)>,
         ctx: &mut Context,
     ) -> impl IntoIterator<Item = CompactString> {
         dependencies
             .into_iter()
-            .map(|(dep_drv, dep)| {
-                let dep_lib_name = match dep.r#type {
+            .map(|(dep_args, dep_drv)| {
+                let dep_lib_name = match dep_args.r#type {
                     DerivationType::Lib(ref lib_crate) => &lib_crate.name,
                     _ => panic!("only library crates can be dependencies"),
                 };
 
                 let lib_name =
-                    match self.crate_renames.get(&dep.package_name) {
+                    match self.crate_renames.get(&dep_args.package_name) {
                         Some(CrateRename::Simple(rename)) => rename,
                         Some(CrateRename::Extended(renames)) => renames
                             .iter()
                             .find_map(|rename| {
-                                (rename.version == dep.version)
+                                (rename.version == dep_args.version)
                                     .then(|| &rename.rename)
                             })
                             .unwrap_or_else(|| dep_lib_name),
@@ -400,7 +400,7 @@ impl BuildNodeArgs {
                     "{}/lib{}.{}",
                     out_path.display(),
                     dep_lib_name,
-                    if dep.r#type.is_proc_macro() {
+                    if dep_args.r#type.is_proc_macro() {
                         DLL_EXTENSION
                     } else {
                         "rlib"

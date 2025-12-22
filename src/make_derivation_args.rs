@@ -26,7 +26,7 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
     pub(crate) global_overrides: Option<NixAttrset<'args>>,
 
     /// The arguments coming from the workspace resolution step.
-    pub(crate) node_args: BuildNodeArgs,
+    pub(crate) node_args: &'args BuildNodeArgs,
 
     /// Whether the node should be built in release mode.
     pub(crate) release: bool,
@@ -49,7 +49,7 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
 impl<'this, 'dep, Src, Deps> MakeDerivationArgs<'this, Deps, Src>
 where
     Src: Value,
-    Deps: Iterator<Item = (NixDerivation<'dep>, &'dep BuildNodeArgs)> + Clone,
+    Deps: Iterator<Item = (&'dep BuildNodeArgs, NixDerivation<'dep>)> + Clone,
 {
     /// Converts `self` into the final attribute set given to
     /// `stdenv.mkDerivation`.
@@ -67,7 +67,7 @@ where
             dontStrip: true,
             // See https://github.com/NixOS/nixpkgs/issues/218712.
             stripExclude: [ c"*.rlib" ].into_value(),
-            version: self.node_args.version,
+            version: &*self.node_args.version,
             src: self.src,
         };
 

@@ -122,7 +122,7 @@ impl Function for BuildPackage {
 
         let make_path = ctx.builtins().path(ctx);
 
-        for node in build_graph.nodes {
+        for node in &build_graph.nodes {
             let src = match node.local_source_path.as_deref() {
                 Some(path) => {
                     let name = path.file_name().expect("path has a file name");
@@ -134,16 +134,16 @@ impl Function for BuildPackage {
             };
 
             let dependencies = node.dependencies.iter().map(|&idx| {
+                let args = &build_graph.nodes[idx].args;
                 let drv = build_derivations[idx].clone();
-                let dep = todo!();
-                (drv, dep)
+                (args, drv)
             });
 
             let args = MakeDerivationArgs {
                 crate_overrides: args.crate_overrides,
                 dependencies,
                 global_overrides: args.global_overrides,
-                node_args: node.args,
+                node_args: &node.args,
                 release: args.release,
                 rustc,
                 src,
