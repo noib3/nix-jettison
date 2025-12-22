@@ -3,9 +3,9 @@ use std::ffi::CString;
 use std::path::Path;
 
 use compact_str::CompactString;
-use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
+use crate::make_derivation_args::MakeDerivationArgs;
 use crate::resolve_build_graph::{
     ResolveBuildGraph,
     ResolveBuildGraphArgs,
@@ -108,21 +108,16 @@ impl Function for BuildPackage {
             ctx,
         )?;
 
-        let mk_derivation = args
-            .pkgs
-            .get::<NixAttrset>(c"stdenv", ctx)?
-            .get::<NixLambda>(c"mkDerivation", ctx)?;
-
         let rustc = match args.rustc {
             Some(rustc) => rustc,
             None => args.pkgs.get::<NixDerivation>(c"rustc", ctx)?,
         };
 
-        let build_inputs = &[rustc];
+        let stdenv = args.pkgs.get::<NixAttrset>(c"stdenv", ctx)?;
 
-        let native_build_inputs = &[];
+        let mk_derivation = stdenv.get::<NixLambda>(c"mkDerivation", ctx)?;
 
-        let mut build_nodes: Vec<NixDerivation<'static>> =
+        let mut build_derivations: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
 
         let make_path = ctx.builtins().path(ctx);
@@ -138,44 +133,32 @@ impl Function for BuildPackage {
                     .expect("source is not local, so it must've been vendored"),
             };
 
-            let dependencies =
-                node.dependencies.iter().map(|&idx| build_nodes[idx].clone());
+            let dependencies = node
+                .dependencies
+                .iter()
+                .map(|&idx| build_derivations[idx].clone());
 
-            let base_args = node
-                .args
-                .to_mk_derivation_args(
-                    src,
-                    build_inputs,
-                    native_build_inputs,
-                    dependencies,
-                    args.release,
-                    ctx,
-                )
-                .merge(args.global_overrides);
+            let args = MakeDerivationArgs {
+                crate_overrides: args.crate_overrides,
+                dependencies,
+                global_overrides: args.global_overrides,
+                node_args: node.args,
+                release: args.release,
+                rustc,
+                src,
+                stdenv,
+                target: None,
+            }
+            .into_attrs(ctx)?;
 
-            let mk_derivation_args = if let Some(override_fun) = override_fun(
-                &args.crate_overrides,
-                &node.args.package_name,
-                ctx,
-            )? {
-                let new_attrs = override_fun
-                    .call(Value::borrow(&base_args), ctx)?
-                    .force_into::<NixAttrset>(ctx)?;
+            let build_drv = mk_derivation.call(args, ctx)?.force_into(ctx)?;
 
-                Either::Right(base_args.merge(new_attrs))
-            } else {
-                Either::Left(base_args)
-            };
-
-            let build_crate_drv =
-                mk_derivation.call(mk_derivation_args, ctx)?.force_into(ctx)?;
-
-            build_nodes.push(build_crate_drv);
+            build_derivations.push(build_drv);
         }
 
         // The derivation for the requested package is the root of the build
         // graph, which is the last element in the vector.
-        Ok(build_nodes
+        Ok(build_derivations
             .into_iter()
             .next_back()
             .expect("build graph is never empty"))
@@ -193,21 +176,4 @@ impl From<BuildPackageError> for NixError {
             },
         }
     }
-}
-
-/// Returns the function to call to override the `mkDerivation` arguments
-/// for crates in the given package, if any.
-fn override_fun<'a>(
-    overrides: &Option<NixAttrset<'a>>,
-    package_name: &str,
-    ctx: &mut Context,
-) -> Result<Option<NixLambda<'a>>, NixError> {
-    let Some(overrides) = overrides else {
-        return Ok(None);
-    };
-
-    let package_name_cstr = CString::new(package_name)
-        .expect("package name doesn't contain NUL bytes");
-
-    overrides.get_opt::<NixLambda>(&*package_name_cstr, ctx)
 }

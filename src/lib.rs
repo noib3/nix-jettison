@@ -4,6 +4,7 @@ mod build_node_args;
 mod build_package;
 mod cargo_lock_parser;
 mod jettison;
+mod make_derivation_args;
 mod resolve_build_graph;
 mod vendor_deps;
 
