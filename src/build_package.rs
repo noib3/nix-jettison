@@ -133,10 +133,11 @@ impl Function for BuildPackage {
                     .expect("source is not local, so it must've been vendored"),
             };
 
-            let dependencies = node
-                .dependencies
-                .iter()
-                .map(|&idx| build_derivations[idx].clone());
+            let dependencies = node.dependencies.iter().map(|&idx| {
+                let drv = build_derivations[idx].clone();
+                let dep = todo!();
+                (drv, dep)
+            });
 
             let args = MakeDerivationArgs {
                 crate_overrides: args.crate_overrides,

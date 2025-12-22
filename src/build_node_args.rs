@@ -1,5 +1,5 @@
 use core::cmp::Ordering;
-use core::{fmt, iter};
+use core::fmt;
 use std::collections::HashMap;
 use std::env::consts::DLL_EXTENSION;
 
@@ -9,7 +9,6 @@ use cargo::core::{Edition, Package, TargetKind};
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use either::Either;
-use indoc::formatdoc;
 use nix_bindings::prelude::*;
 use smallvec::SmallVec;
 
@@ -143,26 +142,14 @@ pub(crate) struct SourceId<'a> {
     pub(crate) version: &'a str,
 }
 
-enum CrateType<'a> {
+pub(crate) enum CrateType<'a> {
     Bin(&'a BinCrate),
     Lib(&'a LibCrate),
     BuildScript(&'a CompactString),
 }
 
-/// The attrset used as the `passthru` attribute given to `mkDerivation`.
-#[derive(nix_bindings::Attrset, nix_bindings::TryFromValue)]
-#[attrset(rename_all = camelCase)]
-#[try_from(rename_all = camelCase)]
-struct PassthruArgs {
-    is_proc_macro: bool,
-    #[try_from(default)]
-    lib_name: Option<CompactString>,
-    package_name: CompactString,
-    version: CompactString,
-}
-
 impl DerivationType {
-    fn is_proc_macro(&self) -> bool {
+    pub(crate) fn is_proc_macro(&self) -> bool {
         match self {
             DerivationType::Lib(lib_crate) => lib_crate.is_proc_macro(),
             _ => false,
@@ -240,165 +227,13 @@ impl<'a> CrateType<'a> {
 }
 
 impl BuildNodeArgs {
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn new(
-        package: &Package,
-        resolve: &WorkspaceResolve,
-    ) -> [Option<Self>; 3] {
-        let manifest = package.manifest();
-        let metadata = manifest.metadata();
-
-        let args = Self {
-            // These fields are the same across all nodes in the same package.
-            authors: metadata.authors.clone(),
-            description: metadata.description.clone(),
-            edition: manifest.edition(),
-            features: resolve
-                .features(package.package_id())
-                .map(Into::into)
-                .collect(),
-            homepage: metadata.homepage.clone(),
-            license_file: metadata.license_file.as_deref().map(Into::into),
-            links: metadata.links.as_deref().map(Into::into),
-            package_name: package.name().as_str().into(),
-            readme: metadata.readme.as_deref().map(Into::into),
-            repository: metadata.repository.as_deref().map(Into::into),
-            rust_version: metadata
-                .rust_version
-                .as_ref()
-                .map(|v| v.to_compact_string()),
-            version: package.version().to_compact_string(),
-            // These fields differ across nodes. We're initializing them to
-            // dummy values here, and will override them below.
-            codegen_units: Default::default(),
-            crate_renames: Default::default(),
-            extra_rustc_args: Default::default(),
-            r#type: DerivationType::BuildScript(CompactString::default()),
-        };
-
-        [
-            Self::new_for_build_script(package, resolve, || args.clone()),
-            Self::new_for_lib(package, resolve, || args.clone()),
-            Self::new_for_bins(package, resolve, || args.clone()),
-        ]
-    }
-
-    pub(crate) fn source_id(&self) -> SourceId<'_> {
-        SourceId { package_name: &self.package_name, version: &self.version }
-    }
-
-    pub(crate) fn to_mk_derivation_args<
-        'this,
-        'input,
-        'dep,
-        Src: Value,
-        Drv: ToValue,
-        Deps: Iterator<Item = NixDerivation<'dep>> + Clone,
-    >(
-        &'this self,
-        src: Src,
-        build_inputs: &'input [Drv],
-        native_build_inputs: &'input [Drv],
-        dependencies: Deps,
-        release: bool,
-        ctx: &mut Context,
-    ) -> impl Attrset + Value + use<'this, 'dep, 'input, Src, Drv, Deps> {
-        let name_suffix = match &self.r#type {
-            DerivationType::Bin(_) => "bin",
-            DerivationType::Lib(_) => "lib",
-            DerivationType::BuildScript(_) => "build",
-        };
-
-        attrset! {
-            name: format_compact!("{}-{}-{name_suffix}", self.package_name, self.version),
-            version: &*self.version,
-            src,
-            buildInputs: build_inputs,
-            nativeBuildInputs: native_build_inputs,
-            configurePhase: formatdoc!("
-                runHook preConfigure
-                # TODO: add symlinks to link library dependencies
-                # TODO: source env files produced by build scripts of direct
-                # dependencies (only if `links` is set for those dependencies),
-                # see https://doc.rust-lang.org/cargo/reference/build-scripts.html#the-links-manifest-key
-                # TODO: set `CARGO_PKG` and `CARGO_CFG` env vars
-                runHook postConfigure
-            "),
-            buildPhase: self.build_phase(
-                release,
-                dependencies,
-                None,
-                ctx,
-            ),
-            installPhase: formatdoc!("
-                runHook preInstall
-                mkdir -p $out
-                cp -r {}/* $out
-                runHook postInstall
-            ", self.out_dir()),
-            dontStrip: false,
-            // See https://github.com/NixOS/nixpkgs/issues/218712.
-            stripExclude: [ c"*.rlib" ].into_value(),
-            passthru: PassthruArgs {
-                is_proc_macro: self.r#type.is_proc_macro(),
-                lib_name: match &self.r#type {
-                    DerivationType::Lib(lib) => Some(lib.name.clone()),
-                    _ => None,
-                },
-                package_name: self.package_name.clone(),
-                version: self.version.clone(),
-            },
-        }
-    }
-
-    fn build_phase<'dep>(
-        &self,
-        release: bool,
-        dependencies: impl Iterator<Item = NixDerivation<'dep>> + Clone,
-        compile_target: Option<&CompileTarget>,
-        ctx: &mut Context,
-    ) -> String {
-        let crate_types = match &self.r#type {
-            DerivationType::Bin(bins) => {
-                Either::Right(bins.iter().map(CrateType::Bin))
-            },
-            DerivationType::Lib(lib) => {
-                Either::Left(iter::once(CrateType::Lib(&lib)))
-            },
-            DerivationType::BuildScript(path) => {
-                Either::Left(iter::once(CrateType::BuildScript(path)))
-            },
-        };
-
-        let mut build_phase = "runHook preBuild".to_owned();
-
-        for crate_type in crate_types {
-            build_phase.push_str("\nrustc");
-
-            for rustc_arg in self.build_rustc_args(
-                release,
-                crate_type,
-                dependencies.clone(),
-                compile_target,
-                ctx,
-            ) {
-                build_phase.push(' ');
-                build_phase.push_str(rustc_arg.as_ref());
-            }
-        }
-
-        build_phase.push_str("\nrunHook postBuild");
-
-        build_phase
-    }
-
     /// Returns the list of command-line arguments to pass to `rustc` to build
     /// this library.
-    fn build_rustc_args<'dep>(
+    pub(crate) fn build_rustc_args<'dep>(
         &self,
         release: bool,
         crate_type: CrateType<'_>,
-        dependencies: impl Iterator<Item = NixDerivation<'dep>>,
+        dependencies: impl Iterator<Item = (NixDerivation<'dep>, &'dep Self)>,
         compile_target: Option<&CompileTarget>,
         ctx: &mut Context,
     ) -> impl IntoIterator<Item = impl AsRef<str>> {
@@ -454,24 +289,94 @@ impl BuildNodeArgs {
         .chain(self.extra_rustc_args.iter().cloned())
     }
 
+    /// Returns the name of the derivation for this build node.
+    pub(crate) fn derivation_name(&self) -> CompactString {
+        let name_suffix = match &self.r#type {
+            DerivationType::Bin(crates) if crates.len() > 1 => "bins",
+            DerivationType::Bin(_) => "bin",
+            DerivationType::Lib(_) => "lib",
+            DerivationType::BuildScript(_) => "build",
+        };
+
+        format_compact!(
+            "{}-{}-{}",
+            self.package_name,
+            self.version,
+            name_suffix
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn new(
+        package: &Package,
+        resolve: &WorkspaceResolve,
+    ) -> [Option<Self>; 3] {
+        let manifest = package.manifest();
+        let metadata = manifest.metadata();
+
+        let args = Self {
+            // These fields are the same across all nodes in the same package.
+            authors: metadata.authors.clone(),
+            description: metadata.description.clone(),
+            edition: manifest.edition(),
+            features: resolve
+                .features(package.package_id())
+                .map(Into::into)
+                .collect(),
+            homepage: metadata.homepage.clone(),
+            license_file: metadata.license_file.as_deref().map(Into::into),
+            links: metadata.links.as_deref().map(Into::into),
+            package_name: package.name().as_str().into(),
+            readme: metadata.readme.as_deref().map(Into::into),
+            repository: metadata.repository.as_deref().map(Into::into),
+            rust_version: metadata
+                .rust_version
+                .as_ref()
+                .map(|v| v.to_compact_string()),
+            version: package.version().to_compact_string(),
+            // These fields differ across nodes. We're initializing them to
+            // dummy values here, and will override them below.
+            codegen_units: Default::default(),
+            crate_renames: Default::default(),
+            extra_rustc_args: Default::default(),
+            r#type: DerivationType::BuildScript(CompactString::default()),
+        };
+
+        [
+            Self::new_for_build_script(package, resolve, || args.clone()),
+            Self::new_for_lib(package, resolve, || args.clone()),
+            Self::new_for_bins(package, resolve, || args.clone()),
+        ]
+    }
+
+    /// Returns the relative path from the root of the build directory to the
+    /// directory containing the build artifacts.
+    pub(crate) fn out_dir(&self) -> &'static str {
+        match &self.r#type {
+            DerivationType::Bin(_) => "target/bin",
+            DerivationType::Lib(_) => "target/lib",
+            DerivationType::BuildScript(_) => "target/build",
+        }
+    }
+
+    pub(crate) fn source_id(&self) -> SourceId<'_> {
+        SourceId { package_name: &self.package_name, version: &self.version }
+    }
+
     /// Returns an iterator over the `--extern {name}={path}` command-line
     /// arguments for the given dependencies to pass to `rustc`.
     fn dependencies_args<'dep>(
         &self,
-        dependencies: impl IntoIterator<Item = NixDerivation<'dep>>,
+        dependencies: impl IntoIterator<Item = (NixDerivation<'dep>, &'dep Self)>,
         ctx: &mut Context,
     ) -> impl IntoIterator<Item = CompactString> {
         dependencies
             .into_iter()
-            .map(|dep_drv| {
-                let dep = dep_drv
-                    .get::<PassthruArgs>(c"passthru", ctx)
-                    .expect("dependency must have passthru args");
-
-                let dep_lib_name = dep
-                    .lib_name
-                    .as_ref()
-                    .expect("only library crates can be dependencies");
+            .map(|(dep_drv, dep)| {
+                let dep_lib_name = match dep.r#type {
+                    DerivationType::Lib(ref lib_crate) => &lib_crate.name,
+                    _ => panic!("only library crates can be dependencies"),
+                };
 
                 let lib_name =
                     match self.crate_renames.get(&dep.package_name) {
@@ -495,7 +400,11 @@ impl BuildNodeArgs {
                     "{}/lib{}.{}",
                     out_path.display(),
                     dep_lib_name,
-                    if dep.is_proc_macro { DLL_EXTENSION } else { "rlib" }
+                    if dep.r#type.is_proc_macro() {
+                        DLL_EXTENSION
+                    } else {
+                        "rlib"
+                    }
                 );
 
                 (lib_name, lib_path)
@@ -646,16 +555,6 @@ impl BuildNodeArgs {
         args.r#type = DerivationType::Lib(lib_crate);
 
         Some(args)
-    }
-
-    /// Returns the relative path from the root of the build directory to the
-    /// directory containing the build artifacts.
-    fn out_dir(&self) -> &'static str {
-        match &self.r#type {
-            DerivationType::Bin(_) => "target/bin",
-            DerivationType::Lib(_) => "target/lib",
-            DerivationType::BuildScript(_) => "target/build",
-        }
     }
 }
 
