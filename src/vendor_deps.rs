@@ -78,7 +78,7 @@ impl VendorDeps {
 impl<'lock> VendoredSources<'lock> {
     pub(crate) fn get(&self, source_id: SourceId) -> Option<Thunk<'static>> {
         self.sources
-            .binary_search_by_key(&source_id, |probe| probe.id)
+            .binary_search_by(|probe| probe.id.cmp(&source_id))
             .ok()
             .map(|idx| self.sources[idx].derivation)
     }
@@ -129,7 +129,10 @@ directory = "."
                 },
             };
 
-            let source_id = SourceId { package_name: name, version };
+            let source_id = SourceId {
+                package_name: name,
+                version: Cow::Borrowed(version),
+            };
 
             // Make sure the entries returned by the iterator are already
             // sorted by source ID, so that we can just push to the vector.

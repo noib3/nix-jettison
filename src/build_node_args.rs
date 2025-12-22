@@ -1,5 +1,6 @@
 use core::cmp::Ordering;
 use core::fmt;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::consts::DLL_EXTENSION;
 
@@ -10,6 +11,7 @@ use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use either::Either;
 use nix_bindings::prelude::*;
+use semver::Version;
 use smallvec::SmallVec;
 
 use crate::resolve_build_graph::WorkspaceResolve;
@@ -51,6 +53,9 @@ pub(crate) struct BuildNodeArgs {
     pub(crate) homepage: Option<String>,
 
     #[attrset(skip_if = Option::is_none)]
+    pub(crate) license: Option<CompactString>,
+
+    #[attrset(skip_if = Option::is_none)]
     pub(crate) license_file: Option<CompactString>,
 
     #[attrset(skip_if = Option::is_none)]
@@ -71,7 +76,8 @@ pub(crate) struct BuildNodeArgs {
     pub(crate) r#type: DerivationType,
 
     /// This node's package's version.
-    pub(crate) version: CompactString,
+    #[attrset(with_value = |version: &Version| version.to_compact_string())]
+    pub(crate) version: Version,
 }
 
 #[derive(nix_bindings::Value, Clone)]
@@ -84,7 +90,8 @@ pub(crate) enum CrateRename {
 #[derive(nix_bindings::Attrset, Clone)]
 pub(crate) struct CrateRenameWithVersion {
     pub(crate) rename: CompactString,
-    pub(crate) version: CompactString,
+    #[attrset(with_value = |version: &Version| version.to_compact_string())]
+    pub(crate) version: Version,
 }
 
 #[derive(Clone)]
@@ -136,10 +143,10 @@ pub(crate) enum LibFormat {
     Staticlib,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SourceId<'a> {
     pub(crate) package_name: &'a str,
-    pub(crate) version: &'a str,
+    pub(crate) version: Cow<'a, str>,
 }
 
 pub(crate) enum CrateType<'a> {
@@ -324,6 +331,7 @@ impl BuildNodeArgs {
                 .map(Into::into)
                 .collect(),
             homepage: metadata.homepage.clone(),
+            license: metadata.license.as_deref().map(Into::into),
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
             package_name: package.name().as_str().into(),
@@ -333,7 +341,7 @@ impl BuildNodeArgs {
                 .rust_version
                 .as_ref()
                 .map(|v| v.to_compact_string()),
-            version: package.version().to_compact_string(),
+            version: package.version().clone(),
             // These fields differ across nodes. We're initializing them to
             // dummy values here, and will override them below.
             codegen_units: Default::default(),
@@ -360,7 +368,10 @@ impl BuildNodeArgs {
     }
 
     pub(crate) fn source_id(&self) -> SourceId<'_> {
-        SourceId { package_name: &self.package_name, version: &self.version }
+        SourceId {
+            package_name: &self.package_name,
+            version: Cow::Owned(self.version.to_string()),
+        }
     }
 
     /// Returns an iterator over the `--extern {name}={path}` command-line
@@ -614,7 +625,7 @@ impl Ord for SourceId<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.package_name
             .cmp(other.package_name)
-            .then_with(|| self.version.cmp(other.version))
+            .then_with(|| self.version.cmp(&other.version))
     }
 }
 
