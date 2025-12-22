@@ -11,7 +11,7 @@ use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_node_args::SourceId;
+use crate::build_node_attrs::SourceId;
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,

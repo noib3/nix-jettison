@@ -16,10 +16,10 @@ use smallvec::SmallVec;
 
 use crate::resolve_build_graph::WorkspaceResolve;
 
-/// The build arguments for a single node in the build graph.
+/// Build attributes of a single node in the build graph.
 #[derive(nix_bindings::Attrset, Clone)]
 #[attrset(rename_all = camelCase)]
-pub(crate) struct BuildNodeArgs {
+pub(crate) struct BuildNodeAttrs {
     #[attrset(skip_if = Vec::is_empty)]
     pub(crate) authors: Vec<String>,
 
@@ -120,7 +120,7 @@ pub(crate) struct BinCrate {
 #[attrset(rename_all = camelCase)]
 pub(crate) struct LibCrate {
     /// The name of the library target. This is usually the
-    /// [`package_name`](BuildNodeArgs::package_name) with dashes replaced by
+    /// [`package_name`](BuildNodeInfos::package_name) with dashes replaced by
     /// underscores.
     pub(crate) name: CompactString,
 
@@ -237,7 +237,7 @@ impl<'a> CrateType<'a> {
     }
 }
 
-impl BuildNodeArgs {
+impl BuildNodeAttrs {
     /// Returns the list of command-line arguments to pass to `rustc` to build
     /// this library.
     pub(crate) fn build_rustc_args<'dep>(

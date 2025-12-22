@@ -9,11 +9,14 @@ use either::Either;
 use indoc::{formatdoc, indoc, writedoc};
 use nix_bindings::prelude::*;
 
-use crate::build_node_args::{BuildNodeArgs, CrateType, NodeType};
+use crate::build_node_attrs::{BuildNodeAttrs, CrateType, NodeType};
 
 /// All the arguments needed to create the attribute set given to
 /// `stdenv.mkDerivation` to build a single node in the build graph.
 pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
+    /// The derivation for the package's build script, if any.
+    pub(crate) build_script_drv: Option<NixDerivation<'args>>,
+
     /// The
     /// [`BuildPackageArgs::crate_overrides`](crate::build_package::BuildPackageArgs::crate_overrides) field.
     pub(crate) crate_overrides: Option<NixAttrset<'args>>,
@@ -28,8 +31,8 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
     /// [`BuildPackageArgs::global_overrides`](crate::build_package::BuildPackageArgs::global_overrides) field.
     pub(crate) global_overrides: Option<NixAttrset<'args>>,
 
-    /// The arguments coming from the workspace resolution step.
-    pub(crate) node_args: &'args BuildNodeArgs,
+    /// The node's build attributes coming from the build graph resolution step.
+    pub(crate) node: &'args BuildNodeAttrs,
 
     /// Whether the node should be built in release mode.
     pub(crate) release: bool,
@@ -52,7 +55,7 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
 impl<'this, 'dep, Src, Deps> MakeDerivationArgs<'this, Deps, Src>
 where
     Src: Value,
-    Deps: Iterator<Item = (&'dep BuildNodeArgs, NixDerivation<'dep>)> + Clone,
+    Deps: Iterator<Item = (&'dep BuildNodeAttrs, NixDerivation<'dep>)> + Clone,
 {
     /// Converts `self` into the final attribute set given to
     /// `stdenv.mkDerivation`.
@@ -61,7 +64,7 @@ where
         ctx: &mut Context,
     ) -> Result<impl Attrset + Value + use<'this, 'dep, Src, Deps>> {
         let base_args = attrset! {
-            name: self.node_args.derivation_name(),
+            name: self.node.derivation_name(),
             buildInputs: [self.rustc].into_value(),
             nativeBuildInputs: <[NixDerivation; 0]>::default().into_value(),
             configurePhase: self.configure_phase(ctx)?,
@@ -70,7 +73,7 @@ where
             dontStrip: true,
             // See https://github.com/NixOS/nixpkgs/issues/218712.
             stripExclude: [ c"*.rlib" ].into_value(),
-            version: self.node_args.version.to_compact_string(),
+            version: self.node.version.to_compact_string(),
             src: self.src,
         };
 
@@ -80,7 +83,7 @@ where
             return Ok(Either::Left(args));
         };
 
-        let package_name_cstr = CString::new(&*self.node_args.package_name)
+        let package_name_cstr = CString::new(&*self.node.package_name)
             .expect("package name doesn't contain NUL bytes");
 
         let Some(override_fun) =
@@ -99,16 +102,10 @@ where
     #[allow(clippy::too_many_lines)]
     fn configure_phase(&self, ctx: &mut Context) -> Result<String> {
         // ## Build scripts
-        // 2: if the package has a build script, we need to source its output
-        //    `env` file during the configurePhase as well;
-        // 3: for build scripts, let's first pretend we don't have to set
-        //    any environment variables coming from the build scripts of other
-        //    dependencies;
-        // 4: if the package has a build script, we may need to include any
-        //    files that have been generated and placed in the `$OUT_DIR`;
-        // 5: if the package has a build script, we should run it, place its
-        //    stdout in a file, then run a program that parses the file and
-        //    produces a `env` file.
+        // 1: in the installPhase of a build script node, parse its stdout into
+        //    an env file;
+        // 2: in the configurePhase of a node with a build script dependency,
+        //    source the env file;
         //
         // ## Native libraries
         // 1: get the list of native libraries from somewhere (I'm assuming the
@@ -153,39 +150,35 @@ where
             .get::<NixAttrset>(c"vendor", ctx)?
             .get::<CompactString>(c"name", ctx)?;
 
-        let manifest_links = self.node_args.links.as_deref().unwrap_or("");
+        let manifest_links = self.node.links.as_deref().unwrap_or("");
 
-        let pkg_authors = self.node_args.authors.iter().fold(
-            String::new(),
-            |mut acc, author| {
+        let pkg_authors =
+            self.node.authors.iter().fold(String::new(), |mut acc, author| {
                 if !acc.is_empty() {
                     acc.push(':');
                 }
                 acc.push_str(author);
                 acc
-            },
-        );
+            });
         let pkg_description = self
-            .node_args
+            .node
             .description
             .as_deref()
             .map_or(Cow::Borrowed(""), |desc| {
                 shell_escape::escape(desc.into())
             });
-        let pkg_homepage = self.node_args.homepage.as_deref().unwrap_or("");
-        let pkg_license = self.node_args.license.as_deref().unwrap_or("");
-        let pkg_license_file =
-            self.node_args.license_file.as_deref().unwrap_or("");
-        let pkg_name = &*self.node_args.package_name;
-        let pkg_readme = self.node_args.readme.as_deref().unwrap_or("");
-        let pkg_repository = self.node_args.repository.as_deref().unwrap_or("");
-        let pkg_rust_version =
-            self.node_args.rust_version.as_deref().unwrap_or("");
-        let pkg_version = &*self.node_args.version.to_compact_string();
-        let pkg_version_major = self.node_args.version.major;
-        let pkg_version_minor = self.node_args.version.minor;
-        let pkg_version_patch = self.node_args.version.patch;
-        let pkg_version_pre = self.node_args.version.pre.as_str();
+        let pkg_homepage = self.node.homepage.as_deref().unwrap_or("");
+        let pkg_license = self.node.license.as_deref().unwrap_or("");
+        let pkg_license_file = self.node.license_file.as_deref().unwrap_or("");
+        let pkg_name = &*self.node.package_name;
+        let pkg_readme = self.node.readme.as_deref().unwrap_or("");
+        let pkg_repository = self.node.repository.as_deref().unwrap_or("");
+        let pkg_rust_version = self.node.rust_version.as_deref().unwrap_or("");
+        let pkg_version = &*self.node.version.to_compact_string();
+        let pkg_version_major = self.node.version.major;
+        let pkg_version_minor = self.node.version.minor;
+        let pkg_version_patch = self.node.version.patch;
+        let pkg_version_pre = self.node.version.pre.as_str();
 
         let debug = if self.release { "1" } else { "" };
         let host = self
@@ -238,10 +231,13 @@ where
         )
         .expect("writing to string can't fail");
 
-        if self.node_args.r#type.is_build_script() {
-            configure_phase.push_str(
-                "export OUT_DIR=$(pwd)/target/build/out\nmkdir -p $OUT_DIR\n",
-            );
+        if let Some(build_drv) = &self.build_script_drv {
+            writeln!(
+                &mut configure_phase,
+                "export OUT_DIR={build_out_path}/out",
+                build_out_path = build_drv.out_path(ctx)?.display()
+            )
+            .expect("writing to string can't fail");
         }
 
         configure_phase.push_str("runHook postConfigure");
@@ -250,7 +246,7 @@ where
     }
 
     fn build_phase(&self, ctx: &mut Context) -> Result<String> {
-        let crate_types = match &self.node_args.r#type {
+        let crate_types = match &self.node.r#type {
             NodeType::Bin(bins) => {
                 Either::Right(bins.iter().map(CrateType::Bin))
             },
@@ -267,7 +263,7 @@ where
         for crate_type in crate_types {
             build_phase.push_str("\nrustc");
 
-            for rustc_arg in self.node_args.build_rustc_args(
+            for rustc_arg in self.node.build_rustc_args(
                 self.release,
                 crate_type,
                 self.dependencies.clone(),
@@ -291,15 +287,15 @@ where
                 mkdir -p $out
                 cp -r {out_dir}/* $out
             ",
-            out_dir = self.node_args.out_dir(),
+            out_dir = self.node.out_dir(),
         );
 
-        if self.node_args.r#type.is_build_script() {
+        if self.node.r#type.is_build_script() {
             install_phase.push_str(indoc!(
                 r"
-                    mkdir -p $out/out
+                    export OUT_DIR=$out/out
+                    mkdir -p $OUT_DIR
                     $out/build_script_build | tee $out/build_script_output.txt
-                    cp -r $OUT_DIR/* $out/out
                 ",
             ));
         }

@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-mod build_node_args;
+mod build_node_attrs;
 mod build_package;
 mod cargo_lock_parser;
 mod jettison;

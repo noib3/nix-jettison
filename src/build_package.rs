@@ -133,17 +133,21 @@ impl Function for BuildPackage {
                     .expect("source is not local, so it must've been vendored"),
             };
 
+            let build_script_drv =
+                node.build_script.map(|idx| build_derivations[idx].clone());
+
             let dependencies = node.dependencies.iter().map(|&idx| {
-                let args = &build_graph.nodes[idx].args;
+                let attrs = &build_graph.nodes[idx].attrs;
                 let drv = build_derivations[idx].clone();
-                (args, drv)
+                (attrs, drv)
             });
 
             let args = MakeDerivationArgs {
+                build_script_drv,
                 crate_overrides: args.crate_overrides,
                 dependencies,
                 global_overrides: args.global_overrides,
-                node_args: &node.args,
+                node: &node.attrs,
                 release: args.release,
                 rustc,
                 src,

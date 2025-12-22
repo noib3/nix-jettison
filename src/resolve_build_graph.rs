@@ -13,7 +13,7 @@ use cargo::{GlobalContext, ops};
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_node_args::{BuildNodeArgs, SourceId};
+use crate::build_node_attrs::{BuildNodeAttrs, SourceId};
 
 /// Resolves the build graph of a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -60,9 +60,10 @@ pub(crate) struct BuildGraph {
     pkg_id_to_idx: HashMap<PackageId, usize>,
 }
 
-pub(crate) struct BuildGraphNode<Dep> {
-    pub(crate) args: BuildNodeArgs,
-    pub(crate) dependencies: Vec<Dep>,
+pub(crate) struct BuildGraphNode<Edge> {
+    pub(crate) attrs: BuildNodeAttrs,
+    pub(crate) build_script: Option<Edge>,
+    pub(crate) dependencies: Vec<Edge>,
     pub(crate) local_source_path: Option<PathBuf>,
 }
 
@@ -234,24 +235,30 @@ impl BuildGraph {
             .is_path()
             .then(|| package.root().to_owned());
 
-        let [build_script_args, lib_args, bins_args] =
-            BuildNodeArgs::new(package, resolve);
+        let [build_script_attrs, lib_attrs, bins_attrs] =
+            BuildNodeAttrs::new(package, resolve);
 
         let mut build_script_node =
-            build_script_args.map(|args| BuildGraphNode {
-                args,
+            build_script_attrs.map(|attrs| BuildGraphNode {
+                attrs,
+                build_script: None,
                 dependencies: Vec::default(),
                 local_source_path: local_source_path.clone(),
             });
 
-        let mut lib_node = lib_args.map(|args| BuildGraphNode {
-            args,
+        let build_script_node_idx =
+            build_script_node.is_some().then(|| this.nodes.len());
+
+        let mut lib_node = lib_attrs.map(|attrs| BuildGraphNode {
+            attrs,
+            build_script: build_script_node_idx,
             dependencies: Vec::default(),
             local_source_path: local_source_path.clone(),
         });
 
-        let mut bins_node = bins_args.map(|args| BuildGraphNode {
-            args,
+        let mut bins_node = bins_attrs.map(|attrs| BuildGraphNode {
+            attrs,
+            build_script: build_script_node_idx,
             dependencies: Vec::default(),
             local_source_path: local_source_path.clone(),
         });
@@ -312,9 +319,9 @@ impl BuildGraph {
     }
 }
 
-impl<Dep> BuildGraphNode<Dep> {
+impl<Edge> BuildGraphNode<Edge> {
     pub(crate) fn source_id(&self) -> SourceId<'_> {
-        self.args.source_id()
+        self.attrs.source_id()
     }
 }
 
@@ -362,14 +369,15 @@ impl Function for ResolveBuildGraph {
     }
 }
 
-impl<Dep: Value> ToValue for BuildGraphNode<Dep> {
-    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Dep> {
-        Attrset::borrow(&self.args)
+impl<Edge: Value> ToValue for BuildGraphNode<Edge> {
+    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Edge> {
+        Attrset::borrow(&self.attrs)
+            .merge(self.build_script.as_ref().map(|edge| {
+                attrset! { buildScript: edge.borrow() }
+            }))
             .merge(attrset! { dependencies: &*self.dependencies })
             .merge(self.local_source_path.as_deref().map(|path| {
-                attrset! {
-                    localSourcePath: path,
-                }
+                attrset! { localSourcePath: path }
             }))
     }
 }
