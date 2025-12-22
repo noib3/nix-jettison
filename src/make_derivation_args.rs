@@ -291,6 +291,13 @@ where
         );
 
         if self.node.r#type.is_build_script() {
+            for feature in &self.node.features {
+                let feature = feature.to_uppercase().replace('-', "_");
+                install_phase.push_str("export CARGO_FEATURE_");
+                install_phase.push_str(&*feature);
+                install_phase.push_str("=1\n");
+            }
+
             install_phase.push_str(indoc!(
                 r"
                     export OUT_DIR=$out/out
