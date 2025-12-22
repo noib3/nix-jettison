@@ -2533,6 +2533,8 @@ dependencies = [
  "memchr",
  "nix-bindings",
  "percent-encoding",
+ "semver",
+ "shell-escape",
  "smallvec",
 ]
 

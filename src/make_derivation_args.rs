@@ -6,10 +6,10 @@ use std::ffi::CString;
 use cargo::core::compiler::CompileTarget;
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
-use indoc::writedoc;
+use indoc::{formatdoc, indoc, writedoc};
 use nix_bindings::prelude::*;
 
-use crate::build_node_args::{BuildNodeArgs, CrateType, DerivationType};
+use crate::build_node_args::{BuildNodeArgs, CrateType, NodeType};
 
 /// All the arguments needed to create the attribute set given to
 /// `stdenv.mkDerivation` to build a single node in the build graph.
@@ -238,9 +238,10 @@ where
         )
         .expect("writing to string can't fail");
 
-        if let DerivationType::BuildScript(_) = self.node_args.r#type {
-            configure_phase
-                .push_str("export OUT_DIR=$(pwd)/target/build/out\n");
+        if self.node_args.r#type.is_build_script() {
+            configure_phase.push_str(
+                "export OUT_DIR=$(pwd)/target/build/out\nmkdir -p $OUT_DIR\n",
+            );
         }
 
         configure_phase.push_str("runHook postConfigure");
@@ -250,13 +251,13 @@ where
 
     fn build_phase(&self, ctx: &mut Context) -> Result<String> {
         let crate_types = match &self.node_args.r#type {
-            DerivationType::Bin(bins) => {
+            NodeType::Bin(bins) => {
                 Either::Right(bins.iter().map(CrateType::Bin))
             },
-            DerivationType::Lib(lib) => {
+            NodeType::Lib(lib) => {
                 Either::Left(iter::once(CrateType::Lib(&lib)))
             },
-            DerivationType::BuildScript(path) => {
+            NodeType::BuildScript(path) => {
                 Either::Left(iter::once(CrateType::BuildScript(path)))
             },
         };
@@ -284,13 +285,26 @@ where
     }
 
     fn install_phase(&self, _ctx: &mut Context) -> Result<String> {
-        let mut install_phase =
-            "runHook preInstall\nmkdir -p $out\n".to_owned();
+        let mut install_phase = formatdoc!(
+            "
+                runHook preInstall
+                mkdir -p $out
+                cp -r {out_dir}/* $out
+            ",
+            out_dir = self.node_args.out_dir(),
+        );
 
-        write!(&mut install_phase, "cp -r {}/* $out", self.node_args.out_dir())
-            .expect("writing to string can't fail");
+        if self.node_args.r#type.is_build_script() {
+            install_phase.push_str(indoc!(
+                r"
+                    mkdir -p $out/out
+                    $out/build_script_build | tee $out/build_script_output.txt
+                    cp -r $OUT_DIR/* $out/out
+                ",
+            ));
+        }
 
-        install_phase.push_str("\nrunHook postInstall\n");
+        install_phase.push_str("runHook postInstall\n");
 
         Ok(install_phase)
     }

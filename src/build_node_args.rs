@@ -73,7 +73,7 @@ pub(crate) struct BuildNodeArgs {
     #[attrset(skip_if = Option::is_none)]
     pub(crate) rust_version: Option<CompactString>,
 
-    pub(crate) r#type: DerivationType,
+    pub(crate) r#type: NodeType,
 
     /// This node's package's version.
     #[attrset(with_value = |version: &Version| version.to_compact_string())]
@@ -95,7 +95,7 @@ pub(crate) struct CrateRenameWithVersion {
 }
 
 #[derive(Clone)]
-pub(crate) enum DerivationType {
+pub(crate) enum NodeType {
     /// The derivation will build one or more binary crates.
     Bin(SmallVec<[BinCrate; 1]>),
 
@@ -155,10 +155,14 @@ pub(crate) enum CrateType<'a> {
     BuildScript(&'a CompactString),
 }
 
-impl DerivationType {
+impl NodeType {
+    pub(crate) fn is_build_script(&self) -> bool {
+        matches!(self, NodeType::BuildScript(_))
+    }
+
     pub(crate) fn is_proc_macro(&self) -> bool {
         match self {
-            DerivationType::Lib(lib_crate) => lib_crate.is_proc_macro(),
+            NodeType::Lib(lib_crate) => lib_crate.is_proc_macro(),
             _ => false,
         }
     }
@@ -299,10 +303,10 @@ impl BuildNodeArgs {
     /// Returns the name of the derivation for this build node.
     pub(crate) fn derivation_name(&self) -> CompactString {
         let name_suffix = match &self.r#type {
-            DerivationType::Bin(crates) if crates.len() > 1 => "bins",
-            DerivationType::Bin(_) => "bin",
-            DerivationType::Lib(_) => "lib",
-            DerivationType::BuildScript(_) => "build",
+            NodeType::Bin(crates) if crates.len() > 1 => "bins",
+            NodeType::Bin(_) => "bin",
+            NodeType::Lib(_) => "lib",
+            NodeType::BuildScript(_) => "build",
         };
 
         format_compact!(
@@ -347,7 +351,7 @@ impl BuildNodeArgs {
             codegen_units: Default::default(),
             crate_renames: Default::default(),
             extra_rustc_args: Default::default(),
-            r#type: DerivationType::BuildScript(CompactString::default()),
+            r#type: NodeType::BuildScript(CompactString::default()),
         };
 
         [
@@ -361,9 +365,9 @@ impl BuildNodeArgs {
     /// directory containing the build artifacts.
     pub(crate) fn out_dir(&self) -> &'static str {
         match &self.r#type {
-            DerivationType::Bin(_) => "target/bin",
-            DerivationType::Lib(_) => "target/lib",
-            DerivationType::BuildScript(_) => "target/build",
+            NodeType::Bin(_) => "target/bin",
+            NodeType::Lib(_) => "target/lib",
+            NodeType::BuildScript(_) => "target/build",
         }
     }
 
@@ -385,7 +389,7 @@ impl BuildNodeArgs {
             .into_iter()
             .map(|(dep_args, dep_drv)| {
                 let dep_lib_name = match dep_args.r#type {
-                    DerivationType::Lib(ref lib_crate) => &lib_crate.name,
+                    NodeType::Lib(ref lib_crate) => &lib_crate.name,
                     _ => panic!("only library crates can be dependencies"),
                 };
 
@@ -475,7 +479,7 @@ impl BuildNodeArgs {
         args.codegen_units = Default::default();
         args.crate_renames = Default::default();
         args.extra_rustc_args = Default::default();
-        args.r#type = DerivationType::Bin(bin_crates);
+        args.r#type = NodeType::Bin(bin_crates);
 
         Some(args)
     }
@@ -507,7 +511,7 @@ impl BuildNodeArgs {
         args.codegen_units = Default::default();
         args.crate_renames = Default::default();
         args.extra_rustc_args = Default::default();
-        args.r#type = DerivationType::BuildScript(build_script_path);
+        args.r#type = NodeType::BuildScript(build_script_path);
 
         Some(args)
     }
@@ -563,29 +567,27 @@ impl BuildNodeArgs {
         args.codegen_units = Default::default();
         args.crate_renames = Default::default();
         args.extra_rustc_args = Default::default();
-        args.r#type = DerivationType::Lib(lib_crate);
+        args.r#type = NodeType::Lib(lib_crate);
 
         Some(args)
     }
 }
 
-impl ToValue for DerivationType {
+impl ToValue for NodeType {
     fn to_value<'this, 'eval>(
         &'this self,
         ctx: &mut Context<'eval>,
     ) -> impl Value + use<'this, 'eval> {
         match self {
-            DerivationType::Bin(bin_crates) => Either::Left(attrset! {
+            NodeType::Bin(bin_crates) => Either::Left(attrset! {
                 type: c"bin",
                 binCrates: bin_crates.to_value(ctx),
             }),
-            DerivationType::Lib(lib_crate) => {
-                Either::Right(Either::Left(attrset! {
-                    type: c"lib",
-                    libCrate: lib_crate.to_value(ctx),
-                }))
-            },
-            DerivationType::BuildScript(path) => {
+            NodeType::Lib(lib_crate) => Either::Right(Either::Left(attrset! {
+                type: c"lib",
+                libCrate: lib_crate.to_value(ctx),
+            })),
+            NodeType::BuildScript(path) => {
                 Either::Right(Either::Right(attrset! {
                     type: c"build-script",
                     path: path.to_value(ctx),

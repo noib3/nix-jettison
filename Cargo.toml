@@ -28,6 +28,8 @@ percent-encoding = "2"
 pkg-config = "0.3"
 proc-macro2 = "1"
 quote = "1"
+semver = "1"
+shell-escape = "0.1"
 smallvec = "1"
 syn = "2"
 
@@ -101,6 +103,8 @@ nix-bindings = { workspace = true, features = [
   "std",
 ] }
 percent-encoding = { workspace = true }
+semver = { workspace = true }
+shell-escape = { workspace = true }
 smallvec = { workspace = true }
 
 [lints]
