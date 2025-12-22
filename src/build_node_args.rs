@@ -253,6 +253,10 @@ impl BuildNodeArgs {
             authors: metadata.authors.clone(),
             description: metadata.description.clone(),
             edition: manifest.edition(),
+            features: resolve
+                .features(package.package_id())
+                .map(Into::into)
+                .collect(),
             homepage: metadata.homepage.clone(),
             license_file: metadata.license_file.as_deref().map(Into::into),
             links: metadata.links.as_deref().map(Into::into),
@@ -269,7 +273,6 @@ impl BuildNodeArgs {
             codegen_units: Default::default(),
             crate_renames: Default::default(),
             extra_rustc_args: Default::default(),
-            features: Default::default(),
             r#type: DerivationType::BuildScript(CompactString::default()),
         };
 
@@ -552,7 +555,6 @@ impl BuildNodeArgs {
         args.codegen_units = Default::default();
         args.crate_renames = Default::default();
         args.extra_rustc_args = Default::default();
-        args.features = Default::default();
         args.r#type = DerivationType::Bin(bin_crates);
 
         Some(args)
@@ -641,7 +643,6 @@ impl BuildNodeArgs {
         args.codegen_units = Default::default();
         args.crate_renames = Default::default();
         args.extra_rustc_args = Default::default();
-        args.features = Default::default();
         args.r#type = DerivationType::Lib(lib_crate);
 
         Some(args)
