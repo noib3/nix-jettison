@@ -293,7 +293,7 @@ impl BuildNodeAttrs {
         .chain(self.features.iter().flat_map(|feature| {
             [
                 CompactString::const_new("--cfg"),
-                format_compact!("feature=\"{}\"", feature),
+                format_compact!("feature=\\\"{}\\\"", feature),
             ]
         }))
         // TODO: set linker.
@@ -499,8 +499,9 @@ impl BuildNodeAttrs {
         };
 
         let build_script_path = match build_script {
-            TomlPackageBuild::Auto(_) => CompactString::const_new("build.rs"),
-            TomlPackageBuild::SingleScript(path) => path.into(),
+            TomlPackageBuild::Auto(true) => "build.rs",
+            TomlPackageBuild::Auto(false) => return None,
+            TomlPackageBuild::SingleScript(path) => &**path,
             TomlPackageBuild::MultipleScript(_) => {
                 panic!("multiple build scripts are not yet supported")
             },
@@ -511,7 +512,7 @@ impl BuildNodeAttrs {
         args.codegen_units = Default::default();
         args.crate_renames = Default::default();
         args.extra_rustc_args = Default::default();
-        args.r#type = NodeType::BuildScript(build_script_path);
+        args.r#type = NodeType::BuildScript(build_script_path.into());
 
         Some(args)
     }

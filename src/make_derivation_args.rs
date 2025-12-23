@@ -121,8 +121,6 @@ where
         //    those should be taken care of by the program that parses its
         //    output, so that the only thing we might have to do is pass
         //    `$EXTRA_RUSTC_ARGS` to the `rustc` calls;
-        let mut configure_phase = "runHook preConfigure\n".to_string();
-
         let host_platform =
             self.stdenv.get::<NixAttrset>(c"hostPlatform", ctx)?;
 
@@ -189,11 +187,13 @@ where
             .get::<NixAttrset>(c"buildPlatform", ctx)?
             .get::<NixAttrset>(c"rust", ctx)?
             .get::<CompactString>(c"rustcTargetSpec", ctx)?;
-        let opt_level = if self.release { "3" } else { "0" };
+        let opt_level = if self.release { 3 } else { 0 };
         let profile = if self.release { "release" } else { "debug" };
         let target = host_platform
             .get::<NixAttrset>(c"rust", ctx)?
             .get::<CompactString>(c"rustcTargetSpec", ctx)?;
+
+        let mut configure_phase = "runHook preConfigure\n".to_string();
 
         writedoc!(
             &mut configure_phase,

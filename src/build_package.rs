@@ -116,7 +116,7 @@ impl Function for BuildPackage {
 
         let parse_build_script_output = args
             .pkgs
-            .get::<NixLambda>(c"writeShellScript", ctx)?
+            .get::<NixLambda>(c"writeShellScriptBin", ctx)?
             .call_multi(
                 (
                     c"parse-build-script-output",
