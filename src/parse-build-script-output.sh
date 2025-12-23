@@ -47,12 +47,12 @@ EOF
 
 # Create lib-specific file.
 cat > "$LIB_FILE" <<EOF
-source "\$(dirname "\${BASH_SOURCE[0]}")/$COMMON_FILE"
+source "$COMMON_FILE"
 export ${VAR_NAME}="\${${VAR_NAME}}${RUSTC_LINK_ARG_LIB}${RUSTC_CDYLIB_LINK_ARG}"
 EOF
 
 # Create bin-specific file.
 cat > "$BIN_FILE" <<EOF
-source "\$(dirname "\${BASH_SOURCE[0]}")/$COMMON_FILE"
+source "$COMMON_FILE"
 export ${VAR_NAME}="\${${VAR_NAME}}${RUSTC_LINK_ARG_BINS}"
 EOF

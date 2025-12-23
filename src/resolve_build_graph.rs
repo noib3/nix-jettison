@@ -1,19 +1,24 @@
 use core::result::Result;
-use std::collections::HashMap;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{env, io};
 
 use cargo::core::compiler::{CompileKind, RustcTargetData};
-use cargo::core::dependency::DepKind;
 use cargo::core::profiles::Profiles;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
-use cargo::core::{Dependency, MaybePackage, PackageId, Shell, Workspace};
+use cargo::core::{
+    Dependency,
+    MaybePackage,
+    Package,
+    PackageId,
+    Shell,
+    Workspace,
+};
 use cargo::{GlobalContext, ops};
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_node_attrs::{BuildNodeAttrs, SourceId};
+use crate::build_graph::BuildGraph;
 
 /// Resolves the build graph of a Rust package.
 #[derive(nix_bindings::PrimOp)]
@@ -53,18 +58,6 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The profile to use when building the package.
     #[try_from(default = CompactString::const_new("release"))]
     pub(crate) profile: CompactString,
-}
-
-pub(crate) struct BuildGraph {
-    pub(crate) nodes: Vec<BuildGraphNode<usize>>,
-    pkg_id_to_idx: HashMap<PackageId, usize>,
-}
-
-pub(crate) struct BuildGraphNode<Edge> {
-    pub(crate) attrs: BuildNodeAttrs,
-    pub(crate) build_script: Option<Edge>,
-    pub(crate) dependencies: Vec<Edge>,
-    pub(crate) local_source_path: Option<PathBuf>,
 }
 
 pub(crate) struct WorkspaceResolve<'ws> {
@@ -138,18 +131,18 @@ impl<'ws> WorkspaceResolve<'ws> {
     pub(crate) fn deps(
         &self,
         pkg_id: PackageId,
-    ) -> impl Iterator<Item = (PackageId, impl Iterator<Item = &Dependency>)> + '_
-    {
-        self.inner.targeted_resolve.deps(pkg_id).map(|(dep_id, dep_set)| {
-            (
-                dep_id,
+    ) -> impl Iterator<Item = (PackageId, &Dependency)> {
+        self.inner.targeted_resolve.deps(pkg_id).flat_map(
+            |(dep_pkg_id, dep_set)| {
                 // Filter out dependencies that don't match our target
                 // platform.
-                dep_set.iter().filter(|&dep| {
+                let deps = dep_set.iter().filter(|&dep| {
                     self.target_data.dep_platform_activated(dep, self.target)
-                }),
-            )
-        })
+                });
+
+                deps.map(move |dep| (dep_pkg_id, dep))
+            },
+        )
     }
 
     pub(crate) fn features(
@@ -157,6 +150,10 @@ impl<'ws> WorkspaceResolve<'ws> {
         pkg_id: PackageId,
     ) -> impl Iterator<Item = &str> {
         self.inner.targeted_resolve.features(pkg_id).iter().map(|s| s.as_str())
+    }
+
+    pub(crate) fn package(&self, pkg_id: PackageId) -> Option<&Package> {
+        self.inner.pkg_set.get_one(pkg_id).ok()
     }
 
     pub(crate) fn profiles(&self) -> &Profiles {
@@ -179,10 +176,6 @@ impl<'ws> WorkspaceResolve<'ws> {
 
     pub(crate) fn workspace(&self) -> &Workspace<'ws> {
         &self.workspace
-    }
-
-    fn get_package(&self, pkg_id: PackageId) -> Option<&cargo::core::Package> {
-        self.inner.pkg_set.get_one(pkg_id).ok()
     }
 
     fn new(
@@ -211,117 +204,6 @@ impl<'ws> WorkspaceResolve<'ws> {
             .map_err(ResolveBuildGraphError::ResolveProfiles)?;
 
         Ok(Self { inner, package_id, profiles, target_data, target, workspace })
-    }
-}
-
-impl BuildGraph {
-    fn build_recursive(
-        this: &mut Self,
-        pkg_id: PackageId,
-        resolve: &WorkspaceResolve,
-    ) -> usize {
-        // Fast path if we've already seen this package.
-        if let Some(&lib_node_idx) = this.pkg_id_to_idx.get(&pkg_id) {
-            return lib_node_idx;
-        }
-
-        let package = resolve
-            .get_package(pkg_id)
-            .expect("package ID not found in workspace");
-
-        let local_source_path = package
-            .package_id()
-            .source_id()
-            .is_path()
-            .then(|| package.root().to_owned());
-
-        let [build_script_attrs, lib_attrs, bins_attrs] =
-            BuildNodeAttrs::new(package, resolve);
-
-        let mut build_script_node =
-            build_script_attrs.map(|attrs| BuildGraphNode {
-                attrs,
-                build_script: None,
-                dependencies: Vec::default(),
-                local_source_path: local_source_path.clone(),
-            });
-
-        let build_script_node_idx =
-            build_script_node.is_some().then(|| this.nodes.len());
-
-        let mut lib_node = lib_attrs.map(|attrs| BuildGraphNode {
-            attrs,
-            build_script: build_script_node_idx,
-            dependencies: Vec::default(),
-            local_source_path: local_source_path.clone(),
-        });
-
-        let mut bins_node = bins_attrs.map(|attrs| BuildGraphNode {
-            attrs,
-            build_script: build_script_node_idx,
-            dependencies: Vec::default(),
-            local_source_path: local_source_path.clone(),
-        });
-
-        for (dep_id, dep_set) in resolve.deps(pkg_id) {
-            for dep in dep_set {
-                match dep.kind() {
-                    DepKind::Normal => {
-                        let dep_idx =
-                            Self::build_recursive(this, dep_id, resolve);
-                        if let Some(node) = lib_node.as_mut() {
-                            node.dependencies.push(dep_idx)
-                        }
-                        if let Some(node) = bins_node.as_mut() {
-                            node.dependencies.push(dep_idx)
-                        }
-                    },
-                    DepKind::Development => {},
-                    DepKind::Build => {
-                        let Some(node) = build_script_node.as_mut() else {
-                            continue;
-                        };
-                        let dep_idx =
-                            Self::build_recursive(this, dep_id, resolve);
-                        node.dependencies.push(dep_idx)
-                    },
-                }
-            }
-        }
-
-        if let Some(node) = build_script_node {
-            this.nodes.push(node);
-        }
-
-        let lib_node_idx = this.nodes.len();
-
-        if let Some(node) = lib_node {
-            this.nodes.push(node);
-        }
-
-        if let Some(node) = bins_node {
-            this.nodes.push(node);
-        }
-
-        this.pkg_id_to_idx.insert(pkg_id, lib_node_idx);
-
-        lib_node_idx
-    }
-
-    fn new(
-        root_id: PackageId,
-        resolve: &WorkspaceResolve,
-    ) -> Result<Self, ResolveBuildGraphError> {
-        let mut this =
-            Self { nodes: Vec::new(), pkg_id_to_idx: HashMap::new() };
-        Self::build_recursive(&mut this, root_id, resolve);
-        Ok(this)
-    }
-}
-
-impl<Edge> BuildGraphNode<Edge> {
-    pub(crate) fn source_id(&self) -> SourceId<'_> {
-        self.attrs.source_id()
     }
 }
 
@@ -365,26 +247,7 @@ impl Function for ResolveBuildGraph {
 
         let resolve = WorkspaceResolve::new(workspace, package_id, &args)?;
 
-        BuildGraph::new(package_id, &resolve)
-    }
-}
-
-impl<Edge: Value> ToValue for BuildGraphNode<Edge> {
-    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, Edge> {
-        Attrset::borrow(&self.attrs)
-            .merge(self.build_script.as_ref().map(|edge| {
-                attrset! { buildScript: edge.borrow() }
-            }))
-            .merge(attrset! { dependencies: &*self.dependencies })
-            .merge(self.local_source_path.as_deref().map(|path| {
-                attrset! { localSourcePath: path }
-            }))
-    }
-}
-
-impl IntoValue for BuildGraph {
-    fn into_value(self, _: &mut Context) -> impl Value + use<> {
-        self.nodes
+        Ok(BuildGraph::new(package_id, &resolve))
     }
 }
 

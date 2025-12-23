@@ -6,7 +6,7 @@ use std::ffi::CString;
 use cargo::core::compiler::CompileTarget;
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
-use indoc::{formatdoc, writedoc};
+use indoc::formatdoc;
 use nix_bindings::prelude::*;
 
 use crate::build_node_attrs::{BuildNodeAttrs, CrateType, NodeType};
@@ -193,11 +193,9 @@ where
             .get::<NixAttrset>(c"rust", ctx)?
             .get::<CompactString>(c"rustcTargetSpec", ctx)?;
 
-        let mut configure_phase = "runHook preConfigure\n".to_string();
-
-        writedoc!(
-            &mut configure_phase,
+        let mut configure_phase = formatdoc!(
             r#"
+                runHook preConfigure
                 export CARGO_CFG_TARGET_ARCH={target_arch}
                 export CARGO_CFG_TARGET_ENDIAN={target_endian}
                 export CARGO_CFG_TARGET_ENV="gnu"
@@ -231,8 +229,7 @@ where
                 export RUSTDOC="rustdoc"
                 export TARGET={target}
             "#
-        )
-        .expect("writing to string can't fail");
+        );
 
         if let Some(build_drv) = &self.build_script_drv {
             let out_path = build_drv.out_path(ctx)?;

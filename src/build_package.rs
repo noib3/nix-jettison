@@ -5,7 +5,6 @@ use std::path::Path;
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::make_derivation_args::MakeDerivationArgs;
 use crate::resolve_build_graph::{
     ResolveBuildGraph,
     ResolveBuildGraphArgs,
@@ -130,13 +129,24 @@ impl Function for BuildPackage {
 
         let mk_derivation = stdenv.get::<NixLambda>(c"mkDerivation", ctx)?;
 
-        let mut build_derivations: Vec<NixDerivation<'static>> =
+        let mut library_derivations: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
 
         let make_path = ctx.builtins().path(ctx);
 
-        for node in &build_graph.nodes {
-            let src = match node.local_source_path.as_deref() {
+        let global_args = MakeDerivationGlobalArgs {
+            crate_overrides: args.crate_overrides,
+            global_overrides: args.global_overrides,
+            mk_derivation,
+            parse_build_script_output,
+            release: args.release,
+            rustc,
+            stdenv,
+            target: None,
+        };
+
+        for (node_idx, node) in build_graph.nodes.iter().enumerate() {
+            let src = match node.package_src.as_deref() {
                 Some(path) => {
                     let name = path.file_name().expect("path has a file name");
                     make_path.call(attrset! { path, name }, ctx)?
@@ -146,38 +156,73 @@ impl Function for BuildPackage {
                     .expect("source is not local, so it must've been vendored"),
             };
 
-            let build_script_drv =
-                node.build_script.map(|idx| build_derivations[idx].clone());
+            let node_args = MakeDerivationNodeArgs {
+                deps: node.build_deps(ctx)?,
+                node,
+                src,
+            };
 
-            let dependencies = node.dependencies.iter().map(|&idx| {
-                let attrs = &build_graph.nodes[idx].attrs;
-                let drv = build_derivations[idx].clone();
-                (attrs, drv)
+            let build_script = if let Some(build_script) = &node.build_script {
+                let direct_deps = build_graph.edges[node_idx]
+                    .build_dependencies
+                    .iter()
+                    .map(|&idx| {
+                        let node = &build_graph.nodes[idx];
+                        let drv = library_derivations[idx].clone();
+                        (node, drv)
+                    });
+
+                Some(make_derivation(
+                    global_args.clone(),
+                    node_args.clone(),
+                    DerivationType::BuildScript(build_script),
+                    direct_deps,
+                    ctx,
+                )?)
+            } else {
+                None
+            };
+
+            let direct_deps = node.edges[node_idx].deps.iter().map(|&idx| {
+                let node = &build_graph.nodes[idx];
+                let drv = library_derivations[idx].clone();
+                (node, drv)
             });
 
-            let args = MakeDerivationArgs {
-                build_script_drv,
-                crate_overrides: args.crate_overrides,
-                dependencies,
-                global_overrides: args.global_overrides,
-                node: &node.attrs,
-                parse_build_script_output,
-                release: args.release,
-                rustc,
-                src,
-                stdenv,
-                target: None,
+            let library = if let Some(library) = &node.library {
+                let drv = make_derivation(
+                    global_args.clone(),
+                    node_args.clone(),
+                    DerivationType::Library { build_script, library },
+                    direct_deps.clone(),
+                    ctx,
+                )?;
+                library_derivations.push(drv.clone());
+                Some(drv)
+            } else {
+                None
+            };
+
+            if node.binaries.is_empty() {
+                continue;
             }
-            .into_attrs(ctx)?;
 
-            let build_drv = mk_derivation.call(args, ctx)?.force_into(ctx)?;
-
-            build_derivations.push(build_drv);
+            let _drv = make_derivation(
+                global_args.clone(),
+                node_args,
+                DerivationType::Binaries {
+                    build_script,
+                    library,
+                    binaries: &node.binaries,
+                },
+                direct_deps,
+                ctx,
+            )?;
         }
 
         // The derivation for the requested package is the root of the build
         // graph, which is the last element in the vector.
-        Ok(build_derivations
+        Ok(library_derivations
             .into_iter()
             .next_back()
             .expect("build graph is never empty"))

@@ -1,98 +1,12 @@
 use core::cmp::Ordering;
 use core::fmt;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::env::consts::DLL_EXTENSION;
 
-use cargo::core::compiler::{CompileTarget, CrateType as CargoCrateType};
-use cargo::core::manifest::TargetSourcePath;
-use cargo::core::{Edition, Package, TargetKind};
-use cargo_util_schemas::manifest::TomlPackageBuild;
-use compact_str::{CompactString, ToCompactString, format_compact};
-use either::Either;
+use cargo::core::compiler::CompileTarget;
+use compact_str::{CompactString, format_compact};
 use nix_bindings::prelude::*;
-use semver::Version;
 use smallvec::SmallVec;
-
-use crate::resolve_build_graph::WorkspaceResolve;
-
-/// Build attributes of a single node in the build graph.
-#[derive(nix_bindings::Attrset, Clone)]
-#[attrset(rename_all = camelCase)]
-pub(crate) struct BuildNodeAttrs {
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) authors: Vec<String>,
-
-    /// This is derived state which can be specified in Cargo profiles (for
-    /// example: `[profile.release] codegen-units = N`).
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) codegen_units: Option<u32>,
-
-    /// This is derived state from the dependencies section of the Cargo.toml
-    /// of the crate.
-    #[attrset(skip_if = HashMap::is_empty)]
-    pub(crate) crate_renames: HashMap<CompactString, CrateRename>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) description: Option<String>,
-
-    /// The Rust edition specified by the package this node is in.
-    #[attrset(with_value = |&ed| edition_as_str(ed))]
-    pub(crate) edition: Edition,
-
-    /// Extra command-line arguments to pass to `rustc` when building the
-    /// node.
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) extra_rustc_args: Vec<CompactString>,
-
-    /// The list of features to enable when building this node.
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) features: Vec<CompactString>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) homepage: Option<String>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) license: Option<CompactString>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) license_file: Option<CompactString>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) links: Option<CompactString>,
-
-    /// The name of the package this node is in.
-    pub(crate) package_name: CompactString,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) readme: Option<CompactString>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) repository: Option<CompactString>,
-
-    #[attrset(skip_if = Option::is_none)]
-    pub(crate) rust_version: Option<CompactString>,
-
-    pub(crate) r#type: NodeType,
-
-    /// This node's package's version.
-    #[attrset(with_value = |version: &Version| version.to_compact_string())]
-    pub(crate) version: Version,
-}
-
-#[derive(nix_bindings::Value, Clone)]
-pub(crate) enum CrateRename {
-    Simple(CompactString),
-    Extended(Vec<CrateRenameWithVersion>),
-}
-
-/// Represents a version-specific rename for the extended crateRenames format.
-#[derive(nix_bindings::Attrset, Clone)]
-pub(crate) struct CrateRenameWithVersion {
-    pub(crate) rename: CompactString,
-    #[attrset(with_value = |version: &Version| version.to_compact_string())]
-    pub(crate) version: Version,
-}
 
 #[derive(Clone)]
 pub(crate) enum NodeType {
@@ -105,15 +19,6 @@ pub(crate) enum NodeType {
     /// The derivation will build and run the build script at the given path
     /// relative to the package root.
     BuildScript(CompactString),
-}
-
-#[derive(nix_bindings::Attrset, Clone)]
-#[attrset(rename_all = camelCase)]
-pub(crate) struct BinCrate {
-    name: CompactString,
-    path: CompactString,
-    #[attrset(skip_if = Vec::is_empty)]
-    required_features: Vec<CompactString>,
 }
 
 #[derive(nix_bindings::Attrset, Clone)]
@@ -317,50 +222,6 @@ impl BuildNodeAttrs {
         )
     }
 
-    #[expect(clippy::too_many_lines)]
-    pub(crate) fn new(
-        package: &Package,
-        resolve: &WorkspaceResolve,
-    ) -> [Option<Self>; 3] {
-        let manifest = package.manifest();
-        let metadata = manifest.metadata();
-
-        let args = Self {
-            // These fields are the same across all nodes in the same package.
-            authors: metadata.authors.clone(),
-            description: metadata.description.clone(),
-            edition: manifest.edition(),
-            features: resolve
-                .features(package.package_id())
-                .map(Into::into)
-                .collect(),
-            homepage: metadata.homepage.clone(),
-            license: metadata.license.as_deref().map(Into::into),
-            license_file: metadata.license_file.as_deref().map(Into::into),
-            links: metadata.links.as_deref().map(Into::into),
-            package_name: package.name().as_str().into(),
-            readme: metadata.readme.as_deref().map(Into::into),
-            repository: metadata.repository.as_deref().map(Into::into),
-            rust_version: metadata
-                .rust_version
-                .as_ref()
-                .map(|v| v.to_compact_string()),
-            version: package.version().clone(),
-            // These fields differ across nodes. We're initializing them to
-            // dummy values here, and will override them below.
-            codegen_units: Default::default(),
-            crate_renames: Default::default(),
-            extra_rustc_args: Default::default(),
-            r#type: NodeType::BuildScript(CompactString::default()),
-        };
-
-        [
-            Self::new_for_build_script(package, resolve, || args.clone()),
-            Self::new_for_lib(package, resolve, || args.clone()),
-            Self::new_for_bins(package, resolve, || args.clone()),
-        ]
-    }
-
     /// Returns the relative path from the root of the build directory to the
     /// directory containing the build artifacts.
     pub(crate) fn out_dir(&self) -> &'static str {
@@ -368,13 +229,6 @@ impl BuildNodeAttrs {
             NodeType::Bin(_) => "target/bin",
             NodeType::Lib(_) => "target/lib",
             NodeType::BuildScript(_) => "target/build",
-        }
-    }
-
-    pub(crate) fn source_id(&self) -> SourceId<'_> {
-        SourceId {
-            package_name: &self.package_name,
-            version: Cow::Owned(self.version.to_string()),
         }
     }
 
@@ -395,8 +249,8 @@ impl BuildNodeAttrs {
 
                 let lib_name =
                     match self.crate_renames.get(&dep_args.package_name) {
-                        Some(CrateRename::Simple(rename)) => rename,
-                        Some(CrateRename::Extended(renames)) => renames
+                        Some(DependencyRename::Simple(rename)) => rename,
+                        Some(DependencyRename::Extended(renames)) => renames
                             .iter()
                             .find_map(|rename| {
                                 (rename.version == dep_args.version)
@@ -431,177 +285,6 @@ impl BuildNodeAttrs {
                 ]
             })
     }
-
-    fn new_for_bins(
-        package: &Package,
-        resolve: &WorkspaceResolve,
-        make_common_args: impl FnOnce() -> Self,
-    ) -> Option<Self> {
-        // We only build binaries for the root of the build graph.
-        if &package.package_id() != resolve.root_id() {
-            return None;
-        }
-
-        let bin_targets = package.targets().iter().filter_map(|target| {
-            match target.src_path() {
-                TargetSourcePath::Path(src_path) => {
-                    target.is_bin().then(|| (target, &**src_path))
-                },
-                TargetSourcePath::Metabuild => None,
-            }
-        });
-
-        let bin_crates = bin_targets
-            .map(|(target, src_path)| {
-                let path = src_path
-                    .strip_prefix(package.root())
-                    .expect("binary path is under package root")
-                    .display()
-                    .to_compact_string();
-
-                let required_features = target
-                    .required_features()
-                    .iter()
-                    .flat_map(|feats| feats.iter())
-                    .map(|feat| (**feat).into())
-                    .collect();
-
-                BinCrate { name: target.name().into(), path, required_features }
-            })
-            .collect::<SmallVec<_>>();
-
-        if bin_crates.is_empty() {
-            return None;
-        }
-
-        let mut args = make_common_args();
-
-        args.codegen_units = Default::default();
-        args.crate_renames = Default::default();
-        args.extra_rustc_args = Default::default();
-        args.r#type = NodeType::Bin(bin_crates);
-
-        Some(args)
-    }
-
-    fn new_for_build_script(
-        package: &Package,
-        _resolve: &WorkspaceResolve,
-        make_common_args: impl FnOnce() -> Self,
-    ) -> Option<Self> {
-        let Some(build_script) = package
-            .manifest()
-            .original_toml()
-            .package()
-            .and_then(|pkg| pkg.build.as_ref())
-        else {
-            return None;
-        };
-
-        let build_script_path = match build_script {
-            TomlPackageBuild::Auto(true) => "build.rs",
-            TomlPackageBuild::Auto(false) => return None,
-            TomlPackageBuild::SingleScript(path) => &**path,
-            TomlPackageBuild::MultipleScript(_) => {
-                panic!("multiple build scripts are not yet supported")
-            },
-        };
-
-        let mut args = make_common_args();
-
-        args.codegen_units = Default::default();
-        args.crate_renames = Default::default();
-        args.extra_rustc_args = Default::default();
-        args.r#type = NodeType::BuildScript(build_script_path.into());
-
-        Some(args)
-    }
-
-    fn new_for_lib(
-        package: &Package,
-        _resolve: &WorkspaceResolve,
-        make_common_args: impl FnOnce() -> Self,
-    ) -> Option<Self> {
-        let (lib_target, crate_types) =
-            package.targets().iter().find_map(|target| {
-                match target.kind() {
-                    TargetKind::Lib(crate_types) => {
-                        Some((target, &**crate_types))
-                    },
-                    _ => None,
-                }
-            })?;
-
-        let lib_path = match lib_target.src_path() {
-            TargetSourcePath::Path(src_path) => src_path
-                .strip_prefix(package.root())
-                .expect("library path is under package root")
-                .display()
-                .to_compact_string(),
-
-            TargetSourcePath::Metabuild => {
-                panic!("library target cannot have a metabuild source path")
-            },
-        };
-
-        let lib_formats = crate_types
-            .iter()
-            .map(|crate_type| match crate_type {
-                CargoCrateType::Lib => LibFormat::Lib,
-                CargoCrateType::Rlib => LibFormat::Rlib,
-                CargoCrateType::Dylib => LibFormat::Dylib,
-                CargoCrateType::Cdylib => LibFormat::Cdylib,
-                CargoCrateType::Staticlib => LibFormat::Staticlib,
-                CargoCrateType::ProcMacro => LibFormat::ProcMacro,
-                other => unreachable!("{other:?} is not a library crate type"),
-            })
-            .collect();
-
-        let lib_crate = LibCrate {
-            name: lib_target.name().into(),
-            path: lib_path,
-            formats: lib_formats,
-        };
-
-        let mut args = make_common_args();
-
-        args.codegen_units = Default::default();
-        args.crate_renames = Default::default();
-        args.extra_rustc_args = Default::default();
-        args.r#type = NodeType::Lib(lib_crate);
-
-        Some(args)
-    }
-}
-
-impl ToValue for NodeType {
-    fn to_value<'this, 'eval>(
-        &'this self,
-        ctx: &mut Context<'eval>,
-    ) -> impl Value + use<'this, 'eval> {
-        match self {
-            NodeType::Bin(bin_crates) => Either::Left(attrset! {
-                type: c"bin",
-                binCrates: bin_crates.to_value(ctx),
-            }),
-            NodeType::Lib(lib_crate) => Either::Right(Either::Left(attrset! {
-                type: c"lib",
-                libCrate: lib_crate.to_value(ctx),
-            })),
-            NodeType::BuildScript(path) => {
-                Either::Right(Either::Right(attrset! {
-                    type: c"build-script",
-                    path: path.to_value(ctx),
-                }))
-            },
-        }
-    }
-}
-
-impl ToValue for LibFormat {
-    fn to_value(&self, _: &mut Context) -> impl Value + use<> {
-        self.as_str()
-    }
 }
 
 impl fmt::Display for SourceId<'_> {
@@ -629,16 +312,5 @@ impl Ord for SourceId<'_> {
         self.package_name
             .cmp(other.package_name)
             .then_with(|| self.version.cmp(&other.version))
-    }
-}
-
-#[inline]
-fn edition_as_str(edition: Edition) -> &'static str {
-    match edition {
-        Edition::Edition2015 => "2015",
-        Edition::Edition2018 => "2018",
-        Edition::Edition2021 => "2021",
-        Edition::Edition2024 => "2024",
-        Edition::EditionFuture => "future",
     }
 }
