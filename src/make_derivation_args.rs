@@ -130,8 +130,7 @@ where
             .get::<NixAttrset>(c"parsed", ctx)?
             .get::<NixAttrset>(c"cpu", ctx)?;
 
-        let rust_platform = self
-            .stdenv
+        let rust_platform = host_platform
             .get::<NixAttrset>(c"rust", ctx)?
             .get::<NixAttrset>(c"platform", ctx)?;
 
