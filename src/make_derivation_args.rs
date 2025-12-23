@@ -9,7 +9,8 @@ use either::Either;
 use indoc::formatdoc;
 use nix_bindings::prelude::*;
 
-use crate::build_node_attrs::{BuildNodeAttrs, CrateType, NodeType};
+use crate::build_node_attrs::{CrateType, NodeType};
+use crate::build_package::BuildPackageArgs;
 
 /// All the arguments needed to create the attribute set given to
 /// `stdenv.mkDerivation` to build a single node in the build graph.
@@ -53,6 +54,74 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
     ///
     /// This should only be set when cross-compiling.
     pub(crate) target: Option<CompileTarget>,
+}
+
+pub(crate) struct MakeDerivationGlobalArgs<'args> {
+    /// The
+    /// [`BuildPackageArgs::crate_overrides`](crate::build_package::BuildPackageArgs::crate_overrides) field.
+    pub(crate) crate_overrides: Option<NixAttrset<'args>>,
+
+    /// The
+    /// [`BuildPackageArgs::global_overrides`](crate::build_package::BuildPackageArgs::global_overrides) field.
+    pub(crate) global_overrides: Option<NixAttrset<'args>>,
+
+    /// The node's build attributes coming from the build graph resolution step.
+    pub(crate) mk_derivation: NixLambda<'args>,
+
+    /// The derivation for the `parse-build-script-output` shell script.
+    pub(crate) parse_build_script_output: NixDerivation<'args>,
+
+    /// Whether the node should be built in release mode.
+    pub(crate) release: bool,
+
+    /// The `rustc` derivation to include in the derivation's `buildInputs`.
+    pub(crate) rustc: NixDerivation<'args>,
+
+    /// A handle to Nixpkgs's standard build environment.
+    pub(crate) stdenv: NixAttrset<'args>,
+
+    /// The compilation `--target` to pass to `rustc`, if any.
+    ///
+    /// This should only be set when cross-compiling.
+    pub(crate) target: Option<CompileTarget>,
+}
+
+impl<'args> MakeDerivationGlobalArgs<'args> {
+    pub(crate) fn new(
+        args: &BuildPackageArgs<'args>,
+        ctx: &mut Context,
+    ) -> Result<Self> {
+        let stdenv = args.pkgs.get::<NixAttrset>(c"stdenv", ctx)?;
+
+        let write_shell_script_bin =
+            args.pkgs.get::<NixLambda>(c"writeShellScriptBin", ctx)?;
+
+        let parse_build_script_output = write_shell_script_bin
+            .call_multi(
+                (
+                    c"parse-build-script-output",
+                    include_str!("./parse-build-script-output.sh"),
+                ),
+                ctx,
+            )?
+            .force_into::<NixDerivation>(ctx)?;
+
+        let rustc = match args.rustc {
+            Some(rustc) => rustc,
+            None => args.pkgs.get::<NixDerivation>(c"rustc", ctx)?,
+        };
+
+        Ok(Self {
+            crate_overrides: args.crate_overrides,
+            global_overrides: args.global_overrides,
+            mk_derivation: stdenv.get::<NixLambda>(c"mkDerivation", ctx)?,
+            parse_build_script_output,
+            release: args.release,
+            rustc,
+            stdenv,
+            target: None,
+        })
+    }
 }
 
 impl<'a, Src, Deps> MakeDerivationArgs<'a, Deps, Src>

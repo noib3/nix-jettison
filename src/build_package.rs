@@ -5,6 +5,8 @@ use std::path::Path;
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
+use crate::build_graph::BuildGraph;
+use crate::make_derivation_args::MakeDerivationGlobalArgs;
 use crate::resolve_build_graph::{
     ResolveBuildGraph,
     ResolveBuildGraphArgs,
@@ -21,7 +23,7 @@ pub(crate) struct BuildPackage;
 #[try_from(rename_all = camelCase)]
 pub(crate) struct BuildPackageArgs<'a> {
     /// The package set to use.
-    pkgs: NixAttrset<'a>,
+    pub(crate) pkgs: NixAttrset<'a>,
 
     /// The path to the root of the workspace the package is in.
     src: &'a Path,
@@ -33,7 +35,7 @@ pub(crate) struct BuildPackageArgs<'a> {
 
     /// TODO: docs.
     #[try_from(default)]
-    crate_overrides: Option<NixAttrset<'a>>,
+    pub(crate) crate_overrides: Option<NixAttrset<'a>>,
 
     /// The list of the package's features to enable.
     #[try_from(default)]
@@ -41,7 +43,7 @@ pub(crate) struct BuildPackageArgs<'a> {
 
     /// TODO: docs.
     #[try_from(default)]
-    global_overrides: Option<NixAttrset<'a>>,
+    pub(crate) global_overrides: Option<NixAttrset<'a>>,
 
     /// Whether to disable the default features (equivalent to calling Cargo
     /// with the `--no-default-features` CLI flag).
@@ -54,11 +56,11 @@ pub(crate) struct BuildPackageArgs<'a> {
 
     /// TODO: docs.
     #[try_from(default = true)]
-    release: bool,
+    pub(crate) release: bool,
 
     /// TODO: docs.
     #[try_from(default)]
-    rustc: Option<NixDerivation<'a>>,
+    pub(crate) rustc: Option<NixDerivation<'a>>,
 }
 
 /// The type of error that can occur when building a package fails.
@@ -75,14 +77,11 @@ pub(crate) enum BuildPackageError {
     VendorDeps(#[from] VendorDepsError),
 }
 
-impl Function for BuildPackage {
-    type Args<'a> = BuildPackageArgs<'a>;
-
-    #[expect(clippy::too_many_lines)]
-    fn call<'a: 'a>(
-        args: Self::Args<'a>,
+impl BuildPackage {
+    fn get_build_graph(
+        args: BuildPackageArgs,
         ctx: &mut Context,
-    ) -> Result<NixDerivation<'static>, BuildPackageError> {
+    ) -> Result<BuildGraph, BuildPackageError> {
         let cargo_lock =
             VendorDeps::read_cargo_lock(&args.src.join("Cargo.lock"))?;
 
@@ -103,47 +102,27 @@ impl Function for BuildPackage {
             }),
         };
 
-        let build_graph = <ResolveBuildGraph as Function>::call(
-            resolve_build_graph_args,
-            ctx,
-        )?;
+        <ResolveBuildGraph as Function>::call(resolve_build_graph_args, ctx)
+            .map_err(Into::into)
+    }
+}
 
-        let rustc = match args.rustc {
-            Some(rustc) => rustc,
-            None => args.pkgs.get::<NixDerivation>(c"rustc", ctx)?,
-        };
+impl Function for BuildPackage {
+    type Args<'a> = BuildPackageArgs<'a>;
 
-        let parse_build_script_output = args
-            .pkgs
-            .get::<NixLambda>(c"writeShellScriptBin", ctx)?
-            .call_multi(
-                (
-                    c"parse-build-script-output",
-                    include_str!("./parse-build-script-output.sh"),
-                ),
-                ctx,
-            )?
-            .force_into::<NixDerivation>(ctx)?;
+    #[expect(clippy::too_many_lines)]
+    fn call<'a: 'a>(
+        args: Self::Args<'a>,
+        ctx: &mut Context,
+    ) -> Result<NixDerivation<'static>, BuildPackageError> {
+        let global_args = MakeDerivationGlobalArgs::new(&args, ctx)?;
 
-        let stdenv = args.pkgs.get::<NixAttrset>(c"stdenv", ctx)?;
-
-        let mk_derivation = stdenv.get::<NixLambda>(c"mkDerivation", ctx)?;
-
-        let mut library_derivations: Vec<NixDerivation<'static>> =
-            Vec::with_capacity(build_graph.nodes.len());
+        let build_graph = Self::get_build_graph(args, ctx)?;
 
         let make_path = ctx.builtins().path(ctx);
 
-        let global_args = MakeDerivationGlobalArgs {
-            crate_overrides: args.crate_overrides,
-            global_overrides: args.global_overrides,
-            mk_derivation,
-            parse_build_script_output,
-            release: args.release,
-            rustc,
-            stdenv,
-            target: None,
-        };
+        let mut library_derivations: Vec<NixDerivation<'static>> =
+            Vec::with_capacity(build_graph.nodes.len());
 
         for (node_idx, node) in build_graph.nodes.iter().enumerate() {
             let src = match node.package_src.as_deref() {
@@ -151,9 +130,10 @@ impl Function for BuildPackage {
                     let name = path.file_name().expect("path has a file name");
                     make_path.call(attrset! { path, name }, ctx)?
                 },
-                None => vendored_sources
-                    .get(node.source_id())
-                    .expect("source is not local, so it must've been vendored"),
+                None => todo!(),
+                // None => vendored_sources
+                //     .get(node.source_id())
+                //     .expect("source is not local, so it must've been vendored"),
             };
 
             let node_args = MakeDerivationNodeArgs {
@@ -207,7 +187,7 @@ impl Function for BuildPackage {
                 continue;
             }
 
-            let _drv = make_derivation(
+            let _binaries = make_derivation(
                 global_args.clone(),
                 node_args,
                 DerivationType::Binaries {
