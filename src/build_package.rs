@@ -6,7 +6,11 @@ use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::build_graph::BuildGraph;
-use crate::make_derivation_args::MakeDerivationGlobalArgs;
+use crate::make_derivation_args::{
+    DerivationType,
+    MakeDerivationGlobalArgs,
+    make_derivation,
+};
 use crate::resolve_build_graph::{
     ResolveBuildGraph,
     ResolveBuildGraphArgs,
@@ -136,11 +140,7 @@ impl Function for BuildPackage {
                 //     .expect("source is not local, so it must've been vendored"),
             };
 
-            let node_args = MakeDerivationNodeArgs {
-                deps: node.build_deps(ctx)?,
-                node,
-                src,
-            };
+            let deps = node.build_deps(ctx)?;
 
             let build_script = if let Some(build_script) = &node.build_script {
                 let direct_deps = build_graph.edges[node_idx]
@@ -153,28 +153,33 @@ impl Function for BuildPackage {
                     });
 
                 Some(make_derivation(
-                    global_args.clone(),
-                    node_args.clone(),
                     DerivationType::BuildScript(build_script),
+                    node.clone(),
+                    src.clone(),
+                    deps.clone(),
                     direct_deps,
+                    &global_args,
                     ctx,
                 )?)
             } else {
                 None
             };
 
-            let direct_deps = node.edges[node_idx].deps.iter().map(|&idx| {
-                let node = &build_graph.nodes[idx];
-                let drv = library_derivations[idx].clone();
-                (node, drv)
-            });
+            let direct_deps =
+                build_graph.edges[node_idx].dependencies.iter().map(|&idx| {
+                    let node = &build_graph.nodes[idx];
+                    let drv = library_derivations[idx].clone();
+                    (node, drv)
+                });
 
             let library = if let Some(library) = &node.library {
                 let drv = make_derivation(
-                    global_args.clone(),
-                    node_args.clone(),
                     DerivationType::Library { build_script, library },
+                    node.clone(),
+                    src.clone(),
+                    deps.clone(),
                     direct_deps.clone(),
+                    &global_args,
                     ctx,
                 )?;
                 library_derivations.push(drv.clone());
@@ -188,14 +193,16 @@ impl Function for BuildPackage {
             }
 
             let _binaries = make_derivation(
-                global_args.clone(),
-                node_args,
                 DerivationType::Binaries {
                     build_script,
                     library,
                     binaries: &node.binaries,
                 },
+                node,
+                src,
+                deps,
                 direct_deps,
+                &global_args,
                 ctx,
             )?;
         }

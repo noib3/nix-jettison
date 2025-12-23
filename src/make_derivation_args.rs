@@ -9,6 +9,12 @@ use either::Either;
 use indoc::formatdoc;
 use nix_bindings::prelude::*;
 
+use crate::build_graph::{
+    BinaryCrate,
+    BuildGraphNode,
+    BuildScript,
+    LibraryCrate,
+};
 use crate::build_node_attrs::{CrateType, NodeType};
 use crate::build_package::BuildPackageArgs;
 
@@ -56,6 +62,41 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
     pub(crate) target: Option<CompileTarget>,
 }
 
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn make_derivation<'dep, Deps>(
+    _type: DerivationType,
+    _node: &BuildGraphNode,
+    _src: impl Value,
+    _deps: NixDerivation,
+    _direct_deps: Deps,
+    _args: &MakeDerivationGlobalArgs,
+    _ctx: &mut Context,
+) -> Result<NixDerivation<'static>>
+where
+    Deps: Iterator<Item = (&'dep BuildGraphNode, NixDerivation<'dep>)> + Clone,
+{
+    todo!();
+}
+
+pub(crate) enum DerivationType<'graph> {
+    /// TODO: docs.
+    BuildScript(&'graph BuildScript),
+
+    /// TODO: docs.
+    Library {
+        build_script: Option<NixDerivation<'static>>,
+        library: &'graph LibraryCrate,
+    },
+
+    /// TODO: docs.
+    Binaries {
+        build_script: Option<NixDerivation<'static>>,
+        library: Option<NixDerivation<'static>>,
+        binaries: &'graph [BinaryCrate],
+    },
+}
+
+#[derive(Clone)]
 pub(crate) struct MakeDerivationGlobalArgs<'args> {
     /// The
     /// [`BuildPackageArgs::crate_overrides`](crate::build_package::BuildPackageArgs::crate_overrides) field.
