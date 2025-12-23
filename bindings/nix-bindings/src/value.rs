@@ -796,6 +796,23 @@ impl<T: ToValue> Value for &[T] {
     }
 }
 
+impl<const N: usize, T: ToValue> Value for [T; N] {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::List
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { self.into_list().into_value().write(dest, namespace, ctx) }
+    }
+}
+
 #[cfg(feature = "std")]
 impl Value for std::path::Path {
     #[inline]

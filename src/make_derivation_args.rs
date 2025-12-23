@@ -68,14 +68,14 @@ where
     ) -> Result<impl Attrset + Value + use<'this, 'dep, Src, Deps>> {
         let base_args = attrset! {
             name: self.node.derivation_name(),
-            buildInputs: <[NixDerivation; 0]>::default().into_value(),
-            nativeBuildInputs: [self.rustc, self.parse_build_script_output].into_value(),
+            buildInputs: <[NixDerivation; 0]>::default(),
+            nativeBuildInputs: [self.rustc, self.parse_build_script_output],
             configurePhase: self.configure_phase(ctx)?,
             buildPhase: self.build_phase(ctx)?,
             installPhase: self.install_phase(ctx)?,
             dontStrip: true,
             // See https://github.com/NixOS/nixpkgs/issues/218712.
-            stripExclude: [ c"*.rlib" ].into_value(),
+            stripExclude: [ c"*.rlib" ],
             version: self.node.version.to_compact_string(),
             src: self.src,
         };
