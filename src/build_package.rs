@@ -79,6 +79,7 @@ pub(crate) enum BuildPackageError {
 impl Function for BuildPackage {
     type Args<'a> = BuildPackageArgs<'a>;
 
+    #[expect(clippy::too_many_lines)]
     fn call<'a: 'a>(
         args: Self::Args<'a>,
         ctx: &mut Context,
@@ -112,6 +113,18 @@ impl Function for BuildPackage {
             Some(rustc) => rustc,
             None => args.pkgs.get::<NixDerivation>(c"rustc", ctx)?,
         };
+
+        let parse_build_script_output = args
+            .pkgs
+            .get::<NixLambda>(c"writeShellScript", ctx)?
+            .call_multi(
+                (
+                    c"parse-build-script-output",
+                    include_str!("./parse-build-script-output.sh"),
+                ),
+                ctx,
+            )?
+            .force_into::<NixDerivation>(ctx)?;
 
         let stdenv = args.pkgs.get::<NixAttrset>(c"stdenv", ctx)?;
 
@@ -148,6 +161,7 @@ impl Function for BuildPackage {
                 dependencies,
                 global_overrides: args.global_overrides,
                 node: &node.attrs,
+                parse_build_script_output,
                 release: args.release,
                 rustc,
                 src,

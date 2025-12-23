@@ -148,7 +148,7 @@ pub(crate) struct SourceId<'a> {
 }
 
 impl BuildCrateArgs {
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn new(package: &Package, resolve: &WorkspaceResolve) -> Self {
         let manifest = package.manifest();
         let metadata = manifest.metadata();

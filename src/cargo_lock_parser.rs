@@ -177,7 +177,7 @@ impl<'lock> CargoLockParser<'lock> {
         Self { cursor_offset, cursor_position, src: cargo_dot_lock }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     #[inline]
     fn next_inner(
         &mut self,

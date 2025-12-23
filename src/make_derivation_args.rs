@@ -6,7 +6,7 @@ use std::ffi::CString;
 use cargo::core::compiler::CompileTarget;
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
-use indoc::{formatdoc, indoc, writedoc};
+use indoc::{formatdoc, writedoc};
 use nix_bindings::prelude::*;
 
 use crate::build_node_attrs::{BuildNodeAttrs, CrateType, NodeType};
@@ -33,6 +33,9 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
 
     /// The node's build attributes coming from the build graph resolution step.
     pub(crate) node: &'args BuildNodeAttrs,
+
+    /// The derivation for the `parse-build-script-output` shell script.
+    pub(crate) parse_build_script_output: NixDerivation<'args>,
 
     /// Whether the node should be built in release mode.
     pub(crate) release: bool,
@@ -65,8 +68,8 @@ where
     ) -> Result<impl Attrset + Value + use<'this, 'dep, Src, Deps>> {
         let base_args = attrset! {
             name: self.node.derivation_name(),
-            buildInputs: [self.rustc].into_value(),
-            nativeBuildInputs: <[NixDerivation; 0]>::default().into_value(),
+            buildInputs: <[NixDerivation; 0]>::default().into_value(),
+            nativeBuildInputs: [self.rustc, self.parse_build_script_output].into_value(),
             configurePhase: self.configure_phase(ctx)?,
             buildPhase: self.build_phase(ctx)?,
             installPhase: self.install_phase(ctx)?,
@@ -99,14 +102,8 @@ where
         Ok(Either::Right(args.merge(overrides)))
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn configure_phase(&self, ctx: &mut Context) -> Result<String> {
-        // ## Build scripts
-        // 1: in the installPhase of a build script node, parse its stdout into
-        //    an env file;
-        // 2: in the configurePhase of a node with a build script dependency,
-        //    source the env file;
-        //
         // ## Native libraries
         // 1: get the list of native libraries from somewhere (I'm assuming the
         //    native_build_inputs?);
@@ -232,10 +229,27 @@ where
         .expect("writing to string can't fail");
 
         if let Some(build_drv) = &self.build_script_drv {
+            let out_path = build_drv.out_path(ctx)?;
+
             writeln!(
                 &mut configure_phase,
-                "export OUT_DIR={build_out_path}/out",
-                build_out_path = build_drv.out_path(ctx)?.display()
+                "export OUT_DIR={}/out",
+                out_path.display()
+            )
+            .expect("writing to string can't fail");
+
+            let shell_script_to_source = match self.node.r#type {
+                NodeType::Bin(_) => "bin.sh",
+                NodeType::Lib(_) => "lib.sh",
+                NodeType::BuildScript(_) => unreachable!(
+                    "build scripts can't depend on other build scripts"
+                ),
+            };
+
+            writeln!(
+                &mut configure_phase,
+                "source {}/{shell_script_to_source}",
+                out_path.display(),
             )
             .expect("writing to string can't fail");
         }
@@ -273,6 +287,9 @@ where
                 build_phase.push(' ');
                 build_phase.push_str(rustc_arg.as_ref());
             }
+
+            // Append any extra arguments coming from build scripts.
+            build_phase.push_str(" ${EXTRA_RUSTC_ARGS:-}");
         }
 
         build_phase.push_str("\nrunHook postBuild");
@@ -298,12 +315,22 @@ where
                 install_phase.push_str("=1\n");
             }
 
-            install_phase.push_str(indoc!(
+            install_phase.push_str(&formatdoc!(
                 r"
                     export OUT_DIR=$out/out
                     mkdir -p $OUT_DIR
                     $out/build_script_build | tee $out/build_script_output.txt
+                    parse-build-script-output \
+                        $out/build_script_output.txt \
+                        $out/common.sh \
+                        $out/lib.sh \
+                        $out/bin.sh \
+                        EXTRA_RUSTC_ARGS \
+                        {package_name} \
+                        {package_version}
                 ",
+                package_name = self.node.package_name,
+                package_version = self.node.version.to_compact_string(),
             ));
         }
 

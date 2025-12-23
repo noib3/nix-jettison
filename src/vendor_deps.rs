@@ -184,7 +184,7 @@ directory = "."
 }
 
 impl<'lock> RegistrySource<'lock> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn fetch(
         &self,
         pkg_name: &str,

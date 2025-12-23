@@ -317,7 +317,7 @@ impl BuildNodeAttrs {
         )
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn new(
         package: &Package,
         resolve: &WorkspaceResolve,
