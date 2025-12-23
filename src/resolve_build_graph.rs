@@ -415,19 +415,3 @@ fn cargo_ctx(
 
     Ok(ctx)
 }
-
-fn get_vendor_dir<'a>(
-    mut value: NixValue<'a>,
-    ctx: &mut Context,
-) -> Result<NixDerivation<'a>, NixError> {
-    value.force_inline(ctx)?;
-
-    match value.kind() {
-        ValueKind::Attrset => NixDerivation::try_from_value(value, ctx),
-
-        _ => Err(NixError::new(
-            ErrorKind::Nix,
-            c"expected \"vendorDir\" to be a derivation",
-        )),
-    }
-}

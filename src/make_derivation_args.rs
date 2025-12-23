@@ -55,21 +55,28 @@ pub(crate) struct MakeDerivationArgs<'args, Deps, Src> {
     pub(crate) target: Option<CompileTarget>,
 }
 
-impl<'this, 'dep, Src, Deps> MakeDerivationArgs<'this, Deps, Src>
+impl<'a, Src, Deps> MakeDerivationArgs<'a, Deps, Src>
 where
     Src: Value,
-    Deps: Iterator<Item = (&'dep BuildNodeAttrs, NixDerivation<'dep>)> + Clone,
+    Deps: Iterator<Item = (&'a BuildNodeAttrs, NixDerivation<'a>)> + Clone,
 {
     /// Converts `self` into the final attribute set given to
     /// `stdenv.mkDerivation`.
     pub(crate) fn into_attrs(
         self,
         ctx: &mut Context,
-    ) -> Result<impl Attrset + Value + use<'this, 'dep, Src, Deps>> {
+    ) -> Result<impl Attrset + Value + use<'a, Src, Deps>> {
+        let build_inputs = self
+            .build_script_drv
+            .clone()
+            .into_iter()
+            .chain(self.dependencies.clone().map(|(_, drv)| drv))
+            .collect::<Vec<_>>();
+
         let base_args = attrset! {
             name: self.node.derivation_name(),
-            buildInputs: <[NixDerivation; 0]>::default(),
-            nativeBuildInputs: [self.rustc, self.parse_build_script_output],
+            buildInputs: build_inputs,
+            nativeBuildInputs: [self.parse_build_script_output, self.rustc],
             configurePhase: self.configure_phase(ctx)?,
             buildPhase: self.build_phase(ctx)?,
             installPhase: self.install_phase(ctx)?,
