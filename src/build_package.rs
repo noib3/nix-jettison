@@ -124,8 +124,6 @@ impl Function for BuildPackage {
 
         let build_graph = Self::get_build_graph(args, ctx)?;
 
-        let make_path = ctx.builtins().path(ctx);
-
         let mut library_derivations: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
 
@@ -159,7 +157,9 @@ impl Function for BuildPackage {
             let src = match node.package_src.as_deref() {
                 Some(path) => {
                     let name = path.file_name().expect("path has a file name");
-                    make_path.call(attrset! { path, name }, ctx)?
+                    ctx.builtins()
+                        .path(ctx)
+                        .call(attrset! { path, name }, ctx)?
                 },
                 None => todo!(),
                 // None => vendored_sources

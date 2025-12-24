@@ -20,6 +20,7 @@ use crate::build_graph::{
     DependencyRenames,
     LibraryCrate,
     PackageAttrs,
+    RenameWithVersion,
     edition_as_str,
 };
 use crate::build_package::BuildPackageArgs;
@@ -538,9 +539,9 @@ where
                 Some(DependencyRename::Simple(rename)) => rename,
                 Some(DependencyRename::Extended(renames)) => renames
                     .iter()
-                    .find_map(|rename| {
-                        (rename.version == dep_node.package_attrs.version)
-                            .then(|| &rename.rename)
+                    .find_map(|RenameWithVersion { rename, version_req }| {
+                        (version_req.matches(&dep_node.package_attrs.version))
+                            .then(|| rename)
                     })
                     .unwrap_or_else(|| &dep_lib.name),
                 None => &dep_lib.name,

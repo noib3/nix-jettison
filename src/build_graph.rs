@@ -1,15 +1,17 @@
+use core::mem;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map};
 use std::path::PathBuf;
 
 use cargo::core::compiler::CrateType;
 use cargo::core::dependency::DepKind;
 use cargo::core::manifest::TargetSourcePath;
 use cargo::core::{Edition, Package, PackageId, TargetKind};
+use cargo::util::OptVersionReq;
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use nix_bindings::prelude::*;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 use crate::resolve_build_graph::WorkspaceResolve;
 use crate::vendor_deps::SourceId;
@@ -170,7 +172,7 @@ pub(crate) struct PackageAttrs {
 #[derive(nix_bindings::Value, Clone)]
 pub(crate) enum DependencyRename {
     Simple(CompactString),
-    Extended(Vec<RenameWithVersion>),
+    Extended(SmallVec<[RenameWithVersion; 2]>),
 }
 
 /// Represents a version-specific rename for the extended crateRenames format.
@@ -179,7 +181,7 @@ pub(crate) struct RenameWithVersion {
     pub(crate) rename: CompactString,
 
     #[attrset(with_value = ToCompactString::to_compact_string)]
-    pub(crate) version: semver::Version,
+    pub(crate) version_req: OptVersionReq,
 }
 
 impl BuildGraph {
@@ -237,7 +239,7 @@ impl BuildGraph {
         let node = BuildGraphNode {
             binaries,
             build_script: BuildScript::new(package, resolve),
-            dependency_renames: Default::default(),
+            dependency_renames: dependency_renames::<true>(pkg_id, resolve),
             library: LibraryCrate::new(package, resolve),
             package_attrs: PackageAttrs::new(package, resolve),
             package_src,
@@ -336,7 +338,7 @@ impl BinaryCrate {
 
 impl BuildScript {
     /// Returns the build script of the given package, if any.
-    fn new(package: &Package, _resolve: &WorkspaceResolve) -> Option<Self> {
+    fn new(package: &Package, resolve: &WorkspaceResolve) -> Option<Self> {
         let Some(build_script) = package
             .manifest()
             .original_toml()
@@ -357,7 +359,10 @@ impl BuildScript {
 
         Some(Self {
             build_opts: Default::default(),
-            dependency_renames: Default::default(),
+            dependency_renames: dependency_renames::<false>(
+                package.package_id(),
+                resolve,
+            ),
             path: path.into(),
         })
     }
@@ -446,6 +451,81 @@ impl PackageAttrs {
     }
 }
 
+/// Constructs the [`DependencyRenames`] for the package with the given ID.
+///
+/// The `IS_NORMAL` constant should be `true` if the renames should only include
+/// [normal](DepKind::Normal) dependencies, and `false` if they should only
+/// include [build](DepKind::Build) dependencies.
+#[inline]
+pub(crate) fn dependency_renames<const IS_NORMAL: bool>(
+    package_id: PackageId,
+    resolve: &WorkspaceResolve,
+) -> DependencyRenames {
+    let mut renames = DependencyRenames::default();
+
+    for (_dep_pkg_id, dep) in resolve.deps(package_id) {
+        match dep.kind() {
+            DepKind::Normal if !IS_NORMAL => continue,
+            DepKind::Build if IS_NORMAL => continue,
+            DepKind::Development => continue,
+            _ => {},
+        }
+
+        let Some(name_in_toml) = dep.explicit_name_in_toml() else {
+            continue;
+        };
+
+        let rename_with_version = RenameWithVersion {
+            rename: CompactString::const_new(name_in_toml.as_str()),
+            version_req: dep.version_req().clone(),
+        };
+
+        match renames.entry(dep.package_name().as_str().into()) {
+            hash_map::Entry::Occupied(mut entry) => {
+                let DependencyRename::Extended(versions) = entry.get_mut()
+                else {
+                    unreachable!(
+                        "we only create extended renames on the first pass"
+                    );
+                };
+                versions.push(rename_with_version);
+            },
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(DependencyRename::Extended(smallvec![
+                    rename_with_version
+                ]));
+            },
+        }
+    }
+
+    // Turn `Extended` renames with only one version back into `Simple` renames.
+    renames.values_mut().for_each(|rename| {
+        let DependencyRename::Extended(versions) = rename else { return };
+        if versions.len() != 1 {
+            return;
+        }
+        let name_in_toml = mem::take(versions)
+            .into_iter()
+            .next()
+            .expect("checked length")
+            .rename;
+        *rename = DependencyRename::Simple(name_in_toml);
+    });
+
+    renames
+}
+
+#[inline]
+pub(crate) fn edition_as_str(edition: Edition) -> &'static str {
+    match edition {
+        Edition::Edition2015 => "2015",
+        Edition::Edition2018 => "2018",
+        Edition::Edition2021 => "2021",
+        Edition::Edition2024 => "2024",
+        Edition::EditionFuture => "future",
+    }
+}
+
 impl IntoValue for BuildGraph {
     fn into_value(self, _: &mut Context) -> impl Value + use<> {
         let mut nodes = Vec::with_capacity(self.nodes.len());
@@ -482,16 +562,5 @@ impl IntoValue for BuildGraph {
 impl ToValue for LibraryFormat {
     fn to_value(&self, _: &mut Context) -> impl Value + use<> {
         self.as_str()
-    }
-}
-
-#[inline]
-pub(crate) fn edition_as_str(edition: Edition) -> &'static str {
-    match edition {
-        Edition::Edition2015 => "2015",
-        Edition::Edition2018 => "2018",
-        Edition::Edition2021 => "2021",
-        Edition::Edition2024 => "2024",
-        Edition::EditionFuture => "future",
     }
 }
