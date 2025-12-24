@@ -24,8 +24,26 @@ use crate::build_graph::{
 };
 use crate::build_package::BuildPackageArgs;
 
+pub(crate) enum DerivationType<'graph> {
+    /// TODO: docs.
+    BuildScript(&'graph BuildScript),
+
+    /// TODO: docs.
+    Library {
+        build_script: Option<NixDerivation<'static>>,
+        library: &'graph LibraryCrate,
+    },
+
+    /// TODO: docs.
+    Binaries {
+        build_script: Option<NixDerivation<'static>>,
+        library: Option<NixDerivation<'static>>,
+        binaries: &'graph [BinaryCrate],
+    },
+}
+
 #[derive(Clone)]
-pub(crate) struct MakeDerivationGlobalArgs<'args> {
+pub(crate) struct GlobalArgs<'args> {
     /// The
     /// [`BuildPackageArgs::crate_overrides`](crate::build_package::BuildPackageArgs::crate_overrides) field.
     pub(crate) crate_overrides: Option<NixAttrset<'args>>,
@@ -55,24 +73,6 @@ pub(crate) struct MakeDerivationGlobalArgs<'args> {
     pub(crate) target: Option<CompileTarget>,
 }
 
-pub(crate) enum DerivationType<'graph> {
-    /// TODO: docs.
-    BuildScript(&'graph BuildScript),
-
-    /// TODO: docs.
-    Library {
-        build_script: Option<NixDerivation<'static>>,
-        library: &'graph LibraryCrate,
-    },
-
-    /// TODO: docs.
-    Binaries {
-        build_script: Option<NixDerivation<'static>>,
-        library: Option<NixDerivation<'static>>,
-        binaries: &'graph [BinaryCrate],
-    },
-}
-
 struct Crate<'a> {
     path: &'a str,
     name: &'a str,
@@ -83,6 +83,19 @@ struct Crate<'a> {
     build_opts: &'a BuildOpts,
 }
 
+pub(crate) fn make_deps<'dep>(
+    package: &PackageAttrs,
+    _direct_deps: impl Iterator<Item = NixDerivation<'dep>>,
+    mk_derivation: &NixLambda,
+    ctx: &mut Context,
+) -> Result<NixDerivation<'static>> {
+    let args = attrset! {
+        name: format_compact!("{}-{}-deps", package.name, package.version),
+    };
+
+    mk_derivation.call(args, ctx)?.force_into(ctx)
+}
+
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn make_derivation<'a, Deps>(
     r#type: DerivationType<'a>,
@@ -90,7 +103,7 @@ pub(crate) fn make_derivation<'a, Deps>(
     src: impl Value,
     deps: NixDerivation<'a>,
     direct_deps: Deps,
-    args: &'a MakeDerivationGlobalArgs,
+    args: &'a GlobalArgs,
     ctx: &mut Context,
 ) -> Result<NixDerivation<'static>>
 where
@@ -119,7 +132,7 @@ fn make_derivation_args<'a, Src, Deps>(
     src: Src,
     deps: NixDerivation<'a>,
     direct_deps: Deps,
-    args: &'a MakeDerivationGlobalArgs,
+    args: &'a GlobalArgs,
     ctx: &mut Context,
 ) -> Result<impl Attrset + Value + use<'a, Src, Deps>>
 where
@@ -139,13 +152,7 @@ where
         "{}-{}-{}",
         node.package_attrs.name,
         node.package_attrs.version,
-        match r#type {
-            DerivationType::BuildScript(_) => "build",
-            DerivationType::Library { .. } => "lib",
-            DerivationType::Binaries { binaries, .. } if binaries.len() > 1 =>
-                "bins",
-            DerivationType::Binaries { .. } => "bin",
-        }
+        r#type.derivation_name_suffix(),
     );
 
     let configure_phase = configure_phase(
@@ -167,10 +174,8 @@ where
         ctx,
     )?;
 
-    let install_phase = install_phase(
-        &node.package_attrs,
-        matches!(r#type, DerivationType::BuildScript(_)),
-    );
+    let install_phase =
+        install_phase(&node.package_attrs, r#type.is_build_script());
 
     let base_args = attrset! {
         name: derivation_name,
@@ -563,7 +568,7 @@ where
         })
 }
 
-impl<'args> MakeDerivationGlobalArgs<'args> {
+impl<'args> GlobalArgs<'args> {
     pub(crate) fn new(
         args: &BuildPackageArgs<'args>,
         ctx: &mut Context,
@@ -608,6 +613,19 @@ impl<'a> DerivationType<'a> {
             Self::Library { build_script, .. } => build_script.clone(),
             Self::Binaries { build_script, .. } => build_script.clone(),
         }
+    }
+
+    fn derivation_name_suffix(&self) -> &'static str {
+        match self {
+            Self::BuildScript(_) => "build",
+            Self::Library { .. } => "lib",
+            Self::Binaries { binaries, .. } if binaries.len() > 1 => "bins",
+            Self::Binaries { .. } => "bin",
+        }
+    }
+
+    fn is_build_script(&self) -> bool {
+        matches!(self, Self::BuildScript(_))
     }
 
     fn is_library(&self) -> bool {

@@ -7,8 +7,9 @@ use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::build_graph::BuildGraph;
 use crate::make_derivation::{
+    self,
     DerivationType,
-    MakeDerivationGlobalArgs,
+    make_deps,
     make_derivation,
 };
 use crate::resolve_build_graph::{
@@ -119,7 +120,7 @@ impl Function for BuildPackage {
         args: Self::Args<'a>,
         ctx: &mut Context,
     ) -> Result<NixDerivation<'static>, BuildPackageError> {
-        let global_args = MakeDerivationGlobalArgs::new(&args, ctx)?;
+        let global_args = make_derivation::GlobalArgs::new(&args, ctx)?;
 
         let build_graph = Self::get_build_graph(args, ctx)?;
 
@@ -129,6 +130,32 @@ impl Function for BuildPackage {
             Vec::with_capacity(build_graph.nodes.len());
 
         for (node_idx, node) in build_graph.nodes.iter().enumerate() {
+            let edges = &build_graph.edges[node_idx];
+
+            let build_deps = edges.build_dependencies.iter().map(|&idx| {
+                let node = &build_graph.nodes[idx];
+                let drv = library_derivations[idx].clone();
+                (node, drv)
+            });
+
+            let normal_deps = edges.dependencies.iter().map(|&idx| {
+                let node = &build_graph.nodes[idx];
+                let drv = library_derivations[idx].clone();
+                (node, drv)
+            });
+
+            let all_direct_deps = build_deps
+                .clone()
+                .chain(normal_deps.clone())
+                .map(|(_node, drv)| drv);
+
+            let deps_drv = make_deps(
+                &node.package_attrs,
+                all_direct_deps,
+                &global_args.mk_derivation,
+                ctx,
+            )?;
+
             let src = match node.package_src.as_deref() {
                 Some(path) => {
                     let name = path.file_name().expect("path has a file name");
@@ -140,24 +167,13 @@ impl Function for BuildPackage {
                 //     .expect("source is not local, so it must've been vendored"),
             };
 
-            let deps = node.build_deps(ctx)?;
-
             let build_script = if let Some(build_script) = &node.build_script {
-                let direct_deps = build_graph.edges[node_idx]
-                    .build_dependencies
-                    .iter()
-                    .map(|&idx| {
-                        let node = &build_graph.nodes[idx];
-                        let drv = library_derivations[idx].clone();
-                        (node, drv)
-                    });
-
                 Some(make_derivation(
                     DerivationType::BuildScript(build_script),
                     node,
                     src.clone(),
-                    deps.clone(),
-                    direct_deps,
+                    deps_drv.clone(),
+                    build_deps,
                     &global_args,
                     ctx,
                 )?)
@@ -165,20 +181,13 @@ impl Function for BuildPackage {
                 None
             };
 
-            let direct_deps =
-                build_graph.edges[node_idx].dependencies.iter().map(|&idx| {
-                    let node = &build_graph.nodes[idx];
-                    let drv = library_derivations[idx].clone();
-                    (node, drv)
-                });
-
             let library = if let Some(library) = &node.library {
                 Some(make_derivation(
                     DerivationType::Library { build_script, library },
                     node,
                     src.clone(),
-                    deps.clone(),
-                    direct_deps.clone(),
+                    deps_drv.clone(),
+                    normal_deps.clone(),
                     &global_args,
                     ctx,
                 )?)
@@ -195,8 +204,8 @@ impl Function for BuildPackage {
                     },
                     node,
                     src,
-                    deps,
-                    direct_deps,
+                    deps_drv,
+                    normal_deps,
                     &global_args,
                     ctx,
                 )?)

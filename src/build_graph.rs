@@ -266,13 +266,6 @@ impl BuildGraph {
 }
 
 impl BuildGraphNode {
-    pub(crate) fn build_deps(
-        &self,
-        _ctx: &mut Context,
-    ) -> Result<NixDerivation<'static>> {
-        todo!();
-    }
-
     pub(crate) fn source_id(&self) -> SourceId<'_> {
         self.package_attrs.source_id()
     }
