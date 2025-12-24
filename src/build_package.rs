@@ -2,6 +2,7 @@ use core::result::Result;
 use std::ffi::CString;
 use std::path::Path;
 
+use cargo::core::compiler::CompileTarget;
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
@@ -85,6 +86,7 @@ pub(crate) enum BuildPackageError {
 impl BuildPackage {
     fn get_build_graph(
         args: BuildPackageArgs,
+        compile_target: Option<CompileTarget>,
         ctx: &mut Context,
     ) -> Result<BuildGraph, BuildPackageError> {
         let cargo_lock =
@@ -97,6 +99,7 @@ impl BuildPackage {
             src: args.src,
             vendor_dir: vendored_sources.to_dir(args.pkgs, ctx)?,
             all_features: args.all_features,
+            compile_target,
             features: args.features,
             no_default_features: args.no_default_features,
             package: args.package,
@@ -122,7 +125,7 @@ impl Function for BuildPackage {
     ) -> Result<NixDerivation<'static>, BuildPackageError> {
         let global_args = make_derivation::GlobalArgs::new(&args, ctx)?;
 
-        let build_graph = Self::get_build_graph(args, ctx)?;
+        let build_graph = Self::get_build_graph(args, global_args.target, ctx)?;
 
         let mut library_derivations: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());

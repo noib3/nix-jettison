@@ -42,6 +42,11 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     #[try_from(default)]
     pub(crate) all_features: bool,
 
+    /// The `rustc` target to compile the package for, or `None` if it should
+    /// be compiled for the current machine.
+    #[try_from(default, with = parse_compile_target)]
+    pub(crate) compile_target: Option<CompileTarget>,
+
     /// The list of the package's features to enable.
     #[try_from(default)]
     pub(crate) features: Vec<String>,
@@ -113,10 +118,6 @@ pub(crate) enum ResolveBuildGraphError {
 }
 
 impl ResolveBuildGraphArgs<'_> {
-    fn compile_target(&self) -> Option<CompileTarget> {
-        None
-    }
-
     fn features(&self) -> Result<CliFeatures, ResolveBuildGraphError> {
         CliFeatures::from_command_line(
             &self.features,
@@ -184,7 +185,7 @@ impl<'ws> WorkspaceResolve<'ws> {
         args: &ResolveBuildGraphArgs,
     ) -> Result<Self, ResolveBuildGraphError> {
         let compile_kind = args
-            .compile_target()
+            .compile_target
             .map(CompileKind::Target)
             .unwrap_or(CompileKind::Host);
 
@@ -287,4 +288,15 @@ fn cargo_ctx(
         .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
 
     Ok(ctx)
+}
+
+fn parse_compile_target(
+    mut value: NixValue,
+    ctx: &mut Context,
+) -> Result<Option<CompileTarget>, NixError> {
+    value.force_inline(ctx)?;
+    let str = CompactString::try_from_value(value, ctx)?;
+    CompileTarget::new(&*str)
+        .map(Some)
+        .map_err(|_| NixError::new(ErrorKind::Nix, c"invalid rustc target"))
 }
