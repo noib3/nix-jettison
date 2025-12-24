@@ -126,8 +126,9 @@ where
     Src: Value,
     Deps: Iterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)> + Clone,
 {
-    let build_inputs = r#type
-        .build_script_drv()
+    let build_script_drv = r#type.build_script_drv();
+
+    let build_inputs = build_script_drv
         .into_iter()
         .chain(r#type.library_drv())
         .chain(iter::once(deps.clone()))
@@ -148,8 +149,9 @@ where
     );
 
     let configure_phase = configure_phase(
-        &r#type,
         &node.package_attrs,
+        build_script_drv,
+        r#type.is_library(),
         args.release,
         args.stdenv,
         ctx,
@@ -233,7 +235,7 @@ where
         },
     };
 
-    let mut build_phase = "runHook preBuild".to_owned();
+    let mut build_phase = "runHook preBuild\nmkdir -p $out\n".to_owned();
 
     let deps_path = deps.out_path(ctx)?.display().to_string();
 
@@ -267,8 +269,9 @@ where
 
 #[expect(clippy::too_many_arguments)]
 fn configure_phase(
-    r#type: &DerivationType,
     package: &PackageAttrs,
+    build_script: Option<NixDerivation>,
+    is_library: bool,
     is_release: bool,
     stdenv: NixAttrset,
     ctx: &mut Context,
@@ -387,28 +390,21 @@ fn configure_phase(
         "#
     );
 
-    if let Some(build_script) = r#type.build_script_drv() {
-        let out_path = build_script.out_path(ctx)?;
+    if let Some(build_script) = build_script {
+        let build_script_out_path = build_script.out_path(ctx)?;
 
         writeln!(
             &mut configure_phase,
             "export OUT_DIR={}/out",
-            out_path.display()
+            build_script_out_path.display()
         )
         .expect("writing to string can't fail");
 
-        let shell_script_to_source = match r#type {
-            DerivationType::Binaries { .. } => "bin.sh",
-            DerivationType::Library { .. } => "lib.sh",
-            DerivationType::BuildScript(_) => unreachable!(
-                "build scripts can't depend on other build scripts"
-            ),
-        };
-
         writeln!(
             &mut configure_phase,
-            "source {}/{shell_script_to_source}",
-            out_path.display(),
+            "source {}/{}",
+            build_script_out_path.display(),
+            if is_library { "lib.sh" } else { "bin.sh" }
         )
         .expect("writing to string can't fail");
     }
@@ -606,18 +602,22 @@ impl<'args> MakeDerivationGlobalArgs<'args> {
 }
 
 impl<'a> DerivationType<'a> {
-    fn library_drv(&self) -> Option<NixDerivation<'a>> {
-        match self {
-            Self::Binaries { library, .. } => library.clone(),
-            _ => None,
-        }
-    }
-
     fn build_script_drv(&self) -> Option<NixDerivation<'a>> {
         match self {
             Self::BuildScript(_) => None,
             Self::Library { build_script, .. } => build_script.clone(),
             Self::Binaries { build_script, .. } => build_script.clone(),
+        }
+    }
+
+    fn is_library(&self) -> bool {
+        matches!(self, Self::Library { .. })
+    }
+
+    fn library_drv(&self) -> Option<NixDerivation<'a>> {
+        match self {
+            Self::Binaries { library, .. } => library.clone(),
+            _ => None,
         }
     }
 }

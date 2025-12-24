@@ -6,7 +6,7 @@ use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
 use crate::build_graph::BuildGraph;
-use crate::make_derivation_args::{
+use crate::make_derivation::{
     DerivationType,
     MakeDerivationGlobalArgs,
     make_derivation,
