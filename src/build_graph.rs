@@ -11,8 +11,8 @@ use compact_str::{CompactString, ToCompactString};
 use nix_bindings::prelude::*;
 use smallvec::SmallVec;
 
-use crate::build_node_attrs::SourceId;
 use crate::resolve_build_graph::WorkspaceResolve;
+use crate::vendor_deps::SourceId;
 
 /// A map from the package name of a given dependency to its renaming spec.
 pub(crate) type DependencyRenames = HashMap<CompactString, DependencyRename>;
@@ -266,19 +266,26 @@ impl BuildGraph {
 }
 
 impl BuildGraphNode {
+    pub(crate) fn build_deps(
+        &self,
+        _ctx: &mut Context,
+    ) -> Result<NixDerivation<'static>> {
+        todo!();
+    }
+
     pub(crate) fn source_id(&self) -> SourceId<'_> {
         self.package_attrs.source_id()
     }
 }
 
 impl LibraryCrate {
-    fn is_proc_macro(&self) -> bool {
+    pub(crate) fn is_proc_macro(&self) -> bool {
         &*self.formats == &[LibraryFormat::ProcMacro]
     }
 }
 
 impl LibraryFormat {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             LibraryFormat::Cdylib => "cdylib",
             LibraryFormat::Dylib => "dylib",
@@ -486,7 +493,7 @@ impl ToValue for LibraryFormat {
 }
 
 #[inline]
-fn edition_as_str(edition: Edition) -> &'static str {
+pub(crate) fn edition_as_str(edition: Edition) -> &'static str {
     match edition {
         Edition::Edition2015 => "2015",
         Edition::Edition2018 => "2018",

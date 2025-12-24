@@ -1,5 +1,6 @@
 use core::cell::OnceCell;
-use core::fmt::Write;
+use core::cmp::Ordering;
+use core::fmt::{self, Write};
 use core::iter;
 use core::result::Result;
 use std::borrow::Cow;
@@ -11,7 +12,6 @@ use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_node_attrs::SourceId;
 use crate::cargo_lock_parser::{
     CargoLockParseError,
     CargoLockParser,
@@ -55,6 +55,12 @@ pub(crate) enum VendorDepsError {
 pub(crate) struct VendoredSources<'lock> {
     sources: Vec<Source<'lock>>,
     config_dot_toml: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SourceId<'a> {
+    pub(crate) package_name: &'a str,
+    pub(crate) version: Cow<'a, str>,
 }
 
 struct Source<'lock> {
@@ -295,6 +301,34 @@ impl Function for VendorDeps {
         let cargo_lock = Self::read_cargo_lock(&args.cargo_lock)?;
         let sources = VendoredSources::new(&cargo_lock, args.pkgs, ctx)?;
         sources.to_dir(args.pkgs, ctx).map_err(Into::into)
+    }
+}
+
+impl fmt::Display for SourceId<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.package_name, self.version)
+    }
+}
+
+impl PartialEq for SourceId<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for SourceId<'_> {}
+
+impl PartialOrd for SourceId<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SourceId<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.package_name
+            .cmp(other.package_name)
+            .then_with(|| self.version.cmp(&other.version))
     }
 }
 

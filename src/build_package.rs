@@ -154,7 +154,7 @@ impl Function for BuildPackage {
 
                 Some(make_derivation(
                     DerivationType::BuildScript(build_script),
-                    node.clone(),
+                    node,
                     src.clone(),
                     deps.clone(),
                     direct_deps,
@@ -173,38 +173,40 @@ impl Function for BuildPackage {
                 });
 
             let library = if let Some(library) = &node.library {
-                let drv = make_derivation(
+                Some(make_derivation(
                     DerivationType::Library { build_script, library },
-                    node.clone(),
+                    node,
                     src.clone(),
                     deps.clone(),
                     direct_deps.clone(),
                     &global_args,
                     ctx,
-                )?;
-                library_derivations.push(drv.clone());
-                Some(drv)
+                )?)
             } else {
                 None
             };
 
-            if node.binaries.is_empty() {
-                continue;
-            }
+            let _binaries = if !node.binaries.is_empty() {
+                Some(make_derivation(
+                    DerivationType::Binaries {
+                        build_script,
+                        library,
+                        binaries: &node.binaries,
+                    },
+                    node,
+                    src,
+                    deps,
+                    direct_deps,
+                    &global_args,
+                    ctx,
+                )?)
+            } else {
+                None
+            };
 
-            let _binaries = make_derivation(
-                DerivationType::Binaries {
-                    build_script,
-                    library,
-                    binaries: &node.binaries,
-                },
-                node,
-                src,
-                deps,
-                direct_deps,
-                &global_args,
-                ctx,
-            )?;
+            if let Some(drv) = library {
+                library_derivations.push(drv);
+            }
         }
 
         // The derivation for the requested package is the root of the build
