@@ -20,10 +20,12 @@ use crate::build_graph::{
     DependencyRenames,
     LibraryCrate,
     PackageAttrs,
+    PackageSource,
     RenameWithVersion,
     edition_as_str,
 };
 use crate::build_package::BuildPackageArgs;
+use crate::vendor_deps::VendoredSources;
 
 pub(crate) enum DerivationType<'graph> {
     /// TODO: docs.
@@ -44,7 +46,7 @@ pub(crate) enum DerivationType<'graph> {
 }
 
 #[derive(Clone)]
-pub(crate) struct GlobalArgs<'args> {
+pub(crate) struct GlobalArgs<'args, 'lock, 'builtins> {
     /// The compilation `--target` to pass to `rustc`, if any.
     ///
     /// This should only be set when cross-compiling.
@@ -61,6 +63,9 @@ pub(crate) struct GlobalArgs<'args> {
     /// The node's build attributes coming from the build graph resolution step.
     pub(crate) mk_derivation: NixLambda<'args>,
 
+    /// The `builtins.path` function.
+    pub(crate) mk_path: NixLambda<'builtins>,
+
     /// The derivation for the `parse-build-script-output` shell script.
     pub(crate) parse_build_script_output: NixDerivation<'args>,
 
@@ -72,6 +77,9 @@ pub(crate) struct GlobalArgs<'args> {
 
     /// A handle to Nixpkgs's standard build environment.
     pub(crate) stdenv: NixAttrset<'args>,
+
+    /// TODO: docs.
+    pub(crate) vendored_sources: &'args VendoredSources<'lock>,
 }
 
 struct Crate<'a> {
@@ -101,7 +109,6 @@ pub(crate) fn make_deps<'dep>(
 pub(crate) fn make_derivation<'a, Deps>(
     r#type: DerivationType<'a>,
     node: &BuildGraphNode,
-    src: impl Value,
     deps: NixDerivation<'a>,
     direct_deps: Deps,
     args: &'a GlobalArgs,
@@ -112,32 +119,22 @@ where
 {
     args.mk_derivation
         .call(
-            make_derivation_args(
-                r#type,
-                node,
-                src,
-                deps,
-                direct_deps,
-                args,
-                ctx,
-            )?,
+            make_derivation_args(r#type, node, deps, direct_deps, args, ctx)?,
             ctx,
         )?
         .force_into(ctx)
 }
 
 #[expect(clippy::too_many_arguments)]
-fn make_derivation_args<'a, Src, Deps>(
+fn make_derivation_args<'a, Deps>(
     r#type: DerivationType<'a>,
     node: &BuildGraphNode,
-    src: Src,
     deps: NixDerivation<'a>,
     direct_deps: Deps,
     args: &'a GlobalArgs,
     ctx: &mut Context,
-) -> Result<impl Attrset + Value + use<'a, Src, Deps>>
+) -> Result<impl Attrset + Value + use<'a, Deps>>
 where
-    Src: Value,
     Deps: Iterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)> + Clone,
 {
     let build_script_drv = r#type.build_script_drv();
@@ -155,6 +152,17 @@ where
         node.package_attrs.version,
         r#type.derivation_name_suffix(),
     );
+
+    let src = match &node.package_src {
+        PackageSource::Vendored => {
+            let source_id = node.package_attrs.source_id();
+            args.vendored_sources.get(source_id).expect("source is vendored")
+        },
+        PackageSource::Path(path) => {
+            let name = path.file_name().expect("not empty");
+            args.mk_path.call(attrset! { path: &**path, name }, ctx)?
+        },
+    };
 
     let configure_phase = configure_phase(
         &node.package_attrs,
@@ -569,10 +577,11 @@ where
         })
 }
 
-impl<'args> GlobalArgs<'args> {
+impl<'args, 'lock, 'builtins> GlobalArgs<'args, 'lock, 'builtins> {
     pub(crate) fn new(
         args: &BuildPackageArgs<'args>,
-        ctx: &mut Context,
+        vendored_sources: &'args VendoredSources<'lock>,
+        ctx: &mut Context<'builtins>,
     ) -> Result<Self> {
         let stdenv = args.pkgs.get::<NixAttrset>(c"stdenv", ctx)?;
 
@@ -619,10 +628,12 @@ impl<'args> GlobalArgs<'args> {
             crate_overrides: args.crate_overrides,
             global_overrides: args.global_overrides,
             mk_derivation: stdenv.get::<NixLambda>(c"mkDerivation", ctx)?,
+            mk_path: ctx.builtins().path(ctx),
             parse_build_script_output,
             release: args.release,
             rustc,
             stdenv,
+            vendored_sources,
         })
     }
 }

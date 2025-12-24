@@ -2,11 +2,9 @@ use core::result::Result;
 use std::ffi::CString;
 use std::path::Path;
 
-use cargo::core::compiler::CompileTarget;
 use compact_str::CompactString;
 use nix_bindings::prelude::{Error as NixError, *};
 
-use crate::build_graph::BuildGraph;
 use crate::make_derivation::{
     self,
     DerivationType,
@@ -83,38 +81,6 @@ pub(crate) enum BuildPackageError {
     VendorDeps(#[from] VendorDepsError),
 }
 
-impl BuildPackage {
-    fn get_build_graph(
-        args: BuildPackageArgs,
-        compile_target: Option<CompileTarget>,
-        ctx: &mut Context,
-    ) -> Result<BuildGraph, BuildPackageError> {
-        let cargo_lock =
-            VendorDeps::read_cargo_lock(&args.src.join("Cargo.lock"))?;
-
-        let vendored_sources =
-            VendoredSources::new(&cargo_lock, args.pkgs, ctx)?;
-
-        let resolve_build_graph_args = ResolveBuildGraphArgs {
-            src: args.src,
-            vendor_dir: vendored_sources.to_dir(args.pkgs, ctx)?,
-            all_features: args.all_features,
-            compile_target,
-            features: args.features,
-            no_default_features: args.no_default_features,
-            package: args.package,
-            profile: CompactString::const_new(if args.release {
-                "release"
-            } else {
-                "dev"
-            }),
-        };
-
-        <ResolveBuildGraph as Function>::call(resolve_build_graph_args, ctx)
-            .map_err(Into::into)
-    }
-}
-
 impl Function for BuildPackage {
     type Args<'a> = BuildPackageArgs<'a>;
 
@@ -123,10 +89,37 @@ impl Function for BuildPackage {
         args: Self::Args<'a>,
         ctx: &mut Context,
     ) -> Result<NixDerivation<'static>, BuildPackageError> {
-        let global_args = make_derivation::GlobalArgs::new(&args, ctx)?;
+        let cargo_lock =
+            VendorDeps::read_cargo_lock(&args.src.join("Cargo.lock"))?;
 
-        let build_graph =
-            Self::get_build_graph(args, global_args.compile_target, ctx)?;
+        let vendored_sources =
+            VendoredSources::new(&cargo_lock, args.pkgs, ctx)?;
+
+        let vendor_dir = vendored_sources.to_dir(args.pkgs, ctx)?;
+
+        vendor_dir.realise(ctx)?;
+
+        let global_args =
+            make_derivation::GlobalArgs::new(&args, &vendored_sources, ctx)?;
+
+        let build_graph = {
+            let args = ResolveBuildGraphArgs {
+                src: args.src,
+                vendor_dir: vendor_dir.out_path(ctx)?.into(),
+                all_features: args.all_features,
+                compile_target: global_args.compile_target,
+                features: args.features,
+                no_default_features: args.no_default_features,
+                package: args.package,
+                profile: CompactString::const_new(if args.release {
+                    "release"
+                } else {
+                    "dev"
+                }),
+            };
+
+            <ResolveBuildGraph as Function>::call(args, ctx)?
+        };
 
         let mut library_derivations: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());
@@ -158,24 +151,10 @@ impl Function for BuildPackage {
                 ctx,
             )?;
 
-            let src = match node.package_src.as_deref() {
-                Some(path) => {
-                    let name = path.file_name().expect("path has a file name");
-                    ctx.builtins()
-                        .path(ctx)
-                        .call(attrset! { path, name }, ctx)?
-                },
-                None => todo!(),
-                // None => vendored_sources
-                //     .get(node.source_id())
-                //     .expect("source is not local, so it must've been vendored"),
-            };
-
             let build_script = if let Some(build_script) = &node.build_script {
                 Some(make_derivation(
                     DerivationType::BuildScript(build_script),
                     node,
-                    src.clone(),
                     deps_drv.clone(),
                     build_deps,
                     &global_args,
@@ -189,7 +168,6 @@ impl Function for BuildPackage {
                 Some(make_derivation(
                     DerivationType::Library { build_script, library },
                     node,
-                    src.clone(),
                     deps_drv.clone(),
                     normal_deps.clone(),
                     &global_args,
@@ -207,7 +185,6 @@ impl Function for BuildPackage {
                         binaries: &node.binaries,
                     },
                     node,
-                    src,
                     deps_drv,
                     normal_deps,
                     &global_args,

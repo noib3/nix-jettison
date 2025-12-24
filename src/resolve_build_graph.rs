@@ -1,4 +1,5 @@
 use core::result::Result;
+use std::borrow::Cow;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{env, io};
@@ -31,11 +32,11 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
     /// The path to the root of the workspace the package is in.
     pub(crate) src: &'a Path,
 
-    /// The derivation for the directory containing all the vendored
-    /// dependencies.
+    /// The path to the directory containing all the vendored dependencies.
     ///
     /// This can be obtained by calling `jettison.vendorDeps { ... }`.
-    pub(crate) vendor_dir: NixDerivation<'a>,
+    #[try_from(with = get_vendor_dir)]
+    pub(crate) vendor_dir: Cow<'a, Path>,
 
     /// Whether to enable all features (equivalent to calling Cargo with the
     /// `--all-features` CLI flag).
@@ -223,14 +224,11 @@ impl Function for ResolveBuildGraph {
 
     fn call<'a: 'a>(
         args: Self::Args<'a>,
-        ctx: &mut Context,
+        _: &mut Context,
     ) -> Result<BuildGraph, ResolveBuildGraphError> {
         let manifest_path = args.src.join("Cargo.toml");
 
-        args.vendor_dir.realise(ctx)?;
-
-        let cargo_ctx =
-            cargo_ctx(args.vendor_dir.out_path(ctx)?.join(".cargo"))?;
+        let cargo_ctx = cargo_ctx(args.vendor_dir.join(".cargo"))?;
 
         let workspace = Workspace::new(&manifest_path, &cargo_ctx)
             .map_err(ResolveBuildGraphError::CreateWorkspace)?;
@@ -258,7 +256,7 @@ impl Function for ResolveBuildGraph {
 
         let resolve = WorkspaceResolve::new(workspace, package_id, &args)?;
 
-        Ok(BuildGraph::new(package_id, &resolve))
+        Ok(BuildGraph::new(package_id, &resolve, &*args.vendor_dir))
     }
 }
 
@@ -288,6 +286,31 @@ fn cargo_ctx(
         .map_err(ResolveBuildGraphError::ConfigureCargoContext)?;
 
     Ok(ctx)
+}
+
+fn get_vendor_dir<'a>(
+    mut value: NixValue<'a>,
+    ctx: &mut Context,
+) -> Result<Cow<'a, Path>, NixError> {
+    value.force_inline(ctx)?;
+
+    match value.kind() {
+        ValueKind::Attrset => NixDerivation::try_from_value(value, ctx)
+            .and_then(|drv| drv.out_path(ctx))
+            .map(Cow::Owned),
+
+        ValueKind::Path => {
+            <&'a Path>::try_from_value(value, ctx).map(Cow::Borrowed)
+        },
+
+        ValueKind::String => <String>::try_from_value(value, ctx)
+            .map(|s| Cow::Owned(PathBuf::from(s))),
+
+        _ => Err(NixError::new(
+            ErrorKind::Nix,
+            c"expected \"vendorDir\" to be a derivation, path, or string",
+        )),
+    }
 }
 
 fn parse_compile_target(

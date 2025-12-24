@@ -1,16 +1,17 @@
 use core::mem;
 use std::borrow::Cow;
 use std::collections::{HashMap, hash_map};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cargo::core::compiler::{CompileKind, CrateType};
 use cargo::core::dependency::DepKind;
 use cargo::core::manifest::TargetSourcePath;
 use cargo::core::profiles::UnitFor;
-use cargo::core::{Edition, Package, PackageId, TargetKind};
+use cargo::core::{Edition, Package, PackageId, SourceKind, TargetKind};
 use cargo::util::OptVersionReq;
 use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
+use either::Either;
 use nix_bindings::prelude::*;
 use smallvec::{SmallVec, smallvec};
 
@@ -66,7 +67,7 @@ pub(crate) struct BuildGraphNode {
     pub(crate) package_attrs: PackageAttrs,
 
     /// TODO: docs.
-    pub(crate) package_src: Option<PathBuf>,
+    pub(crate) package_src: PackageSource,
 }
 
 /// Edges from a node to its dependencies in the build graph.
@@ -170,6 +171,11 @@ pub(crate) struct PackageAttrs {
     pub(crate) version: semver::Version,
 }
 
+pub(crate) enum PackageSource {
+    Vendored,
+    Path(PathBuf),
+}
+
 #[derive(nix_bindings::Value, Clone)]
 pub(crate) enum DependencyRename {
     Simple(CompactString),
@@ -189,9 +195,10 @@ impl BuildGraph {
     pub(crate) fn new(
         root_package_id: PackageId,
         resolve: &WorkspaceResolve,
+        vendor_dir: &Path,
     ) -> Self {
         let mut this = Self::empty();
-        this.insert_package(root_package_id, resolve);
+        this.insert_package(root_package_id, resolve, vendor_dir);
         this
     }
 
@@ -202,6 +209,7 @@ impl BuildGraph {
         &mut self,
         pkg_id: PackageId,
         resolve: &WorkspaceResolve,
+        vendor_dir: &Path,
     ) -> usize {
         // Return early if we've already inserted this package.
         if let Some(&node_idx) = self.pkg_id_to_idx.get(&pkg_id) {
@@ -211,22 +219,18 @@ impl BuildGraph {
         let package =
             resolve.package(pkg_id).expect("package ID not found in workspace");
 
-        let package_src = package
-            .package_id()
-            .source_id()
-            .is_path()
-            .then(|| package.root().to_owned());
-
         let mut edges = NodeEdges::default();
 
         for (dep_pkg_id, dep) in resolve.deps(pkg_id) {
             match dep.kind() {
                 DepKind::Normal => {
-                    let node_idx = self.insert_package(dep_pkg_id, resolve);
+                    let node_idx =
+                        self.insert_package(dep_pkg_id, resolve, vendor_dir);
                     edges.dependencies.push(node_idx);
                 },
                 DepKind::Build => {
-                    let node_idx = self.insert_package(dep_pkg_id, resolve);
+                    let node_idx =
+                        self.insert_package(dep_pkg_id, resolve, vendor_dir);
                     edges.build_dependencies.push(node_idx);
                 },
                 DepKind::Development => {},
@@ -243,7 +247,7 @@ impl BuildGraph {
             dependency_renames: dependency_renames::<true>(pkg_id, resolve),
             library: LibraryCrate::new(package, resolve),
             package_attrs: PackageAttrs::new(package, resolve),
-            package_src,
+            package_src: PackageSource::new(package, vendor_dir),
         };
 
         let node_idx = self.nodes.len();
@@ -265,12 +269,6 @@ impl BuildGraph {
             edges: Vec::new(),
             pkg_id_to_idx: HashMap::new(),
         }
-    }
-}
-
-impl BuildGraphNode {
-    pub(crate) fn source_id(&self) -> SourceId<'_> {
-        self.package_attrs.source_id()
     }
 }
 
@@ -509,13 +507,51 @@ impl PackageAttrs {
     }
 }
 
+impl PackageSource {
+    fn new(package: &Package, vendor_dir: &Path) -> Self {
+        match package.package_id().source_id().kind() {
+            SourceKind::Git(_) => {
+                let package_root_is_repo_root = package
+                    .root()
+                    .strip_prefix(vendor_dir)
+                    .expect("dependency has been vendored")
+                    .components()
+                    .count()
+                    == 1;
+
+                if package_root_is_repo_root {
+                    Self::Vendored
+                } else {
+                    Self::Path(package.root().to_owned())
+                }
+            },
+            SourceKind::Path => Self::Path(package.root().to_owned()),
+            SourceKind::Registry
+            | SourceKind::SparseRegistry
+            | SourceKind::LocalRegistry
+            | SourceKind::Directory => Self::Vendored,
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn edition_as_str(edition: Edition) -> &'static str {
+    match edition {
+        Edition::Edition2015 => "2015",
+        Edition::Edition2018 => "2018",
+        Edition::Edition2021 => "2021",
+        Edition::Edition2024 => "2024",
+        Edition::EditionFuture => "future",
+    }
+}
+
 /// Constructs the [`DependencyRenames`] for the package with the given ID.
 ///
 /// The `IS_NORMAL` constant should be `true` if the renames should only include
 /// [normal](DepKind::Normal) dependencies, and `false` if they should only
 /// include [build](DepKind::Build) dependencies.
 #[inline]
-pub(crate) fn dependency_renames<const IS_NORMAL: bool>(
+fn dependency_renames<const IS_NORMAL: bool>(
     package_id: PackageId,
     resolve: &WorkspaceResolve,
 ) -> DependencyRenames {
@@ -573,17 +609,6 @@ pub(crate) fn dependency_renames<const IS_NORMAL: bool>(
     renames
 }
 
-#[inline]
-pub(crate) fn edition_as_str(edition: Edition) -> &'static str {
-    match edition {
-        Edition::Edition2015 => "2015",
-        Edition::Edition2018 => "2018",
-        Edition::Edition2021 => "2021",
-        Edition::Edition2024 => "2024",
-        Edition::EditionFuture => "future",
-    }
-}
-
 impl IntoValue for BuildGraph {
     fn into_value(self, _: &mut Context) -> impl Value + use<> {
         let mut nodes = Vec::with_capacity(self.nodes.len());
@@ -620,5 +645,17 @@ impl IntoValue for BuildGraph {
 impl ToValue for LibraryFormat {
     fn to_value(&self, _: &mut Context) -> impl Value + use<> {
         self.as_str()
+    }
+}
+
+impl ToValue for PackageSource {
+    fn to_value<'this>(
+        &'this self,
+        _: &mut Context,
+    ) -> impl Value + use<'this> {
+        match self {
+            PackageSource::Vendored => Either::Left(c"vendored"),
+            PackageSource::Path(path) => Either::Right(&**path),
+        }
     }
 }
