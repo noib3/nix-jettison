@@ -3,9 +3,10 @@ use std::borrow::Cow;
 use std::collections::{HashMap, hash_map};
 use std::path::PathBuf;
 
-use cargo::core::compiler::CrateType;
+use cargo::core::compiler::{CompileKind, CrateType};
 use cargo::core::dependency::DepKind;
 use cargo::core::manifest::TargetSourcePath;
+use cargo::core::profiles::UnitFor;
 use cargo::core::{Edition, Package, PackageId, TargetKind};
 use cargo::util::OptVersionReq;
 use cargo_util_schemas::manifest::TomlPackageBuild;
@@ -93,7 +94,7 @@ pub(crate) struct BuildScript {
 }
 
 /// TODO: docs.
-#[derive(nix_bindings::Attrset, Default, Clone)]
+#[derive(nix_bindings::Attrset, Clone)]
 #[attrset(rename_all = camelCase)]
 pub(crate) struct BuildOpts {
     pub(crate) codegen_units: Option<u32>,
@@ -299,7 +300,9 @@ impl BinaryCrate {
         package: &Package,
         resolve: &WorkspaceResolve,
     ) -> Option<impl Iterator<Item = Self>> {
-        if &package.package_id() != resolve.root_id() {
+        let package_id = package.package_id();
+
+        if &package_id != resolve.root_id() {
             return None;
         }
 
@@ -312,7 +315,7 @@ impl BinaryCrate {
             }
         });
 
-        Some(bin_targets.map(|(target, src_path)| {
+        Some(bin_targets.map(move |(target, src_path)| {
             let path = src_path
                 .strip_prefix(package.root())
                 .expect("binary path is under package root")
@@ -327,7 +330,7 @@ impl BinaryCrate {
                 .collect();
 
             Self {
-                build_opts: Default::default(),
+                build_opts: BuildOpts::new(package_id, false, resolve),
                 name: target.name().into(),
                 path,
                 required_features,
@@ -357,20 +360,66 @@ impl BuildScript {
             },
         };
 
+        let package_id = package.package_id();
+
         Some(Self {
-            build_opts: Default::default(),
+            build_opts: BuildOpts::new(package_id, true, resolve),
             dependency_renames: dependency_renames::<false>(
-                package.package_id(),
-                resolve,
+                package_id, resolve,
             ),
             path: path.into(),
         })
     }
 }
 
+impl BuildOpts {
+    fn new(
+        package_id: PackageId,
+        is_build_script_or_proc_macro: bool,
+        resolve: &WorkspaceResolve,
+    ) -> Self {
+        let unit_for = if is_build_script_or_proc_macro {
+            UnitFor::new_host(true, CompileKind::Host)
+        } else {
+            UnitFor::new_normal(resolve.compile_kind())
+        };
+
+        let compile_kind = if is_build_script_or_proc_macro {
+            CompileKind::Host
+        } else {
+            resolve.compile_kind()
+        };
+
+        let profile = resolve.profiles().get_profile(
+            package_id,
+            resolve.workspace().is_member_id(package_id),
+            package_id.source_id().is_path(),
+            unit_for,
+            compile_kind,
+        );
+
+        let extra_rustc_args = profile
+            .rustflags
+            .iter()
+            .map(|s| s.as_str())
+            .chain(
+                resolve
+                    .target_data()
+                    .get_info(compile_kind)
+                    .map_or(&[][..], |info| &*info.rustflags)
+                    .iter()
+                    .map(|s| &**s),
+            )
+            .map(Into::into)
+            .collect();
+
+        Self { codegen_units: profile.codegen_units, extra_rustc_args }
+    }
+}
+
 impl LibraryCrate {
     /// Returns the library crate of the given package, if any.
-    fn new(package: &Package, _resolve: &WorkspaceResolve) -> Option<Self> {
+    fn new(package: &Package, resolve: &WorkspaceResolve) -> Option<Self> {
         let (lib_target, crate_types) =
             package.targets().iter().find_map(|target| {
                 match target.kind() {
@@ -393,6 +442,8 @@ impl LibraryCrate {
             },
         };
 
+        let mut is_proc_macro = false;
+
         let lib_formats = crate_types
             .iter()
             .map(|crate_type| match crate_type {
@@ -401,13 +452,20 @@ impl LibraryCrate {
                 CrateType::Dylib => LibraryFormat::Dylib,
                 CrateType::Cdylib => LibraryFormat::Cdylib,
                 CrateType::Staticlib => LibraryFormat::Staticlib,
-                CrateType::ProcMacro => LibraryFormat::ProcMacro,
+                CrateType::ProcMacro => {
+                    is_proc_macro = true;
+                    LibraryFormat::ProcMacro
+                },
                 other => unreachable!("{other:?} is not a library crate type"),
             })
             .collect();
 
         Some(Self {
-            build_opts: Default::default(),
+            build_opts: BuildOpts::new(
+                package.package_id(),
+                is_proc_macro,
+                resolve,
+            ),
             name: lib_target.name().into(),
             path: lib_path,
             formats: lib_formats,

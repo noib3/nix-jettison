@@ -3,7 +3,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{env, io};
 
-use cargo::core::compiler::{CompileKind, RustcTargetData};
+use cargo::core::compiler::{CompileKind, CompileTarget, RustcTargetData};
 use cargo::core::profiles::Profiles;
 use cargo::core::resolver::{CliFeatures, ForceAllTargets, HasDevUnits};
 use cargo::core::{
@@ -62,10 +62,10 @@ pub(crate) struct ResolveBuildGraphArgs<'a> {
 
 pub(crate) struct WorkspaceResolve<'ws> {
     inner: ops::WorkspaceResolve<'ws>,
+    compile_kind: CompileKind,
     package_id: PackageId,
     profiles: Profiles,
     target_data: RustcTargetData<'ws>,
-    target: CompileKind,
     workspace: Workspace<'ws>,
 }
 
@@ -113,8 +113,8 @@ pub(crate) enum ResolveBuildGraphError {
 }
 
 impl ResolveBuildGraphArgs<'_> {
-    fn compile_target(&self) -> Result<CompileKind, ResolveBuildGraphError> {
-        Ok(CompileKind::Host)
+    fn compile_target(&self) -> Option<CompileTarget> {
+        None
     }
 
     fn features(&self) -> Result<CliFeatures, ResolveBuildGraphError> {
@@ -128,6 +128,10 @@ impl ResolveBuildGraphArgs<'_> {
 }
 
 impl<'ws> WorkspaceResolve<'ws> {
+    pub(crate) fn compile_kind(&self) -> CompileKind {
+        self.compile_kind
+    }
+
     pub(crate) fn deps(
         &self,
         pkg_id: PackageId,
@@ -137,7 +141,8 @@ impl<'ws> WorkspaceResolve<'ws> {
                 // Filter out dependencies that don't match our target
                 // platform.
                 let deps = dep_set.iter().filter(|&dep| {
-                    self.target_data.dep_platform_activated(dep, self.target)
+                    self.target_data
+                        .dep_platform_activated(dep, self.compile_kind())
                 });
 
                 deps.map(move |dep| (dep_pkg_id, dep))
@@ -160,11 +165,6 @@ impl<'ws> WorkspaceResolve<'ws> {
         &self.profiles
     }
 
-    /// The [`CompileKind`] for the root of the build graph.
-    pub(crate) fn root_compile_kind(&self) -> CompileKind {
-        self.target
-    }
-
     /// The [`PackageId`] of the package at the root of the build graph.
     pub(crate) fn root_id(&self) -> &PackageId {
         &self.package_id
@@ -183,15 +183,18 @@ impl<'ws> WorkspaceResolve<'ws> {
         package_id: PackageId,
         args: &ResolveBuildGraphArgs,
     ) -> Result<Self, ResolveBuildGraphError> {
-        let target = args.compile_target()?;
+        let compile_kind = args
+            .compile_target()
+            .map(CompileKind::Target)
+            .unwrap_or(CompileKind::Host);
 
-        let mut target_data = RustcTargetData::new(&workspace, &[target])
+        let mut target_data = RustcTargetData::new(&workspace, &[compile_kind])
             .map_err(ResolveBuildGraphError::CreateTargetData)?;
 
         let inner = ops::resolve_ws_with_opts(
             &workspace,
             &mut target_data,
-            &[target],
+            &[compile_kind],
             &args.features()?,
             &[package_id.to_spec()],
             HasDevUnits::No,
@@ -203,7 +206,14 @@ impl<'ws> WorkspaceResolve<'ws> {
         let profiles = Profiles::new(&workspace, args.profile.as_str().into())
             .map_err(ResolveBuildGraphError::ResolveProfiles)?;
 
-        Ok(Self { inner, package_id, profiles, target_data, target, workspace })
+        Ok(Self {
+            inner,
+            package_id,
+            profiles,
+            target_data,
+            compile_kind,
+            workspace,
+        })
     }
 }
 
