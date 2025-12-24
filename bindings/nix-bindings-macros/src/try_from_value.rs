@@ -123,31 +123,34 @@ fn try_from_attrset_impl(
         let default_attr =
             field_attrs.default.as_ref().or(struct_attrs.default.as_ref());
 
-        field_initializers.extend(
-            if let Some(attr) = default_attr {
-                match attr {
-                    DefaultAttr::Default => quote! {
-                        let #field_name = #attrset.get_opt(#key_name, #ctx)?
-                            .unwrap_or_default();
-                    },
-                    DefaultAttr::Expr(expr) => quote! {
-                        let #field_name = #attrset.get_opt(#key_name, #ctx)?
-                            .unwrap_or_else(|| #expr);
-                    },
-                }
-            } else if let Some(with_expr) = field_attrs.with {
-                quote! {
-                    let #field_name = {
-                        let __value = #attrset.get::<::nix_bindings::value::NixValue>(#key_name, #ctx)?;
-                        (#with_expr)(__value, #ctx)?
-                    };
-                }
-            } else {
-                quote! {
-                    let #field_name = #attrset.get(#key_name, #ctx)?;
-                }
+        let value_ident = Ident::new("__value", Span::call_site());
+
+        let value_expr = match field_attrs.with {
+            Some(with_expr) => quote!((#with_expr)(#value_ident, #ctx)?),
+            None => quote!(#value_ident),
+        };
+
+        let default_expr = match default_attr {
+            Some(attr) => attr.default_expr(),
+            None => quote! {
+                return ::core::result::Result::Err(
+                    ::nix_bindings::attrset::MissingAttributeError {
+                        attrset: #attrset,
+                        key: #key_name,
+                    }
+                    .into()
+                )
             },
-        );
+        };
+
+        let field_initializer = quote! {
+            let #field_name = match #attrset.get_opt(#key_name, #ctx)? {
+                Some(#value_ident) => #value_expr,
+                None => #default_expr,
+            };
+        };
+
+        field_initializers.extend(field_initializer);
     }
 
     Ok(quote! {
@@ -219,13 +222,6 @@ impl Attributes {
                         },
                     }
                 } else if meta.path.is_ident("default") {
-                    if this.with.is_some() {
-                        return Err(meta.error(
-                            "`with` and `default` attributes cannot be used \
-                             together",
-                        ));
-                    }
-
                     // Check if there's a value assignment (default = {expr}).
                     if meta.input.peek(syn::Token![=]) {
                         let value = meta.value()?;
@@ -235,13 +231,6 @@ impl Attributes {
                         this.default = Some(DefaultAttr::Default);
                     }
                 } else if meta.path.is_ident("with") {
-                    if this.default.is_some() {
-                        return Err(meta.error(
-                            "`with` and `default` attributes cannot be used \
-                             together",
-                        ));
-                    }
-
                     match pos {
                         AttributePosition::Struct => {
                             return Err(meta.error(
@@ -262,6 +251,15 @@ impl Attributes {
         }
 
         Ok(this)
+    }
+}
+
+impl DefaultAttr {
+    fn default_expr(&self) -> TokenStream {
+        match self {
+            Self::Default => quote!(::core::default::Default::default()),
+            Self::Expr(expr) => quote!(#expr),
+        }
     }
 }
 

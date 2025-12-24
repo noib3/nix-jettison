@@ -239,7 +239,7 @@ pub struct MissingAttributeError<'a, Attrset> {
     pub attrset: Attrset,
 
     /// The name of the missing attribute.
-    pub attr: &'a CStr,
+    pub key: &'a CStr,
 }
 
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
@@ -289,13 +289,8 @@ impl<'a> NixAttrset<'a> {
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<T> {
-        self.get_opt(key, ctx)?.ok_or_else(|| {
-            MissingAttributeError {
-                attrset: self.into_attrset().borrow(),
-                attr: key,
-            }
-            .into()
-        })
+        self.get_opt(key, ctx)?
+            .ok_or_else(|| MissingAttributeError { attrset: self, key }.into())
     }
 
     /// TODO: docs.
@@ -1100,7 +1095,7 @@ impl<T: Pairs> Pairs for Option<T> {
 impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "attribute '{}' missing", self.attr.to_string_lossy())
+        write!(f, "attribute '{}' missing", self.key.to_string_lossy())
     }
 }
 
