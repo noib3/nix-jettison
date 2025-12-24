@@ -125,7 +125,8 @@ impl Function for BuildPackage {
     ) -> Result<NixDerivation<'static>, BuildPackageError> {
         let global_args = make_derivation::GlobalArgs::new(&args, ctx)?;
 
-        let build_graph = Self::get_build_graph(args, global_args.target, ctx)?;
+        let build_graph =
+            Self::get_build_graph(args, global_args.compile_target, ctx)?;
 
         let mut library_derivations: Vec<NixDerivation<'static>> =
             Vec::with_capacity(build_graph.nodes.len());

@@ -45,6 +45,11 @@ pub(crate) enum DerivationType<'graph> {
 
 #[derive(Clone)]
 pub(crate) struct GlobalArgs<'args> {
+    /// The compilation `--target` to pass to `rustc`, if any.
+    ///
+    /// This should only be set when cross-compiling.
+    pub(crate) compile_target: Option<CompileTarget>,
+
     /// The
     /// [`BuildPackageArgs::crate_overrides`](crate::build_package::BuildPackageArgs::crate_overrides) field.
     pub(crate) crate_overrides: Option<NixAttrset<'args>>,
@@ -67,11 +72,6 @@ pub(crate) struct GlobalArgs<'args> {
 
     /// A handle to Nixpkgs's standard build environment.
     pub(crate) stdenv: NixAttrset<'args>,
-
-    /// The compilation `--target` to pass to `rustc`, if any.
-    ///
-    /// This should only be set when cross-compiling.
-    pub(crate) target: Option<CompileTarget>,
 }
 
 struct Crate<'a> {
@@ -171,7 +171,7 @@ where
         direct_deps,
         deps,
         args.release,
-        args.target.as_ref(),
+        args.compile_target.as_ref(),
         ctx,
     )?;
 
@@ -594,7 +594,28 @@ impl<'args> GlobalArgs<'args> {
             None => args.pkgs.get::<NixDerivation>(c"rustc", ctx)?,
         };
 
+        let host_platform = stdenv.get::<NixAttrset>(c"hostPlatform", ctx)?;
+
+        let host_config = host_platform.get::<CompactString>(c"config", ctx)?;
+
+        let build_config = stdenv
+            .get::<NixAttrset>(c"buildPlatform", ctx)?
+            .get::<CompactString>(c"config", ctx)?;
+
+        let compile_target = if host_config == build_config {
+            None
+        } else {
+            let target = host_platform
+                .get::<NixAttrset>(c"rust", ctx)?
+                .get::<CompactString>(c"rustcTargetSpec", ctx)?;
+            Some(
+                CompileTarget::new(&target)
+                    .expect("rustcTargetSpec is a valid target"),
+            )
+        };
+
         Ok(Self {
+            compile_target,
             crate_overrides: args.crate_overrides,
             global_overrides: args.global_overrides,
             mk_derivation: stdenv.get::<NixLambda>(c"mkDerivation", ctx)?,
@@ -602,7 +623,6 @@ impl<'args> GlobalArgs<'args> {
             release: args.release,
             rustc,
             stdenv,
-            target: None,
         })
     }
 }
