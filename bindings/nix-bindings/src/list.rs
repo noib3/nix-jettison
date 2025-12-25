@@ -89,6 +89,24 @@ pub trait List {
         Ok(())
     }
 
+    /// Returns a [`WriteableList`] implementation over this list.
+    #[inline(always)]
+    fn into_ext(self) -> impl ListExt
+    where
+        Self: Sized,
+    {
+        struct Wrapper<L>(L);
+
+        impl<L: List> ListExt for Wrapper<L> {
+            #[inline(always)]
+            fn into_writeable(self) -> impl WriteableList {
+                List::into_writeable(self.0)
+            }
+        }
+
+        Wrapper(self)
+    }
+
     /// TODO: docs.
     #[inline(always)]
     fn into_list(self) -> impl List
@@ -121,7 +139,7 @@ pub trait List {
             ) -> Result<()> {
                 unsafe {
                     WriteableList::write_once(
-                        self.0.as_writeable(),
+                        self.0.borrow().into_writeable(),
                         dest,
                         namespace,
                         ctx,
@@ -142,13 +160,16 @@ pub trait List {
     /// Returns a [`WriteableList`] implementation over this list.
     #[inline(always)]
     #[doc(hidden)]
-    fn as_writeable(&self) -> impl WriteableList {
-        struct Wrapper<'a, L: ?Sized> {
-            list: &'a L,
+    fn into_writeable(self) -> impl WriteableList
+    where
+        Self: Sized,
+    {
+        struct Wrapper<L> {
+            list: L,
             index: c_uint,
         }
 
-        impl<L: List + ?Sized> WriteableList for Wrapper<'_, L> {
+        impl<L: List> WriteableList for Wrapper<L> {
             #[inline]
             fn initial_len(&self) -> c_uint {
                 self.list.len()
@@ -171,13 +192,41 @@ pub trait List {
 }
 
 /// An extension trait for iterators of [`IntoValue`]s.
-pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
+pub trait ListExt {
     /// TODO: docs.
+    #[doc(hidden)]
+    fn into_writeable(self) -> impl WriteableList;
+
+    /// TODO: docs.
+    #[inline(always)]
+    fn concat<T: ListExt>(self, other: T) -> impl ListExt
+    where
+        Self: Sized,
+    {
+        struct Wrapper<T>(T);
+
+        impl<T: WriteableList> ListExt for Wrapper<T> {
+            #[inline(always)]
+            fn into_writeable(self) -> impl WriteableList {
+                self.0
+            }
+        }
+
+        Wrapper(self.into_writeable().concat(other.into_writeable()))
+    }
+
+    /// TODO: docs.
+    #[inline(always)]
     fn into_value(self) -> impl Value
     where
         Self: Sized,
-        Self::Item: IntoValue;
+    {
+        self.into_writeable().into_value()
+    }
+}
 
+/// An extension trait for iterators.
+pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
     /// Chains two [`ExactSizeIterator`]s together, returning a new
     /// [`ExactSizeIterator`] that will iterate over both.
     ///
@@ -236,6 +285,114 @@ trait WriteableList {
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> T;
+
+    #[inline]
+    fn concat<T: WriteableList>(self, other: T) -> impl WriteableList
+    where
+        Self: Sized,
+    {
+        struct Wrapper<L, R> {
+            left: L,
+            len_left: c_uint,
+            num_called_left: c_uint,
+            right: R,
+        }
+
+        impl<L: WriteableList, R: WriteableList> WriteableList for Wrapper<L, R> {
+            #[inline]
+            fn initial_len(&self) -> c_uint {
+                self.left.initial_len() + self.right.initial_len()
+            }
+
+            #[inline]
+            fn with_next<'ctx, 'eval, T>(
+                &mut self,
+                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
+            ) -> T {
+                if self.num_called_left == self.len_left {
+                    self.right.with_next(fun, ctx)
+                } else {
+                    self.num_called_left += 1;
+                    self.left.with_next(fun, ctx)
+                }
+            }
+        }
+
+        Wrapper {
+            len_left: self.initial_len(),
+            left: self,
+            num_called_left: 0,
+            right: other,
+        }
+    }
+
+    #[inline]
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+    {
+        struct Wrapper<L> {
+            list: Cell<Option<L>>,
+            list_res: OnceCell<Result<NixList<'static>>>,
+        }
+
+        impl<L: WriteableList> Value for Wrapper<L> {
+            #[inline]
+            fn kind(&self) -> ValueKind {
+                ValueKind::List
+            }
+
+            #[inline]
+            unsafe fn write(
+                &self,
+                dest: NonNull<nix_bindings_sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                let Some(iter) = self.list.take() else {
+                    let list = self
+                        .list_res
+                        .get()
+                        .expect(
+                            "if the iterator has been taken it means \
+                             Value::write has already been called, and its \
+                             result must've been saved",
+                        )
+                        .clone()?;
+                    return unsafe { list.write(dest, namespace, ctx) };
+                };
+
+                let dest = match ctx.alloc_value() {
+                    Ok(uninit_value) => uninit_value,
+                    Err(err) => {
+                        self.list.set(Some(iter));
+                        return Err(err);
+                    },
+                };
+
+                let list_res = match unsafe {
+                    WriteableList::write_once(iter, dest, namespace, ctx)
+                } {
+                    Ok(()) => {
+                        Ok(NixList { inner: unsafe { NixValue::new(dest) } })
+                    },
+                    Err(err) => {
+                        unsafe {
+                            sys::value_decref(ptr::null_mut(), dest.as_ptr());
+                        }
+                        Err(err)
+                    },
+                };
+
+                self.list_res.set(list_res).expect("not been set before");
+
+                Ok(())
+            }
+        }
+
+        Wrapper { list: Cell::new(Some(self)), list_res: OnceCell::new() }
+    }
 
     #[inline]
     unsafe fn write_once(
@@ -508,77 +665,15 @@ where
     }
 }
 
-impl<I: IntoIterator<IntoIter: ExactSizeIterator>> IteratorExt for I {
-    #[inline]
-    fn into_value(self) -> impl Value
-    where
-        Self::Item: IntoValue,
-    {
-        struct Wrapper<Iter> {
-            iter: Cell<Option<Iter>>,
-            list_res: OnceCell<Result<NixList<'static>>>,
-        }
-
-        impl<Iter: WriteableList> Value for Wrapper<Iter> {
-            #[inline]
-            fn kind(&self) -> ValueKind {
-                ValueKind::List
-            }
-
-            #[inline]
-            unsafe fn write(
-                &self,
-                dest: NonNull<nix_bindings_sys::Value>,
-                namespace: impl Namespace,
-                ctx: &mut Context,
-            ) -> Result<()> {
-                let Some(iter) = self.iter.take() else {
-                    let list = self
-                        .list_res
-                        .get()
-                        .expect(
-                            "if the iterator has been taken it means \
-                             Value::write has already been called, and its \
-                             result must've been saved",
-                        )
-                        .clone()?;
-                    return unsafe { list.write(dest, namespace, ctx) };
-                };
-
-                let dest = match ctx.alloc_value() {
-                    Ok(uninit_value) => uninit_value,
-                    Err(err) => {
-                        self.iter.set(Some(iter));
-                        return Err(err);
-                    },
-                };
-
-                let list_res = match unsafe {
-                    WriteableList::write_once(iter, dest, namespace, ctx)
-                } {
-                    Ok(()) => {
-                        Ok(NixList { inner: unsafe { NixValue::new(dest) } })
-                    },
-                    Err(err) => {
-                        unsafe {
-                            sys::value_decref(ptr::null_mut(), dest.as_ptr());
-                        }
-                        Err(err)
-                    },
-                };
-
-                self.list_res.set(list_res).expect("not been set before");
-
-                Ok(())
-            }
-        }
-
-        Wrapper {
-            iter: Cell::new(Some(self.into_iter())),
-            list_res: OnceCell::new(),
-        }
+impl<T: ExactSizeIterator<Item: IntoValue>> ListExt for T {
+    #[expect(private_interfaces)]
+    #[inline(always)]
+    fn into_writeable(self) -> impl WriteableList {
+        self
     }
 }
+
+impl<I: IntoIterator<IntoIter: ExactSizeIterator>> IteratorExt for I {}
 
 impl<I: ExactSizeIterator<Item: IntoValue>> WriteableList for I {
     #[track_caller]

@@ -147,7 +147,7 @@ impl Function for BuildPackage {
             let deps_drv = make_deps(
                 &node.package_attrs,
                 all_direct_deps,
-                &global_args.mk_derivation,
+                &global_args,
                 ctx,
             )?;
 
