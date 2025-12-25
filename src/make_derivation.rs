@@ -8,7 +8,7 @@ use cargo::core::Edition;
 use cargo::core::compiler::CompileTarget;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use either::Either;
-use indoc::formatdoc;
+use indoc::{formatdoc, writedoc};
 use nix_bindings::prelude::*;
 
 use crate::build_graph::{
@@ -94,12 +94,34 @@ struct Crate<'a> {
 
 pub(crate) fn make_deps<'dep>(
     package: &PackageAttrs,
-    _direct_deps: impl Iterator<Item = NixDerivation<'dep>>,
+    direct_deps: impl ExactSizeIterator<Item = NixDerivation<'dep>> + Clone,
     mk_derivation: &NixLambda,
     ctx: &mut Context,
 ) -> Result<NixDerivation<'static>> {
+    let mut install_phase = "runHook preInstall\nmkdir -p $out\n".to_owned();
+
+    // For every direct dependency, copy all the files in its `deps` folder,
+    // as well as its rlib and dylib files.
+    for dep_drv in direct_deps.clone() {
+        let dep_out_path = dep_drv.out_path_as_string(ctx)?;
+        writedoc!(
+            &mut install_phase,
+            "
+                cp -rn {dep_out_path}/deps/. $out
+                ln -s {dep_out_path}/lib*.rlib $out || true
+                ln -s {dep_out_path}/lib*.dylib $out || true
+            ",
+        )
+        .expect("writing to string can't fail");
+    }
+
+    install_phase.push_str("runHook postInstall");
+
     let args = attrset! {
         name: format_compact!("{}-{}-deps", package.name, package.version),
+        buildInputs: direct_deps.into_value(),
+        installPhase: install_phase,
+        phases: [ c"installPhase" ],
     };
 
     mk_derivation.call(args, ctx)?.force_into(ctx)
@@ -248,7 +270,7 @@ where
         },
     };
 
-    let mut build_phase = "runHook preBuild\nmkdir -p $out\n".to_owned();
+    let mut build_phase = "runHook preBuild\n".to_owned();
 
     for cr8 in crates {
         build_phase.push_str("\nrustc");
@@ -266,7 +288,7 @@ where
             build_phase.push_str(rustc_arg.as_ref());
         }
 
-        build_phase.push_str("-L dependency=$out/deps");
+        build_phase.push_str(" -L dependency=$out/deps");
 
         // Append any extra arguments coming from build scripts.
         build_phase.push_str(" ${EXTRA_RUSTC_ARGS:-}");
@@ -422,7 +444,7 @@ fn configure_phase(
 
     writeln!(
         &mut configure_phase,
-        "ln -s {} $out/deps",
+        "mkdir -p $out\nln -s {} $out/deps",
         deps.out_path_as_string(ctx)?,
     )
     .expect("writing to string can't fail");
@@ -462,7 +484,7 @@ fn install_phase(package: &PackageAttrs, is_build_script: bool) -> String {
         ));
     }
 
-    install_phase.push_str("runHook postInstall\n");
+    install_phase.push_str("runHook postInstall");
 
     install_phase
 }
@@ -507,7 +529,7 @@ where
     ])
     .chain(
         cr8.is_proc_macro
-            .then(|| CompactString::const_new("--extern proc-macro")),
+            .then(|| CompactString::const_new("--extern proc_macro")),
     )
     .chain(dependencies_rustc_args(direct_deps, cr8.deps_renames, ctx))
     .chain(
