@@ -169,6 +169,7 @@ where
         build_script_drv,
         r#type.is_library(),
         args.release,
+        deps,
         args.stdenv,
         ctx,
     )?;
@@ -177,7 +178,6 @@ where
         &r#type,
         node,
         direct_deps,
-        deps,
         args.release,
         args.compile_target.as_ref(),
         ctx,
@@ -227,7 +227,6 @@ fn build_phase<'dep, Deps>(
     r#type: &DerivationType,
     node: &BuildGraphNode,
     direct_deps: Deps,
-    deps: NixDerivation,
     is_release: bool,
     target: Option<&CompileTarget>,
     ctx: &mut Context,
@@ -251,8 +250,6 @@ where
 
     let mut build_phase = "runHook preBuild\nmkdir -p $out\n".to_owned();
 
-    let deps_path = deps.out_path(ctx)?.display().to_string();
-
     for cr8 in crates {
         build_phase.push_str("\nrustc");
 
@@ -269,8 +266,7 @@ where
             build_phase.push_str(rustc_arg.as_ref());
         }
 
-        build_phase.push_str("-L dependency=");
-        build_phase.push_str(&deps_path);
+        build_phase.push_str("-L dependency=$out/deps");
 
         // Append any extra arguments coming from build scripts.
         build_phase.push_str(" ${EXTRA_RUSTC_ARGS:-}");
@@ -287,6 +283,7 @@ fn configure_phase(
     build_script: Option<NixDerivation>,
     is_library: bool,
     is_release: bool,
+    deps: NixDerivation,
     stdenv: NixAttrset,
     ctx: &mut Context,
 ) -> Result<String> {
@@ -422,6 +419,13 @@ fn configure_phase(
         )
         .expect("writing to string can't fail");
     }
+
+    writeln!(
+        &mut configure_phase,
+        "ln -s {} $out/deps",
+        deps.out_path_as_string(ctx)?,
+    )
+    .expect("writing to string can't fail");
 
     configure_phase.push_str("runHook postConfigure");
 
