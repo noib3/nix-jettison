@@ -1033,10 +1033,7 @@ impl<T: Value> IntoValue for T {
 
 impl<T: Value> ToValue for T {
     #[inline(always)]
-    fn to_value<'this>(
-        &'this self,
-        _: &mut Context,
-    ) -> impl Value + use<'this, T> {
+    fn to_value<'a>(&'a self, _: &mut Context) -> impl Value + use<'a, T> {
         Value::borrow(self)
     }
 }

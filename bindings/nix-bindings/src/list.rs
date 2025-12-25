@@ -85,8 +85,8 @@ pub trait List {
     }
 }
 
-/// An extension trait for iterators of [`Value`]s.
-pub trait IteratorExt: IntoIterator<Item: Value> {
+/// An extension trait for iterators of [`ToValue`]s.
+pub trait IteratorExt: IntoIterator<Item: ToValue> {
     /// TODO: docs.
     fn into_value(self) -> impl Value
     where
@@ -352,7 +352,7 @@ where
     }
 }
 
-impl<I: IntoIterator<Item: Value>> IteratorExt for I {
+impl<I: IntoIterator<Item: ToValue>> IteratorExt for I {
     #[inline]
     fn into_value(self) -> impl Value
     where
@@ -386,7 +386,7 @@ impl<I: IntoIterator<Item: Value>> IteratorExt for I {
 
         impl<I: ExactSizeIterator + Clone> ValueIterator for RewindIter<I>
         where
-            I::Item: Value,
+            I::Item: ToValue,
         {
             #[inline]
             fn initial_len(&self) -> c_uint {
@@ -407,7 +407,7 @@ impl<I: IntoIterator<Item: Value>> IteratorExt for I {
                              times than advertised by initial_len()"
                         );
                     };
-                    (fun.call(value, ctx), iter.len() == 0)
+                    (fun.call(value.to_value(ctx), ctx), iter.len() == 0)
                 })
             }
         }
