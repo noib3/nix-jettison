@@ -141,12 +141,12 @@ impl Function for BuildPackage {
 
             let all_direct_deps = build_deps
                 .clone()
-                .chain(normal_deps.clone())
+                .chain_exact(normal_deps.clone())
                 .map(|(_node, drv)| drv);
 
             let deps_drv = make_deps(
                 &node.package_attrs,
-                all_direct_deps.collect::<Vec<_>>().into_iter(),
+                all_direct_deps,
                 &global_args.mk_derivation,
                 ctx,
             )?;

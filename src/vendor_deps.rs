@@ -176,15 +176,13 @@ directory = "."
                     path: source.derivation,
                 }
             })
-            .chain(iter::once(attrset! {
+            .chain_exact(iter::once(attrset! {
                 name: CompactString::const_new(".cargo/config.toml"),
                 path: config_dot_toml_drv,
-            }))
-            // TODO: is `Chain` not `ExactSize`?
-            .collect::<Vec<_>>();
+            }));
 
         pkgs.get::<NixLambda>(c"linkFarm", ctx)?
-            .call_multi((c"vendored-sources", entries), ctx)?
+            .call_multi((c"vendored-sources", entries.into_value()), ctx)?
             .force_into(ctx)
     }
 }

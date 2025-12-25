@@ -203,6 +203,7 @@ pub struct NixAttrset<'value> {
 }
 
 /// The attribute set type produced by the [`attrset!`] macro.
+#[derive(Clone)]
 pub struct LiteralAttrset<Keys, Values> {
     keys: Keys,
     values: Values,

@@ -86,12 +86,36 @@ pub trait List {
 }
 
 /// An extension trait for iterators of [`ToValue`]s.
-pub trait IteratorExt: IntoIterator<Item: ToValue> {
+pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
     /// TODO: docs.
     fn into_value(self) -> impl Value
     where
         Self: Sized,
-        Self::IntoIter: ExactSizeIterator + Clone;
+        Self::IntoIter: Clone,
+        Self::Item: ToValue;
+
+    /// Chains two [`ExactSizeIterator`]s together, returning a new
+    /// [`ExactSizeIterator`] that will iterate over both.
+    ///
+    /// See the discussion in https://github.com/rust-lang/rust/issues/34433
+    /// for why [`Chain`](std::iter::Chain) doesn't already do this.
+    ///
+    /// # Panics
+    ///
+    /// The [`ExactSizeIterator::len`] implementation of the returned iterator
+    /// will panic if the sum of the two iterators' lengths overflows a
+    /// `usize`.
+    #[inline]
+    fn chain_exact<T>(self, other: T) -> ChainExact<Self::IntoIter, T::IntoIter>
+    where
+        Self: Sized,
+        T: IntoIterator<IntoIter: ExactSizeIterator<Item = Self::Item>>,
+    {
+        ChainExact {
+            left: Some(self.into_iter()),
+            right: Some(other.into_iter()),
+        }
+    }
 }
 
 /// TODO: docs.
@@ -103,6 +127,13 @@ pub struct NixList<'value> {
 /// The list type produced by the [`list!`] macro.
 pub struct LiteralList<Values> {
     values: Values,
+}
+
+/// The iterator type returned by calling [`IteratorExt::chain_exact`].
+#[derive(Clone)]
+pub struct ChainExact<L, R> {
+    left: Option<L>,
+    right: Option<R>,
 }
 
 /// A hybrid trait between a [`List`] and an [`Iterator`] over values, with a
@@ -352,11 +383,12 @@ where
     }
 }
 
-impl<I: IntoIterator<Item: ToValue>> IteratorExt for I {
+impl<I: IntoIterator<IntoIter: ExactSizeIterator>> IteratorExt for I {
     #[inline]
     fn into_value(self) -> impl Value
     where
-        Self::IntoIter: ExactSizeIterator + Clone,
+        Self::Item: ToValue,
+        Self::IntoIter: Clone,
     {
         struct RewindIter<Iter> {
             current: Cell<Option<Iter>>,
@@ -435,5 +467,55 @@ impl<L: List> ValueIterator for L {
         ctx: &'ctx mut Context<'eval>,
     ) -> T {
         self.with_value(idx, fun, ctx)
+    }
+}
+
+impl<L, R> Iterator for ChainExact<L, R>
+where
+    L: ExactSizeIterator,
+    R: ExactSizeIterator<Item = L::Item>,
+{
+    type Item = L::Item;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let (item, is_left) = match (&mut self.left, &mut self.right) {
+            (Some(left), _) => (left.next(), true),
+            (None, Some(right)) => (right.next(), false),
+            (None, None) => return None,
+        };
+
+        match item {
+            Some(item) => Some(item),
+            None => {
+                if is_left {
+                    self.left = None;
+                    self.next()
+                } else {
+                    self.right = None;
+                    None
+                }
+            },
+        }
+    }
+
+    #[track_caller]
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let exact = self.len();
+        (exact, Some(exact))
+    }
+}
+
+impl<L, R> ExactSizeIterator for ChainExact<L, R>
+where
+    L: ExactSizeIterator,
+    R: ExactSizeIterator<Item = L::Item>,
+{
+    #[track_caller]
+    #[inline]
+    fn len(&self) -> usize {
+        self.left.as_ref().map_or(0, |iter| iter.len())
+            + self.right.as_ref().map_or(0, |iter| iter.len())
     }
 }
