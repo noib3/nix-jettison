@@ -2,7 +2,7 @@
 
 use alloc::ffi::CString;
 use alloc::string::ToString;
-use core::cell::Cell;
+use core::cell::{Cell, OnceCell};
 use core::ffi::c_uint;
 use core::ops::Deref;
 use core::ptr::{self, NonNull};
@@ -10,10 +10,17 @@ use core::ptr::{self, NonNull};
 pub use nix_bindings_macros::list;
 use nix_bindings_sys as sys;
 
-use crate::error::TypeMismatchError;
+use crate::error::{Error, TypeMismatchError};
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Value, ValueKind};
-use crate::value::{FnOnceValue, NixValue, ToValue, TryFromValue, Values};
+use crate::value::{
+    FnOnceValue,
+    IntoValue,
+    NixValue,
+    ToValue,
+    TryFromValue,
+    Values,
+};
 
 /// TODO: docs.
 pub trait List {
@@ -31,19 +38,19 @@ pub trait List {
     /// Returns a [`List`] implementation that borrows from `self`.
     #[inline]
     fn borrow(&self) -> impl List {
-        struct BorrowedList<'a, T: ?Sized> {
-            inner: &'a T,
+        struct Wrapper<'a, L: ?Sized> {
+            list: &'a L,
         }
 
-        impl<T: List + ?Sized> List for BorrowedList<'_, T> {
+        impl<L: List + ?Sized> List for Wrapper<'_, L> {
             #[inline]
             fn borrow(&self) -> impl List {
-                Self { inner: self.inner }
+                Self { list: self.list }
             }
 
             #[inline]
             fn len(&self) -> c_uint {
-                self.inner.len()
+                self.list.len()
             }
 
             #[inline]
@@ -53,11 +60,11 @@ pub trait List {
                 fun: impl FnOnceValue<V, &'ctx mut Context<'eval>>,
                 ctx: &'ctx mut Context<'eval>,
             ) -> V {
-                self.inner.with_value(idx, fun, ctx)
+                self.list.with_value(idx, fun, ctx)
             }
         }
 
-        BorrowedList { inner: self }
+        Wrapper { list: self }
     }
 
     /// TODO: docs.
@@ -75,7 +82,33 @@ pub trait List {
     where
         Self: Sized,
     {
-        ListValue(self)
+        struct Wrapper<L>(L);
+
+        impl<L: List> Value for Wrapper<L> {
+            #[inline(always)]
+            fn kind(&self) -> ValueKind {
+                ValueKind::List
+            }
+
+            #[inline(always)]
+            unsafe fn write(
+                &self,
+                dest: NonNull<nix_bindings_sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                unsafe {
+                    WriteableList::write_once(
+                        self.0.as_writeable(),
+                        dest,
+                        namespace,
+                        ctx,
+                    )
+                }
+            }
+        }
+
+        Wrapper(self)
     }
 
     /// Returns whether this list is empty.
@@ -83,16 +116,45 @@ pub trait List {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Returns a [`WriteableList`] implementation over this list.
+    #[inline(always)]
+    #[doc(hidden)]
+    fn as_writeable(&self) -> impl WriteableList {
+        struct Wrapper<'a, L: ?Sized> {
+            list: &'a L,
+            index: c_uint,
+        }
+
+        impl<L: List + ?Sized> WriteableList for Wrapper<'_, L> {
+            #[inline]
+            fn initial_len(&self) -> c_uint {
+                self.list.len()
+            }
+
+            #[inline]
+            fn with_next<'ctx, 'eval, T>(
+                &mut self,
+                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
+            ) -> T {
+                let out = self.list.with_value(self.index, fun, ctx);
+                self.index += 1;
+                out
+            }
+        }
+
+        Wrapper { list: self, index: 0 }
+    }
 }
 
-/// An extension trait for iterators of [`ToValue`]s.
+/// An extension trait for iterators of [`IntoValue`]s.
 pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
     /// TODO: docs.
     fn into_value(self) -> impl Value
     where
         Self: Sized,
-        Self::IntoIter: Clone,
-        Self::Item: ToValue;
+        Self::Item: IntoValue;
 
     /// Chains two [`ExactSizeIterator`]s together, returning a new
     /// [`ExactSizeIterator`] that will iterate over both.
@@ -136,21 +198,61 @@ pub struct ChainExact<L, R> {
     right: Option<R>,
 }
 
-/// A hybrid trait between a [`List`] and an [`Iterator`] over values, with a
-/// more relaxed interface than either.
-trait ValueIterator {
+/// TODO: docs.
+trait WriteableList {
     fn initial_len(&self) -> c_uint;
 
-    fn with_next_value<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
+    fn with_next<'ctx, 'eval, T>(
+        &mut self,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> T;
+
+    #[inline]
+    unsafe fn write_once(
+        mut self,
+        dest: NonNull<sys::Value>,
+        mut namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        struct WriteValue<N> {
+            dest: NonNull<sys::Value>,
+            namespace: N,
+        }
+
+        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>> for WriteValue<N> {
+            #[inline]
+            fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
+                unsafe { value.write(self.dest, self.namespace, ctx) }
+            }
+        }
+
+        let len = self.initial_len();
+
+        let mut builder = ctx.make_list_builder(len as usize)?;
+
+        for idx in 0..len {
+            // FIXME: avoid this allocation.
+            let idx_cstr = CString::new(idx.to_string()).expect("no NUL byte");
+            let new_namespace = namespace.push(&idx_cstr);
+            builder.insert(|dest, ctx| {
+                self.with_next(
+                    WriteValue { dest, namespace: new_namespace },
+                    ctx,
+                )
+            })?;
+            namespace = new_namespace.pop();
+        }
+
+        builder.build(dest)
+    }
 }
 
-/// A newtype wrapper that implements [`Value`] for every [`ValueIterator`].
-struct ListValue<T>(T);
+/// A newtype struct that implements [`Value`] for every [`WriteableList`]
+/// (only needed because [`Value`] already has another blanket impl).
 
 impl<'a> NixList<'a> {
     /// TODO: docs.
@@ -313,55 +415,6 @@ impl<V: Values> Value for LiteralList<V> {
     }
 }
 
-impl<L: ValueIterator> Value for ListValue<L> {
-    #[inline]
-    fn kind(&self) -> ValueKind {
-        ValueKind::List
-    }
-
-    #[inline]
-    unsafe fn write(
-        &self,
-        dest: NonNull<sys::Value>,
-        mut namespace: impl Namespace,
-        ctx: &mut Context,
-    ) -> Result<()> {
-        struct WriteValue<N> {
-            dest: NonNull<sys::Value>,
-            namespace: N,
-        }
-
-        impl<N: Namespace> FnOnceValue<Result<()>, &mut Context<'_>> for WriteValue<N> {
-            #[inline]
-            fn call(self, value: impl Value, ctx: &mut Context) -> Result<()> {
-                unsafe { value.write(self.dest, self.namespace, ctx) }
-            }
-        }
-
-        let Self(iter) = self;
-
-        let len = iter.initial_len();
-
-        let mut builder = ctx.make_list_builder(len as usize)?;
-
-        for idx in 0..len {
-            // FIXME: avoid this allocation.
-            let idx_cstr = CString::new(idx.to_string()).expect("no NUL byte");
-            let new_namespace = namespace.push(&idx_cstr);
-            builder.insert(|dest, ctx| {
-                iter.with_next_value(
-                    idx,
-                    WriteValue { dest, namespace: new_namespace },
-                    ctx,
-                )
-            })?;
-            namespace = new_namespace.pop();
-        }
-
-        builder.build(dest)
-    }
-}
-
 impl<T, V> List for T
 where
     T: Deref<Target = [V]>,
@@ -387,86 +440,96 @@ impl<I: IntoIterator<IntoIter: ExactSizeIterator>> IteratorExt for I {
     #[inline]
     fn into_value(self) -> impl Value
     where
-        Self::Item: ToValue,
-        Self::IntoIter: Clone,
+        Self::Item: IntoValue,
     {
-        struct RewindIter<Iter> {
-            current: Cell<Option<Iter>>,
-            orig: Iter,
+        struct Wrapper<Iter> {
+            iter: Cell<Option<Iter>>,
+            value: OnceCell<(NonNull<sys::Value>, Option<Error>)>,
         }
 
-        impl<Iter: Clone> RewindIter<Iter> {
+        impl<Iter: WriteableList> Value for Wrapper<Iter> {
             #[inline]
-            fn with_iter<T>(
-                &self,
-                fun: impl FnOnce(&mut Iter) -> (T, bool),
-            ) -> T {
-                // SAFETY: the inner Cell always contains Some(I).
-                let mut iter =
-                    unsafe { self.current.take().unwrap_unchecked() };
-
-                let (out, should_rewind) = fun(&mut iter);
-
-                let new_iter =
-                    if should_rewind { self.orig.clone() } else { iter };
-
-                self.current.set(Some(new_iter));
-
-                out
-            }
-        }
-
-        impl<I: ExactSizeIterator + Clone> ValueIterator for RewindIter<I>
-        where
-            I::Item: ToValue,
-        {
-            #[inline]
-            fn initial_len(&self) -> c_uint {
-                self.orig.len() as c_uint
+            fn kind(&self) -> ValueKind {
+                ValueKind::List
             }
 
             #[inline]
-            fn with_next_value<'ctx, 'eval, T>(
+            unsafe fn write(
                 &self,
-                _: c_uint,
-                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-                ctx: &'ctx mut Context<'eval>,
-            ) -> T {
-                self.with_iter(|iter| {
-                    let Some(value) = iter.next() else {
-                        panic!(
-                            "ValueIterator::with_next_value() called more \
-                             times than advertised by initial_len()"
-                        );
+                dest: NonNull<nix_bindings_sys::Value>,
+                namespace: impl Namespace,
+                ctx: &mut Context,
+            ) -> Result<()> {
+                let Some(iter) = self.iter.take() else {
+                    let (value_ptr, maybe_err) = self
+                        .value
+                        .get()
+                        .expect(
+                            "if the iterator has been taken it means \
+                             Value::write has already been called, and its \
+                             result must've been saved",
+                        )
+                        .clone();
+
+                    return match maybe_err {
+                        Some(err) => Err(err),
+                        None => unsafe {
+                            NixValue::new(value_ptr).write(dest, namespace, ctx)
+                        },
                     };
-                    (fun.call(value.to_value(ctx), ctx), iter.len() == 0)
-                })
+                };
+
+                let dest = ctx.alloc_value()?;
+                let res = unsafe {
+                    WriteableList::write_once(iter, dest, namespace, ctx)
+                };
+                self.value.set((dest, res.err())).expect("not been set before");
+                Ok(())
             }
         }
 
-        let iter = self.into_iter();
+        impl<Iter> Drop for Wrapper<Iter> {
+            fn drop(&mut self) {
+                if let Some((value_ptr, _)) = self.value.get() {
+                    unsafe {
+                        sys::value_decref(ptr::null_mut(), value_ptr.as_ptr());
+                    }
+                }
+            }
+        }
 
-        ListValue(RewindIter {
-            current: Cell::new(Some(iter.clone())),
-            orig: iter,
-        })
+        Wrapper {
+            iter: Cell::new(Some(self.into_iter())),
+            value: OnceCell::new(),
+        }
     }
 }
 
-impl<L: List> ValueIterator for L {
+impl<I: ExactSizeIterator<Item: IntoValue>> WriteableList for I {
+    #[track_caller]
     #[inline]
     fn initial_len(&self) -> c_uint {
-        L::len(self)
+        match self.len().try_into() {
+            Ok(len) => len,
+            Err(_overflow_err) => {
+                panic!("iterator has too many elements, max is {}", c_uint::MAX)
+            },
+        }
     }
 
     #[inline]
-    fn with_next_value<'ctx, 'eval, T>(
-        &self,
-        idx: c_uint,
+    fn with_next<'ctx, 'eval, T>(
+        &mut self,
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        self.with_value(idx, fun, ctx)
+        let Some(item) = self.next() else {
+            unreachable!(
+                "WriteableList::with_next() has been called more times than \
+                 advertised by initial_len"
+            );
+        };
+        fun.call(item.into_value(ctx), ctx)
     }
 }
 

@@ -15,7 +15,7 @@ use crate::value::ValueKind;
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// TODO: docs.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Error {
     kind: ErrorKind,
     message: Cow<'static, CStr>,
