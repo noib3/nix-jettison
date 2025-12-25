@@ -10,7 +10,7 @@ use core::ptr::{self, NonNull};
 pub use nix_bindings_macros::list;
 use nix_bindings_sys as sys;
 
-use crate::error::{Error, TypeMismatchError};
+use crate::error::TypeMismatchError;
 use crate::namespace::{Namespace, PoppableNamespace};
 use crate::prelude::{Context, Result, Value, ValueKind};
 use crate::value::{
@@ -181,7 +181,7 @@ pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
 }
 
 /// TODO: docs.
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct NixList<'value> {
     inner: NixValue<'value>,
 }
@@ -250,9 +250,6 @@ trait WriteableList {
         builder.build(dest)
     }
 }
-
-/// A newtype struct that implements [`Value`] for every [`WriteableList`]
-/// (only needed because [`Value`] already has another blanket impl).
 
 impl<'a> NixList<'a> {
     /// TODO: docs.
@@ -444,7 +441,7 @@ impl<I: IntoIterator<IntoIter: ExactSizeIterator>> IteratorExt for I {
     {
         struct Wrapper<Iter> {
             iter: Cell<Option<Iter>>,
-            value: OnceCell<(NonNull<sys::Value>, Option<Error>)>,
+            list_res: OnceCell<Result<NixList<'static>>>,
         }
 
         impl<Iter: WriteableList> Value for Wrapper<Iter> {
@@ -461,46 +458,49 @@ impl<I: IntoIterator<IntoIter: ExactSizeIterator>> IteratorExt for I {
                 ctx: &mut Context,
             ) -> Result<()> {
                 let Some(iter) = self.iter.take() else {
-                    let (value_ptr, maybe_err) = self
-                        .value
+                    let list = self
+                        .list_res
                         .get()
                         .expect(
                             "if the iterator has been taken it means \
                              Value::write has already been called, and its \
                              result must've been saved",
                         )
-                        .clone();
-
-                    return match maybe_err {
-                        Some(err) => Err(err),
-                        None => unsafe {
-                            NixValue::new(value_ptr).write(dest, namespace, ctx)
-                        },
-                    };
+                        .clone()?;
+                    return unsafe { list.write(dest, namespace, ctx) };
                 };
 
-                let dest = ctx.alloc_value()?;
-                let res = unsafe {
+                let dest = match ctx.alloc_value() {
+                    Ok(uninit_value) => uninit_value,
+                    Err(err) => {
+                        self.iter.set(Some(iter));
+                        return Err(err);
+                    },
+                };
+
+                let list_res = match unsafe {
                     WriteableList::write_once(iter, dest, namespace, ctx)
+                } {
+                    Ok(()) => {
+                        Ok(NixList { inner: unsafe { NixValue::new(dest) } })
+                    },
+                    Err(err) => {
+                        unsafe {
+                            sys::value_decref(ptr::null_mut(), dest.as_ptr());
+                        }
+                        Err(err)
+                    },
                 };
-                self.value.set((dest, res.err())).expect("not been set before");
-                Ok(())
-            }
-        }
 
-        impl<Iter> Drop for Wrapper<Iter> {
-            fn drop(&mut self) {
-                if let Some((value_ptr, _)) = self.value.get() {
-                    unsafe {
-                        sys::value_decref(ptr::null_mut(), value_ptr.as_ptr());
-                    }
-                }
+                self.list_res.set(list_res).expect("not been set before");
+
+                Ok(())
             }
         }
 
         Wrapper {
             iter: Cell::new(Some(self.into_iter())),
-            value: OnceCell::new(),
+            list_res: OnceCell::new(),
         }
     }
 }
