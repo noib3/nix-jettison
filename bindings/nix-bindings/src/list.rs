@@ -68,6 +68,28 @@ pub trait List {
     }
 
     /// TODO: docs.
+    #[inline]
+    fn concat<T: List>(self, other: T) -> Concat<Self, T>
+    where
+        Self: Sized,
+    {
+        Concat { left: self, right: other }
+    }
+
+    /// TODO: docs.
+    #[inline(always)]
+    fn for_each<'eval>(
+        &self,
+        fun: impl for<'a> FnOnceValue<Result<()>, &'a mut Context<'eval>> + Clone,
+        ctx: &mut Context<'eval>,
+    ) -> Result<()> {
+        for idx in 0..self.len() {
+            self.with_value(idx, fun.clone(), ctx)?;
+        }
+        Ok(())
+    }
+
+    /// TODO: docs.
     #[inline(always)]
     fn into_list(self) -> impl List
     where
@@ -189,6 +211,13 @@ pub struct NixList<'value> {
 /// The list type produced by the [`list!`] macro.
 pub struct LiteralList<Values> {
     values: Values,
+}
+
+/// TODO: docs.
+#[derive(Copy, Clone)]
+pub struct Concat<L, R> {
+    left: L,
+    right: R,
 }
 
 /// The iterator type returned by calling [`IteratorExt::chain_exact`].
@@ -396,6 +425,52 @@ impl<V: Values> List for LiteralList<V> {
 }
 
 impl<V: Values> Value for LiteralList<V> {
+    #[inline]
+    fn kind(&self) -> ValueKind {
+        ValueKind::List
+    }
+
+    #[inline]
+    unsafe fn write(
+        &self,
+        dest: NonNull<sys::Value>,
+        namespace: impl Namespace,
+        ctx: &mut Context,
+    ) -> Result<()> {
+        unsafe { List::borrow(self).into_value().write(dest, namespace, ctx) }
+    }
+}
+
+impl<L, R> List for Concat<L, R>
+where
+    L: List,
+    R: List,
+{
+    #[inline]
+    fn len(&self) -> c_uint {
+        self.left.len() + self.right.len()
+    }
+
+    #[inline]
+    fn with_value<'ctx, 'eval, T>(
+        &self,
+        idx: c_uint,
+        fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+        ctx: &'ctx mut Context<'eval>,
+    ) -> T {
+        let left_len = self.left.len();
+        if idx < left_len {
+            self.left.with_value(idx, fun, ctx)
+        } else {
+            self.right.with_value(idx - left_len, fun, ctx)
+        }
+    }
+}
+
+impl<L, R> Value for Concat<L, R>
+where
+    Self: List,
+{
     #[inline]
     fn kind(&self) -> ValueKind {
         ValueKind::List
