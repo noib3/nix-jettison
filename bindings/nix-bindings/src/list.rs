@@ -657,3 +657,76 @@ where
             + self.right.as_ref().map_or(0, |iter| iter.len())
     }
 }
+
+/// TODO: docs.
+///
+/// Needed because we can't implement `List` directly on `Either` because
+/// `List` already has a blanket implementation for types that deref to `&[T]`,
+/// (where `T` is `ToValue`).
+#[cfg(feature = "either")]
+pub trait EitherExt {
+    /// TODO: docs.
+    fn as_list(&self) -> impl List;
+
+    /// TODO: docs.
+    fn into_list(self) -> impl List
+    where
+        Self: Sized;
+}
+
+#[cfg(feature = "either")]
+impl<L, R> EitherExt for either::Either<L, R>
+where
+    L: List,
+    R: List,
+{
+    #[inline]
+    fn as_list(&self) -> impl List {
+        match self {
+            Self::Left(left) => either::Either::Left(left.borrow()),
+            Self::Right(right) => either::Either::Right(right.borrow()),
+        }
+        .into_list()
+    }
+
+    #[inline]
+    fn into_list(self) -> impl List
+    where
+        Self: Sized,
+    {
+        struct Wrapper<L, R>(either::Either<L, R>);
+
+        impl<L, R> List for Wrapper<L, R>
+        where
+            L: List,
+            R: List,
+        {
+            #[inline]
+            fn len(&self) -> c_uint {
+                match &self.0 {
+                    either::Either::Left(left) => left.len(),
+                    either::Either::Right(right) => right.len(),
+                }
+            }
+
+            #[inline]
+            fn with_value<'ctx, 'eval, T>(
+                &self,
+                idx: c_uint,
+                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
+            ) -> T {
+                match &self.0 {
+                    either::Either::Left(left) => {
+                        left.with_value(idx, fun, ctx)
+                    },
+                    either::Either::Right(right) => {
+                        right.with_value(idx, fun, ctx)
+                    },
+                }
+            }
+        }
+
+        Wrapper(self)
+    }
+}
