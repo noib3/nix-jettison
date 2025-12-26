@@ -9,6 +9,7 @@ use compact_str::{CompactString, ToCompactString, format_compact};
 use either::Either;
 use indoc::{formatdoc, writedoc};
 use nix_bindings::prelude::*;
+use sha2::Digest;
 
 use crate::build_graph::{
     BinaryCrate,
@@ -18,6 +19,7 @@ use crate::build_graph::{
     DependencyRename,
     DependencyRenames,
     LibraryCrate,
+    LibraryFormat,
     PackageAttrs,
     PackageSource,
     RenameWithVersion,
@@ -87,11 +89,15 @@ pub(crate) struct GlobalArgs<'args, 'lock, 'builtins> {
 struct Crate<'a> {
     path: &'a str,
     name: &'a str,
-    types_arg: CompactString,
-    is_proc_macro: bool,
-    is_compiled_for_host: bool,
     deps_renames: &'a DependencyRenames,
     build_opts: &'a BuildOpts,
+    r#type: CrateType<'a>,
+}
+
+enum CrateType<'a> {
+    Binary,
+    BuildScript,
+    Library { formats: &'a [LibraryFormat] },
 }
 
 #[expect(clippy::too_many_lines)]
@@ -111,16 +117,16 @@ pub(crate) fn make_deps<'dep>(
     )
     .to_owned();
 
-    // For every direct dependency, copy all its native dependencies, pure-Rust
-    // dependencies, and its output .rlib/.so/.dylib files (if any).
+    // For every direct dependency, symlink all its native dependencies,
+    // pure-Rust dependencies, and its output .rlib/.so/.dylib files (if any).
     for rust_dep in direct_deps.clone() {
         let out_path = rust_dep.out_path_as_string(ctx)?;
+
         writedoc!(
             &mut install_phase,
             r#"
                 cp -rn {out_path}/deps/native/. $out/native
                 cp -rn {out_path}/deps/. $out
-
                 for dep in {out_path}/lib*.{{rlib,{DLL_EXTENSION}}}; do
                   ln -sf $dep $out
                 done
@@ -220,10 +226,11 @@ where
     Deps: ExactSizeIterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)>
         + Clone,
 {
+    let version = node.package_attrs.version.to_compact_string();
+
     let derivation_name = format_compact!(
-        "{}-{}-{}",
+        "{}-{version}-{}",
         node.package_attrs.name,
-        node.package_attrs.version,
         r#type.derivation_name_suffix(),
     );
 
@@ -242,6 +249,7 @@ where
 
     let configure_phase = configure_phase(
         &node.package_attrs,
+        &version,
         build_script_drv,
         r#type.is_library(),
         args.release,
@@ -253,6 +261,7 @@ where
     let build_phase = build_phase(
         &r#type,
         node,
+        &version,
         direct_deps.clone(),
         args.release,
         args.compile_target.as_ref(),
@@ -260,7 +269,7 @@ where
     )?;
 
     let install_phase =
-        install_phase(&node.package_attrs, r#type.is_build_script());
+        install_phase(&node.package_attrs, &version, r#type.is_build_script());
 
     let overrides = apply_overrides(
         &node.package_attrs,
@@ -288,7 +297,7 @@ where
         dontStrip: true,
         // See https://github.com/NixOS/nixpkgs/issues/218712.
         stripExclude: [ c"*.rlib" ],
-        version: node.package_attrs.version.to_compact_string(),
+        version,
     }
     .merge(overrides)
     .merge(attrset! {
@@ -309,6 +318,7 @@ where
 fn build_phase<'dep, Deps>(
     r#type: &DerivationType,
     node: &BuildGraphNode,
+    version: &str,
     direct_deps: Deps,
     is_release: bool,
     target: Option<&CompileTarget>,
@@ -338,6 +348,7 @@ where
 
         for rustc_arg in build_rustc_args(
             cr8,
+            version,
             direct_deps.clone(),
             &node.package_attrs.features,
             is_release,
@@ -364,6 +375,7 @@ where
 #[expect(clippy::too_many_arguments)]
 fn configure_phase(
     package: &PackageAttrs,
+    package_version: &str,
     build_script: Option<NixDerivation>,
     is_library: bool,
     is_release: bool,
@@ -415,7 +427,7 @@ fn configure_phase(
     let pkg_readme = package.readme.as_deref().unwrap_or("");
     let pkg_repository = package.repository.as_deref().unwrap_or("");
     let pkg_rust_version = package.rust_version.as_deref().unwrap_or("");
-    let pkg_version = &*package.version.to_compact_string();
+    let pkg_version = package_version;
     let pkg_version_major = package.version.major;
     let pkg_version_minor = package.version.minor;
     let pkg_version_patch = package.version.patch;
@@ -500,7 +512,11 @@ fn configure_phase(
     Ok(configure_phase)
 }
 
-fn install_phase(package: &PackageAttrs, is_build_script: bool) -> String {
+fn install_phase(
+    package: &PackageAttrs,
+    package_version: &str,
+    is_build_script: bool,
+) -> String {
     let mut install_phase = "runHook preInstall\n".to_owned();
 
     if is_build_script {
@@ -526,7 +542,6 @@ fn install_phase(package: &PackageAttrs, is_build_script: bool) -> String {
                     {package_version}
             ",
             package_name = package.name,
-            package_version = package.version.to_compact_string(),
         ));
     }
 
@@ -561,6 +576,7 @@ fn apply_overrides<'a>(
 #[expect(clippy::too_many_arguments)]
 fn build_rustc_args<'dep, Deps>(
     cr8: Crate,
+    version: &str,
     direct_deps: Deps,
     features: &[CompactString],
     is_release: bool,
@@ -582,28 +598,42 @@ where
         "--cap-lints allow", // Suppress all lints from dependencies.
         "--remap-path-prefix $NIX_BUILD_TOP=/",
         "--color always",
-        "--codegen",
+        "-C",
         if is_release { "opt-level=3" } else { "debuginfo=2" },
-        "--codegen",
     ]
     .into_iter()
     .map(Into::into)
+    .chain(
+        cr8.metadata(version, features)
+            .map(|metadata| {
+                [
+                    CompactString::const_new("-C"),
+                    format_compact!("metadata={metadata}"),
+                    CompactString::const_new("-C"),
+                    format_compact!("extra-filename=-{metadata}"),
+                ]
+            })
+            .into_iter()
+            .flatten(),
+    )
     .chain([
+        CompactString::const_new("-C"),
         format_compact!(
             "codegen-units={}",
             cr8.build_opts.codegen_units.unwrap_or(1)
         ),
         CompactString::const_new("--crate-type"),
-        cr8.types_arg,
+        cr8.r#type.types_arg(),
     ])
     .chain(
-        cr8.is_proc_macro
+        cr8.r#type
+            .is_proc_macro()
             .then(|| CompactString::const_new("--extern proc_macro")),
     )
     .chain(dependencies_rustc_args(direct_deps, cr8.deps_renames, ctx))
     .chain(
         (match target {
-            Some(target) if cr8.is_compiled_for_host => Some([
+            Some(target) if cr8.r#type.is_compiled_for_host() => Some([
                 CompactString::const_new("--target"),
                 target.rustc_target().as_str().into(),
             ]),
@@ -620,6 +650,30 @@ where
     }))
     // TODO: set linker.
     .chain(cr8.build_opts.extra_rustc_args.iter().cloned())
+}
+
+fn crate_metadata(
+    crate_name: &str,
+    crate_version: &str,
+    crate_features: impl Iterator<Item = impl AsRef<str>>,
+    build_opts: &BuildOpts,
+) -> CompactString {
+    let mut hasher = sha2::Sha256::new();
+
+    hasher.update(crate_name.as_bytes());
+    hasher.update(crate_version.as_bytes());
+    for feature in crate_features {
+        hasher.update(feature.as_ref().as_bytes());
+    }
+    for arg in &build_opts.extra_rustc_args {
+        hasher.update(arg.as_bytes());
+    }
+
+    let hash = hasher.finalize();
+    let short_hash = u64::from_le_bytes(
+        hash[..8].try_into().expect("slice is 8 bytes long"),
+    );
+    format_compact!("{short_hash:x}")
 }
 
 fn dependencies_rustc_args<'dep, Deps>(
@@ -652,12 +706,18 @@ where
             .clone();
 
             let out_path = dep_drv
-                .out_path(ctx)
+                .out_path_as_string(ctx)
                 .expect("dependency derivation must have an output path");
 
+            let dep_metadata = crate_metadata(
+                &dep_lib.name,
+                &dep_node.package_attrs.version.to_compact_string(),
+                dep_node.package_attrs.features.iter(),
+                &dep_lib.build_opts,
+            );
+
             let lib_path = format!(
-                "{}/lib{}.{}",
-                out_path.display(),
+                "{out_path}/lib{}-{dep_metadata}.{}",
                 dep_lib.name,
                 if dep_lib.is_proc_macro() { DLL_EXTENSION } else { "rlib" }
             );
@@ -779,9 +839,7 @@ impl<'a> Crate<'a> {
         Self {
             path: &binary.path,
             name: &binary.name,
-            types_arg: CompactString::const_new("bin"),
-            is_proc_macro: false,
-            is_compiled_for_host: true,
+            r#type: CrateType::Binary,
             deps_renames,
             build_opts: &binary.build_opts,
         }
@@ -791,9 +849,7 @@ impl<'a> Crate<'a> {
         Self {
             path: &build_script.path,
             name: "build_script_build",
-            types_arg: CompactString::const_new("bin"),
-            is_proc_macro: false,
-            is_compiled_for_host: false,
+            r#type: CrateType::BuildScript,
             deps_renames: &build_script.dependency_renames,
             build_opts: &build_script.build_opts,
         }
@@ -803,27 +859,60 @@ impl<'a> Crate<'a> {
         library: &'a LibraryCrate,
         deps_renames: &'a DependencyRenames,
     ) -> Self {
-        let types_arg = library.formats.iter().fold(
-            CompactString::default(),
-            |mut acc, format| {
-                if !acc.is_empty() {
-                    acc.push(',');
-                }
-                acc.push_str(format.as_str());
-                acc
-            },
-        );
-
-        let is_proc_macro = library.is_proc_macro();
-
         Self {
             path: &library.path,
             name: &library.name,
-            types_arg,
-            is_proc_macro,
-            is_compiled_for_host: !is_proc_macro,
+            r#type: CrateType::Library { formats: &library.formats },
             deps_renames,
             build_opts: &library.build_opts,
+        }
+    }
+
+    fn metadata(
+        &self,
+        version: &str,
+        features: &[CompactString],
+    ) -> Option<CompactString> {
+        self.r#type.is_library().then(|| {
+            crate_metadata(self.name, version, features.iter(), self.build_opts)
+        })
+    }
+}
+
+impl CrateType<'_> {
+    fn is_compiled_for_host(&self) -> bool {
+        match self {
+            Self::Binary => true,
+            Self::BuildScript => false,
+            Self::Library { formats } => !LibraryFormat::is_proc_macro(formats),
+        }
+    }
+
+    fn is_library(&self) -> bool {
+        matches!(self, Self::Library { .. })
+    }
+
+    fn is_proc_macro(&self) -> bool {
+        match self {
+            Self::Binary => false,
+            Self::BuildScript => false,
+            Self::Library { formats } => LibraryFormat::is_proc_macro(formats),
+        }
+    }
+
+    fn types_arg(&self) -> CompactString {
+        match self {
+            Self::Binary | Self::BuildScript => CompactString::const_new("bin"),
+            Self::Library { formats } => formats.iter().fold(
+                CompactString::default(),
+                |mut acc, format| {
+                    if !acc.is_empty() {
+                        acc.push(',');
+                    }
+                    acc.push_str(format.as_str());
+                    acc
+                },
+            ),
         }
     }
 }

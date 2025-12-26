@@ -2534,6 +2534,7 @@ dependencies = [
  "nix-bindings",
  "percent-encoding",
  "semver",
+ "sha2",
  "shell-escape",
  "smallvec",
 ]

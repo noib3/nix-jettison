@@ -274,7 +274,7 @@ impl BuildGraph {
 
 impl LibraryCrate {
     pub(crate) fn is_proc_macro(&self) -> bool {
-        &*self.formats == &[LibraryFormat::ProcMacro]
+        LibraryFormat::is_proc_macro(&*self.formats)
     }
 }
 
@@ -288,6 +288,10 @@ impl LibraryFormat {
             LibraryFormat::Rlib => "rlib",
             LibraryFormat::Staticlib => "staticlib",
         }
+    }
+
+    pub(crate) fn is_proc_macro(formats: &[Self]) -> bool {
+        formats == &[Self::ProcMacro]
     }
 }
 
