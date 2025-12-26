@@ -89,24 +89,6 @@ pub trait List {
         Ok(())
     }
 
-    /// Returns a [`WriteableList`] implementation over this list.
-    #[inline(always)]
-    fn into_ext(self) -> impl ListExt
-    where
-        Self: Sized,
-    {
-        struct Wrapper<L>(L);
-
-        impl<L: List> ListExt for Wrapper<L> {
-            #[inline(always)]
-            fn into_writeable(self) -> impl WriteableList {
-                List::into_writeable(self.0)
-            }
-        }
-
-        Wrapper(self)
-    }
-
     /// TODO: docs.
     #[inline(always)]
     fn into_list(self) -> impl List
@@ -156,39 +138,6 @@ pub trait List {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// Returns a [`WriteableList`] implementation over this list.
-    #[inline(always)]
-    #[doc(hidden)]
-    fn into_writeable(self) -> impl WriteableList
-    where
-        Self: Sized,
-    {
-        struct Wrapper<L> {
-            list: L,
-            index: c_uint,
-        }
-
-        impl<L: List> WriteableList for Wrapper<L> {
-            #[inline]
-            fn initial_len(&self) -> c_uint {
-                self.list.len()
-            }
-
-            #[inline]
-            fn with_next<'ctx, 'eval, T>(
-                &mut self,
-                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
-                ctx: &'ctx mut Context<'eval>,
-            ) -> T {
-                let out = self.list.with_value(self.index, fun, ctx);
-                self.index += 1;
-                out
-            }
-        }
-
-        Wrapper { list: self, index: 0 }
-    }
 }
 
 /// An extension trait for iterators of [`IntoValue`]s.
@@ -203,16 +152,7 @@ pub trait ListExt {
     where
         Self: Sized,
     {
-        struct Wrapper<T>(T);
-
-        impl<T: WriteableList> ListExt for Wrapper<T> {
-            #[inline(always)]
-            fn into_writeable(self) -> impl WriteableList {
-                self.0
-            }
-        }
-
-        Wrapper(self.into_writeable().concat(other.into_writeable()))
+        self.into_writeable().concat(other.into_writeable()).into_ext()
     }
 
     /// TODO: docs.
@@ -227,6 +167,17 @@ pub trait ListExt {
 
 /// An extension trait for iterators.
 pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
+    /// TODO: docs.
+    #[inline(always)]
+    fn concat<T: ListExt>(self, other: T) -> impl ListExt
+    where
+        Self: Sized,
+        Self::Item: IntoValue,
+    {
+        WriteableList::concat(self.into_iter(), other.into_writeable())
+            .into_ext()
+    }
+
     /// Chains two [`ExactSizeIterator`]s together, returning a new
     /// [`ExactSizeIterator`] that will iterate over both.
     ///
@@ -248,6 +199,16 @@ pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
             left: Some(self.into_iter()),
             right: Some(other.into_iter()),
         }
+    }
+
+    /// TODO: docs.
+    #[inline(always)]
+    fn into_value(self) -> impl Value
+    where
+        Self: Sized,
+        Self::Item: IntoValue,
+    {
+        WriteableList::into_value(self.into_iter())
     }
 }
 
@@ -325,6 +286,23 @@ trait WriteableList {
             num_called_left: 0,
             right: other,
         }
+    }
+
+    #[inline(always)]
+    fn into_ext(self) -> impl ListExt
+    where
+        Self: Sized,
+    {
+        struct Wrapper<L>(L);
+
+        impl<L: WriteableList> ListExt for Wrapper<L> {
+            #[inline]
+            fn into_writeable(self) -> impl WriteableList {
+                self.0
+            }
+        }
+
+        Wrapper(self)
     }
 
     #[inline]
@@ -594,7 +572,9 @@ impl<V: Values> Value for LiteralList<V> {
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { List::borrow(self).into_value().write(dest, namespace, ctx) }
+        unsafe {
+            List::into_value(List::borrow(self)).write(dest, namespace, ctx)
+        }
     }
 }
 
@@ -640,7 +620,9 @@ where
         namespace: impl Namespace,
         ctx: &mut Context,
     ) -> Result<()> {
-        unsafe { List::borrow(self).into_value().write(dest, namespace, ctx) }
+        unsafe {
+            List::into_value(List::borrow(self)).write(dest, namespace, ctx)
+        }
     }
 }
 
@@ -665,11 +647,34 @@ where
     }
 }
 
-impl<T: ExactSizeIterator<Item: IntoValue>> ListExt for T {
+impl<L: List> ListExt for L {
     #[expect(private_interfaces)]
     #[inline(always)]
     fn into_writeable(self) -> impl WriteableList {
-        self
+        struct Wrapper<L> {
+            list: L,
+            index: c_uint,
+        }
+
+        impl<L: List> WriteableList for Wrapper<L> {
+            #[inline]
+            fn initial_len(&self) -> c_uint {
+                self.list.len()
+            }
+
+            #[inline]
+            fn with_next<'ctx, 'eval, T>(
+                &mut self,
+                fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
+            ) -> T {
+                let out = self.list.with_value(self.index, fun, ctx);
+                self.index += 1;
+                out
+            }
+        }
+
+        Wrapper { list: self, index: 0 }
     }
 }
 
