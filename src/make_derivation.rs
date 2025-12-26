@@ -135,7 +135,9 @@ pub(crate) fn make_deps<'dep>(
         args.crate_overrides,
         ctx,
     )?
-    .get_opt::<NixList>(c"buildInputs", ctx)?;
+    .map(|attrs| attrs.get_opt::<NixList>(c"buildInputs", ctx))
+    .transpose()?
+    .flatten();
 
     // For every library in the buildInputs, symlink any .so/.dylib/.a files in
     // it under `native`.
@@ -267,6 +269,16 @@ where
         ctx,
     )?;
 
+    let extra_native_build_inputs = overrides
+        .map(|attrs| attrs.get_opt::<NixList>(c"nativeBuildInputs", ctx))
+        .transpose()?
+        .flatten();
+
+    let extra_build_inputs = overrides
+        .map(|attrs| attrs.get_opt::<NixList>(c"buildInputs", ctx))
+        .transpose()?
+        .flatten();
+
     Ok(attrset! {
         name: derivation_name,
         src,
@@ -281,22 +293,14 @@ where
     .merge(overrides)
     .merge(attrset! {
         nativeBuildInputs: [args.parse_build_script_output, args.rustc]
-            .concat(
-                overrides
-                    .get_opt::<NixList>(c"nativeBuildInputs", ctx)?
-                    .into_list()
-            )
+            .concat(extra_native_build_inputs.into_list())
             .into_value(),
         buildInputs: build_script_drv
             .into_iter()
             .chain_exact(r#type.library_drv())
             .chain_exact(iter::once(deps.clone()))
             .chain_exact(direct_deps.clone().map(|(_node, drv)| drv))
-            .concat(
-                overrides
-                    .get_opt::<NixList>(c"buildInputs", ctx)?
-                    .into_list()
-            )
+            .concat(extra_build_inputs.into_list())
             .into_value(),
     }))
 }
@@ -532,12 +536,26 @@ fn install_phase(package: &PackageAttrs, is_build_script: bool) -> String {
 }
 
 fn apply_overrides<'a>(
-    _package: &PackageAttrs,
-    _global_overrides: Option<NixAttrset<'a>>,
-    _crate_overrides: Option<NixAttrset<'a>>,
-    _ctx: &mut Context,
-) -> Result<NixAttrset<'a>> {
-    todo!();
+    package: &PackageAttrs,
+    global_overrides: Option<NixAttrset<'a>>,
+    crate_overrides: Option<NixAttrset<'a>>,
+    ctx: &mut Context,
+) -> Result<Option<NixAttrset<'a>>> {
+    let Some(crate_overrides) = crate_overrides else {
+        return Ok(global_overrides);
+    };
+
+    let Some(override_fun) =
+        crate_overrides.get_opt::<NixLambda>(&package.name, ctx)?
+    else {
+        return Ok(global_overrides);
+    };
+
+    let attrs = global_overrides.merge(attrset! {
+        version: package.version.to_compact_string(),
+    });
+
+    override_fun.call(attrs, ctx)?.force_into(ctx).map(Some)
 }
 
 #[expect(clippy::too_many_arguments)]

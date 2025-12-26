@@ -31,6 +31,8 @@
           jettison = self.lib.buildPackage {
             pkgs = targetPkgs;
             src = ../.;
+            inherit release;
+            rustc = rust.mkToolchain targetPkgs;
             crateOverrides = targetPkgs.defaultCrateOverrides // {
               nix-bindings-cpp = attrs: {
                 inherit nativeBuildInputs buildInputs env;
@@ -43,8 +45,6 @@
                 buildInputs = buildInputs ++ [ targetPkgs.curl.dev ];
               };
             };
-            inherit release;
-            rustc = rust.mkToolchain targetPkgs;
           };
         in
         pkgs.runCommand "${packageName}${lib.optionalString (!release) "-dev"}" { } ''
