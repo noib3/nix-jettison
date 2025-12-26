@@ -2,7 +2,6 @@ use core::fmt::Write;
 use core::iter;
 use std::borrow::Cow;
 use std::env::consts::DLL_EXTENSION;
-use std::ffi::CString;
 
 use cargo::core::Edition;
 use cargo::core::compiler::CompileTarget;
@@ -139,7 +138,7 @@ pub(crate) fn make_deps<'dep>(
         .unwrap_or(Either::Right(<&[Null]>::default()));
 
         let crate_override_fun = match args.crate_overrides {
-            Some(attrs) => attrs.get_opt::<NixLambda>(c"package_name", ctx)?,
+            Some(attrs) => attrs.get_opt::<NixLambda>(&package.name, ctx)?,
             None => None,
         };
 
@@ -302,11 +301,8 @@ where
         return Ok(Either::Left(res));
     };
 
-    let package_name_cstr = CString::new(&*node.package_attrs.name)
-        .expect("package name doesn't contain NUL bytes");
-
     let Some(override_fun) =
-        crate_overrides.get_opt::<NixLambda>(&*package_name_cstr, ctx)?
+        crate_overrides.get_opt::<NixLambda>(&node.package_attrs.name, ctx)?
     else {
         return Ok(Either::Left(res));
     };
@@ -396,17 +392,14 @@ fn configure_phase(
     //    `$EXTRA_RUSTC_ARGS` to the `rustc` calls;
     let host_platform = stdenv.get::<NixAttrset>(c"hostPlatform", ctx)?;
 
-    let cpu_platform = host_platform
-        .get::<NixAttrset>(c"parsed", ctx)?
-        .get::<NixAttrset>(c"cpu", ctx)?;
+    let cpu_platform =
+        host_platform.get::<NixAttrset>([c"parsed", c"cpu"], ctx)?;
 
-    let rust_platform = host_platform
-        .get::<NixAttrset>(c"rust", ctx)?
-        .get::<NixAttrset>(c"platform", ctx)?;
+    let rust_platform =
+        host_platform.get::<NixAttrset>([c"rust", c"platform"], ctx)?;
 
     let is_cpu_little_endian = cpu_platform
-        .get::<NixAttrset>(c"significantByte", ctx)?
-        .get::<CompactString>(c"name", ctx)?
+        .get::<CompactString>([c"significantByte", c"name"], ctx)?
         == "littleEndian";
 
     let target_arch = rust_platform.get::<CompactString>(c"arch", ctx)?;
@@ -418,9 +411,7 @@ fn configure_phase(
         cpu_platform.get::<u8>(c"bits", ctx)?
     };
     let target_vendor = host_platform
-        .get::<NixAttrset>(c"parsed", ctx)?
-        .get::<NixAttrset>(c"vendor", ctx)?
-        .get::<CompactString>(c"name", ctx)?;
+        .get::<CompactString>([c"parsed", c"vendor", c"name"], ctx)?;
 
     let manifest_links = package.links.as_deref().unwrap_or("");
 
@@ -450,15 +441,14 @@ fn configure_phase(
     let pkg_version_pre = package.version.pre.as_str();
 
     let debug = if is_release { "1" } else { "" };
-    let host = stdenv
-        .get::<NixAttrset>(c"buildPlatform", ctx)?
-        .get::<NixAttrset>(c"rust", ctx)?
-        .get::<CompactString>(c"rustcTargetSpec", ctx)?;
+    let host = stdenv.get::<CompactString>(
+        [c"buildPlatform", c"rust", c"rustcTargetSpec"],
+        ctx,
+    )?;
     let opt_level = if is_release { 3 } else { 0 };
     let profile = if is_release { "release" } else { "debug" };
     let target = host_platform
-        .get::<NixAttrset>(c"rust", ctx)?
-        .get::<CompactString>(c"rustcTargetSpec", ctx)?;
+        .get::<CompactString>([c"rust", c"rustcTargetSpec"], ctx)?;
 
     let mut configure_phase = formatdoc!(
         r#"
@@ -708,16 +698,14 @@ impl<'args, 'lock, 'builtins> GlobalArgs<'args, 'lock, 'builtins> {
 
         let host_config = host_platform.get::<CompactString>(c"config", ctx)?;
 
-        let build_config = stdenv
-            .get::<NixAttrset>(c"buildPlatform", ctx)?
-            .get::<CompactString>(c"config", ctx)?;
+        let build_config =
+            stdenv.get::<CompactString>([c"buildPlatform", c"config"], ctx)?;
 
         let compile_target = if host_config == build_config {
             None
         } else {
             let target = host_platform
-                .get::<NixAttrset>(c"rust", ctx)?
-                .get::<CompactString>(c"rustcTargetSpec", ctx)?;
+                .get::<CompactString>([c"rust", c"rustcTargetSpec"], ctx)?;
             Some(
                 CompileTarget::new(&target)
                     .expect("rustcTargetSpec is a valid target"),
@@ -727,12 +715,9 @@ impl<'args, 'lock, 'builtins> GlobalArgs<'args, 'lock, 'builtins> {
         Ok(Self {
             compile_target,
             crate_overrides: args.crate_overrides,
-            get_lib: args
-                .pkgs
-                .get::<NixAttrset>(c"lib", ctx)?
-                .get(c"getLib", ctx)?,
+            get_lib: args.pkgs.get([c"lib", c"getLib"], ctx)?,
             global_overrides: args.global_overrides,
-            mk_derivation: stdenv.get::<NixLambda>(c"mkDerivation", ctx)?,
+            mk_derivation: stdenv.get(c"mkDerivation", ctx)?,
             mk_path: ctx.builtins().path(ctx),
             parse_build_script_output,
             release: args.release,

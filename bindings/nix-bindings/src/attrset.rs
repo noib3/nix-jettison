@@ -1288,6 +1288,14 @@ impl<A: Attrset, K: Display> From<MissingAttributeError<A, K>> for Error {
     }
 }
 
+#[cfg(feature = "compact_str")]
+impl Key for compact_str::CompactString {
+    #[inline(always)]
+    fn with_cstr<T>(&self, fun: impl FnOnce(&CStr) -> T) -> T {
+        self.as_str().with_cstr(fun)
+    }
+}
+
 #[cfg(feature = "either")]
 impl<L: Attrset, R: Attrset> Attrset for either::Either<L, R> {
     #[inline]
