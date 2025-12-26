@@ -730,7 +730,7 @@ impl<'args, 'lock, 'builtins> GlobalArgs<'args, 'lock, 'builtins> {
             get_lib: args
                 .pkgs
                 .get::<NixAttrset>(c"lib", ctx)?
-                .get(c"lib", ctx)?,
+                .get(c"getLib", ctx)?,
             global_overrides: args.global_overrides,
             mk_derivation: stdenv.get::<NixLambda>(c"mkDerivation", ctx)?,
             mk_path: ctx.builtins().path(ctx),
