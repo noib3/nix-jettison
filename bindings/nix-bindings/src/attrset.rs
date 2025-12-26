@@ -439,14 +439,14 @@ impl<'a> NixAttrset<'a> {
 
         let keys_len = keys.len();
 
-        let mut idx = 0;
-
         if keys_len == 1 {
-            return with_key(keys, idx, |key| self.get_single(key, ctx));
+            return with_key(keys, 0, |key| self.get_single(key, ctx));
         }
 
         let mut attrs: NixAttrset =
-            with_key(keys, idx, |key| self.get_single(key, ctx))?;
+            with_key(keys, 0, |key| self.get_single(key, ctx))?;
+
+        let mut idx = 1;
 
         while idx + 1 < keys_len {
             attrs = with_key(keys, idx, |key| attrs.get_single(key, ctx))?;
@@ -1136,9 +1136,11 @@ where
             // already been used while iterating over the left attrset.
             loop {
                 self.right_pairs.advance(ctx);
+
                 if self.right_pairs.is_exhausted() {
                     return;
                 }
+
                 let is_conflicting = self
                     .right_pairs
                     .with_key(|key: &CStr| self.merge.is_conflicting(key, ctx));
