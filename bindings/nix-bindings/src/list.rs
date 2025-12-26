@@ -152,6 +152,22 @@ pub trait ListExt {
     }
 }
 
+/// TODO: docs.
+///
+/// Needed because we can't implement `List` directly on `Option` because
+/// `List` already has a blanket implementation for types that deref to `&[T]`,
+/// (where `T` is `ToValue`).
+#[cfg(feature = "either")]
+pub trait OptionExt {
+    /// TODO: docs.
+    fn as_list(&self) -> impl List;
+
+    /// TODO: docs.
+    fn into_list(self) -> impl List
+    where
+        Self: Sized;
+}
+
 /// An extension trait for iterators.
 pub trait IteratorExt: IntoIterator<IntoIter: ExactSizeIterator> {
     /// TODO: docs.
@@ -662,6 +678,45 @@ impl<L: List> ListExt for L {
         }
 
         Wrapper { list: self, index: 0 }
+    }
+}
+
+impl<T: List> OptionExt for Option<T> {
+    #[inline]
+    fn as_list(&self) -> impl List {
+        self.as_ref().map(List::borrow).into_list()
+    }
+
+    #[inline]
+    fn into_list(self) -> impl List
+    where
+        Self: Sized,
+    {
+        struct Wrapper<T>(Option<T>);
+
+        impl<T: List> List for Wrapper<T> {
+            #[inline]
+            fn len(&self) -> c_uint {
+                self.0.as_ref().map_or(0, List::len)
+            }
+
+            #[inline]
+            fn with_value<'ctx, 'eval, Out>(
+                &self,
+                idx: c_uint,
+                fun: impl FnOnceValue<Out, &'ctx mut Context<'eval>>,
+                ctx: &'ctx mut Context<'eval>,
+            ) -> Out {
+                match &self.0 {
+                    Some(list) => list.with_value(idx, fun, ctx),
+                    None => panic!(
+                        "List::with_value() called with out-of-bounds index"
+                    ),
+                }
+            }
+        }
+
+        Wrapper(self)
     }
 }
 

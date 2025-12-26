@@ -380,16 +380,6 @@ fn configure_phase(
     stdenv: NixAttrset,
     ctx: &mut Context,
 ) -> Result<String> {
-    // ## Native libraries
-    // 1: get the list of native libraries from somewhere (I'm assuming the
-    //    native_build_inputs?);
-    // 2: for every native library, add a `-C
-    //    link-arg={full_path_to_{*.so|*.dylib|*.a}}` argument to the flags
-    //    given to `rustc`
-    // 3: there may be other linker flags coming from build scripts, but
-    //    those should be taken care of by the program that parses its
-    //    output, so that the only thing we might have to do is pass
-    //    `$EXTRA_RUSTC_ARGS` to the `rustc` calls;
     let host_platform = stdenv.get::<NixAttrset>(c"hostPlatform", ctx)?;
 
     let cpu_platform =
@@ -405,7 +395,7 @@ fn configure_phase(
     let target_arch = rust_platform.get::<CompactString>(c"arch", ctx)?;
     let target_endian = if is_cpu_little_endian { "little" } else { "big" };
     let target_os = rust_platform.get::<CompactString>(c"os", ctx)?;
-    let target_pointer_width = if host_platform.get::<bool>(c"isILP32", ctx)? {
+    let target_pointer_width = if host_platform.get(c"isILP32", ctx)? {
         32
     } else {
         cpu_platform.get::<u8>(c"bits", ctx)?
