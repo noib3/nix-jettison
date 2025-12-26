@@ -129,33 +129,17 @@ pub(crate) fn make_deps<'dep>(
         .expect("writing to string can't fail");
     }
 
-    let build_inputs = {
-        let global_inputs = match args.global_overrides {
-            Some(attrs) => attrs.get_opt::<NixList>(c"buildInputs", ctx)?,
-            None => None,
-        }
-        .map(Either::Left)
-        .unwrap_or(Either::Right(<&[Null]>::default()));
-
-        let crate_override_fun = match args.crate_overrides {
-            Some(attrs) => attrs.get_opt::<NixLambda>(&package.name, ctx)?,
-            None => None,
-        };
-
-        if let Some(fun) = crate_override_fun {
-            fun.call(attrset! { buildInputs: global_inputs.borrow() }, ctx)?
-                .force_into::<NixAttrset>(ctx)?
-                .get_opt::<NixList>(c"buildInputs", ctx)?
-                .map(Either::Left)
-                .unwrap_or(global_inputs)
-        } else {
-            global_inputs
-        }
-    };
+    let build_inputs = apply_overrides(
+        package,
+        args.global_overrides,
+        args.crate_overrides,
+        ctx,
+    )?
+    .get_opt::<NixList>(c"buildInputs", ctx)?;
 
     // For every library in the buildInputs, symlink any .so/.dylib/.a files in
     // it under `native`.
-    if let Either::Left(list) = &build_inputs {
+    if let Some(list) = &build_inputs {
         for idx in 0..list.len() {
             let build_input = list.get::<NixDerivation>(idx, ctx)?;
 
@@ -210,7 +194,8 @@ pub(crate) fn make_derivation<'a, Deps>(
     ctx: &mut Context,
 ) -> Result<NixDerivation<'static>>
 where
-    Deps: Iterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)> + Clone,
+    Deps: ExactSizeIterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)>
+        + Clone,
 {
     args.mk_derivation
         .call(
@@ -230,17 +215,9 @@ fn make_derivation_args<'a, Deps>(
     ctx: &mut Context,
 ) -> Result<impl Attrset + Value + use<'a, Deps>>
 where
-    Deps: Iterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)> + Clone,
+    Deps: ExactSizeIterator<Item = (&'a BuildGraphNode, NixDerivation<'a>)>
+        + Clone,
 {
-    let build_script_drv = r#type.build_script_drv();
-
-    let build_inputs = build_script_drv
-        .into_iter()
-        .chain(r#type.library_drv())
-        .chain(iter::once(deps.clone()))
-        .chain(direct_deps.clone().map(|(_node, drv)| drv))
-        .collect::<Vec<_>>();
-
     let derivation_name = format_compact!(
         "{}-{}-{}",
         node.package_attrs.name,
@@ -259,6 +236,8 @@ where
         },
     };
 
+    let build_script_drv = r#type.build_script_drv();
+
     let configure_phase = configure_phase(
         &node.package_attrs,
         build_script_drv,
@@ -272,7 +251,7 @@ where
     let build_phase = build_phase(
         &r#type,
         node,
-        direct_deps,
+        direct_deps.clone(),
         args.release,
         args.compile_target.as_ref(),
         ctx,
@@ -281,11 +260,16 @@ where
     let install_phase =
         install_phase(&node.package_attrs, r#type.is_build_script());
 
-    let base_args = attrset! {
+    let overrides = apply_overrides(
+        &node.package_attrs,
+        args.global_overrides,
+        args.crate_overrides,
+        ctx,
+    )?;
+
+    Ok(attrset! {
         name: derivation_name,
         src,
-        buildInputs: build_inputs,
-        nativeBuildInputs: [args.parse_build_script_output, args.rustc],
         configurePhase: configure_phase,
         buildPhase: build_phase,
         installPhase: install_phase,
@@ -293,25 +277,28 @@ where
         // See https://github.com/NixOS/nixpkgs/issues/218712.
         stripExclude: [ c"*.rlib" ],
         version: node.package_attrs.version.to_compact_string(),
-    };
-
-    let res = base_args.merge(args.global_overrides);
-
-    let Some(crate_overrides) = args.crate_overrides else {
-        return Ok(Either::Left(res));
-    };
-
-    let Some(override_fun) =
-        crate_overrides.get_opt::<NixLambda>(&node.package_attrs.name, ctx)?
-    else {
-        return Ok(Either::Left(res));
-    };
-
-    let overrides = override_fun
-        .call(Value::borrow(&res), ctx)?
-        .force_into::<NixAttrset>(ctx)?;
-
-    Ok(Either::Right(res.merge(overrides)))
+    }
+    .merge(overrides)
+    .merge(attrset! {
+        nativeBuildInputs: [args.parse_build_script_output, args.rustc]
+            .concat(
+                overrides
+                    .get_opt::<NixList>(c"nativeBuildInputs", ctx)?
+                    .into_list()
+            )
+            .into_value(),
+        buildInputs: build_script_drv
+            .into_iter()
+            .chain_exact(r#type.library_drv())
+            .chain_exact(iter::once(deps.clone()))
+            .chain_exact(direct_deps.clone().map(|(_node, drv)| drv))
+            .concat(
+                overrides
+                    .get_opt::<NixList>(c"buildInputs", ctx)?
+                    .into_list()
+            )
+            .into_value(),
+    }))
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -542,6 +529,15 @@ fn install_phase(package: &PackageAttrs, is_build_script: bool) -> String {
     install_phase.push_str("runHook postInstall");
 
     install_phase
+}
+
+fn apply_overrides<'a>(
+    _package: &PackageAttrs,
+    _global_overrides: Option<NixAttrset<'a>>,
+    _crate_overrides: Option<NixAttrset<'a>>,
+    _ctx: &mut Context,
+) -> Result<NixAttrset<'a>> {
+    todo!();
 }
 
 #[expect(clippy::too_many_arguments)]
