@@ -10,7 +10,7 @@ CRATE_VERSION="${7:-}"
 
 # Extract shared rustc arguments.
 RUSTC_FLAGS=$(sed -n "s/^cargo::\{0,1\}rustc-flags=\(.*\)/\1/p" "$BUILD_OUTPUT_FILE" | tr '\n' ' ')
-RUSTC_CFG=$(sed -n "s/^cargo::\{0,1\}rustc-cfg=\(.*\)/--cfg \1/p" "$BUILD_OUTPUT_FILE" | tr '\n' ' ')
+RUSTC_CFG=$(sed -n "s/^cargo::\{0,1\}rustc-cfg=\(.*\)/--cfg \1/p" "$BUILD_OUTPUT_FILE" | sed 's/"/\\"/g' | tr '\n' ' ')
 RUSTC_LINK_ARG=$(sed -n "s/^cargo::\{0,1\}rustc-link-arg=\(.*\)/-C link-arg=\1/p" "$BUILD_OUTPUT_FILE" | tr '\n' ' ')
 RUSTC_LINK_LIB=$(sed -n "s/^cargo::\{0,1\}rustc-link-lib=\(.*\)/-l \1/p" "$BUILD_OUTPUT_FILE" | tr '\n' ' ')
 RUSTC_LINK_SEARCH=$(sed -n "s/^cargo::\{0,1\}rustc-link-search=\(.*\)/-L \1/p" "$BUILD_OUTPUT_FILE" | tr '\n' ' ' | sort -u)
