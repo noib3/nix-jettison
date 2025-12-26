@@ -1131,28 +1131,33 @@ where
 {
     #[inline]
     fn advance(&mut self, ctx: &mut Context) {
+        let advance_right_until_we_get_to_non_conflicting_key =
+            |this: &mut Self, ctx: &mut Context| {
+                while !this.right_pairs.is_exhausted() {
+                    let is_conflicting =
+                        this.right_pairs.with_key(|key: &CStr| {
+                            this.merge.is_conflicting(key, ctx)
+                        });
+
+                    if !is_conflicting {
+                        break;
+                    }
+
+                    this.right_pairs.advance(ctx);
+                }
+            };
+
         if self.left_pairs.is_exhausted() {
-            // Skip all the conflicting keys in the right attrset since they've
-            // already been used while iterating over the left attrset.
-            loop {
-                self.right_pairs.advance(ctx);
-
-                if self.right_pairs.is_exhausted() {
-                    return;
-                }
-
-                let is_conflicting = self
-                    .right_pairs
-                    .with_key(|key: &CStr| self.merge.is_conflicting(key, ctx));
-                if !is_conflicting {
-                    return;
-                }
-            }
+            self.right_pairs.advance(ctx);
+            advance_right_until_we_get_to_non_conflicting_key(self, ctx);
+            return;
         }
 
         self.left_pairs.advance(ctx);
 
         if self.left_pairs.is_exhausted() {
+            advance_right_until_we_get_to_non_conflicting_key(self, ctx);
+            self.is_current_key_conflicting = false;
             return;
         }
 
