@@ -904,6 +904,30 @@ impl Key for str {
     }
 }
 
+impl<K: Key> Keys for K {
+    const LEN: c_uint = 1;
+
+    #[inline]
+    fn with_key<T>(&self, key_idx: c_uint, fun: impl FnOnceKey<T>) -> T {
+        debug_assert!(key_idx == 0);
+        fun.call(self)
+    }
+}
+
+impl<const N: usize, K: Key> Keys for [K; N] {
+    const LEN: c_uint = {
+        if N > c_uint::MAX as usize {
+            panic!("array too long")
+        }
+        N as c_uint
+    };
+
+    #[inline]
+    fn with_key<T>(&self, key_idx: c_uint, fun: impl FnOnceKey<T>) -> T {
+        fun.call(&self[key_idx as usize])
+    }
+}
+
 impl Pairs for NixAttrsetPairs<'_, '_> {
     #[inline]
     fn advance(&mut self, _: &mut Context) {
@@ -1322,21 +1346,8 @@ where
 }
 
 #[rustfmt::skip]
-mod keys_impls {
+mod keys_tuple_impls {
     use super::*;
-
-    impl<K: Key> Keys for K {
-        const LEN: c_uint = 1;
-
-        #[track_caller]
-        #[inline]
-        fn with_key<T>(&self, key_idx: c_uint, fun: impl FnOnceKey<T>) -> T {
-            match key_idx {
-                0 => fun.call(self),
-                other => panic_tuple_index_oob(other, <Self as Keys>::LEN),
-            }
-        }
-    }
 
     macro_rules! count {
         () => { 0 };
