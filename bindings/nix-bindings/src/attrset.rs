@@ -98,11 +98,11 @@ pub trait Attrset {
     /// The caller must ensure that there are no overlapping keys between
     /// `self` and `other`.
     #[inline(always)]
-    unsafe fn concat<T: Attrset>(self, other: T) -> Concat<Self, T>
+    unsafe fn concat<T: Attrset>(self, other: T) -> ConcatAttrset<Self, T>
     where
         Self: Sized,
     {
-        Concat { left: self, right: other }
+        ConcatAttrset { left: self, right: other }
     }
 
     /// TODO: docs.
@@ -217,7 +217,7 @@ pub struct NixDerivation<'attr> {
 
 /// The attribute set type created by [`concat`](Attrset::concat)enating two
 /// attribute sets.
-pub struct Concat<Left, Right> {
+pub struct ConcatAttrset<Left, Right> {
     left: Left,
     right: Right,
 }
@@ -601,7 +601,7 @@ impl<K: Keys, V: Values> Value for LiteralAttrset<K, V> {
     }
 }
 
-impl<L: Attrset, R: Attrset> Attrset for Concat<L, R> {
+impl<L: Attrset, R: Attrset> Attrset for ConcatAttrset<L, R> {
     #[inline]
     fn len(&self, ctx: &mut Context) -> c_uint {
         self.left.len(ctx) + self.right.len(ctx)
@@ -633,7 +633,7 @@ impl<L: Attrset, R: Attrset> Attrset for Concat<L, R> {
     }
 }
 
-impl<L, R> Value for Concat<L, R>
+impl<L, R> Value for ConcatAttrset<L, R>
 where
     Self: Attrset,
 {

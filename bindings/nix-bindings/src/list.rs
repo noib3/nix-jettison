@@ -69,24 +69,11 @@ pub trait List {
 
     /// TODO: docs.
     #[inline]
-    fn concat<T: List>(self, other: T) -> Concat<Self, T>
+    fn concat<T: List>(self, other: T) -> ConcatList<Self, T>
     where
         Self: Sized,
     {
-        Concat { left: self, right: other }
-    }
-
-    /// TODO: docs.
-    #[inline(always)]
-    fn for_each<'eval>(
-        &self,
-        fun: impl for<'a> FnOnceValue<Result<()>, &'a mut Context<'eval>> + Clone,
-        ctx: &mut Context<'eval>,
-    ) -> Result<()> {
-        for idx in 0..self.len() {
-            self.with_value(idx, fun.clone(), ctx)?;
-        }
-        Ok(())
+        ConcatList { left: self, right: other }
     }
 
     /// TODO: docs.
@@ -225,7 +212,7 @@ pub struct LiteralList<Values> {
 
 /// TODO: docs.
 #[derive(Copy, Clone)]
-pub struct Concat<L, R> {
+pub struct ConcatList<L, R> {
     left: L,
     right: R,
 }
@@ -578,7 +565,7 @@ impl<V: Values> Value for LiteralList<V> {
     }
 }
 
-impl<L, R> List for Concat<L, R>
+impl<L, R> List for ConcatList<L, R>
 where
     L: List,
     R: List,
@@ -604,7 +591,7 @@ where
     }
 }
 
-impl<L, R> Value for Concat<L, R>
+impl<L, R> Value for ConcatList<L, R>
 where
     Self: List,
 {
