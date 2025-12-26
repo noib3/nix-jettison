@@ -3,13 +3,15 @@
 use alloc::borrow::ToOwned;
 use alloc::ffi::CString;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::{OnceCell, RefCell};
 use core::ffi::{CStr, c_uint};
+use core::fmt::{Display, Write};
 use core::marker::PhantomData;
-use core::ops::Deref;
+use core::ops::{Bound, Deref, Range, RangeBounds};
 use core::ptr::NonNull;
+use core::result::Result as CoreResult;
 use core::{fmt, ptr};
 
 pub use nix_bindings_macros::attrset;
@@ -162,6 +164,73 @@ pub trait Keys {
 
     /// TODO: docs.
     fn with_key<T>(&self, key_idx: c_uint, fun: impl FnOnceKey<T>) -> T;
+
+    /// TODO: docs.
+    #[track_caller]
+    fn borrow(&self) -> impl Keys {
+        struct Wrapper<'a, K: ?Sized> {
+            inner: &'a K,
+        }
+
+        impl<K: Keys + ?Sized> Keys for Wrapper<'_, K> {
+            const LEN: c_uint = K::LEN;
+
+            #[inline(always)]
+            fn with_key<T>(
+                &self,
+                key_idx: c_uint,
+                fun: impl FnOnceKey<T>,
+            ) -> T {
+                self.inner.with_key(key_idx, fun)
+            }
+        }
+
+        Wrapper { inner: self }
+    }
+
+    /// TODO: docs.
+    #[track_caller]
+    fn len(&self) -> c_uint {
+        Self::LEN
+    }
+
+    /// TODO: docs.
+    #[track_caller]
+    fn slice(&self, range: impl RangeBounds<c_uint>) -> impl Display {
+        struct Wrapper<K> {
+            keys: K,
+            idx_range: Range<c_uint>,
+        }
+
+        impl<K: Keys> fmt::Display for Wrapper<K> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for key_idx in self.idx_range.clone() {
+                    self.keys.with_key(key_idx, |key: &CStr| {
+                        f.write_str(&*key.to_string_lossy())
+                    })?;
+                    let is_last = key_idx + 1 == self.idx_range.end;
+                    if !is_last {
+                        f.write_char('.')?;
+                    }
+                }
+                Ok(())
+            }
+        }
+
+        let start_idx = match range.start_bound() {
+            Bound::Included(idx) => *idx,
+            Bound::Excluded(idx) => *idx + 1,
+            Bound::Unbounded => 0,
+        };
+
+        let end_idx = match range.end_bound() {
+            Bound::Included(idx) => *idx + 1,
+            Bound::Excluded(idx) => *idx,
+            Bound::Unbounded => Self::LEN,
+        };
+
+        Wrapper { keys: self.borrow(), idx_range: start_idx..end_idx }
+    }
 }
 
 /// TODO: docs.
@@ -247,12 +316,12 @@ pub struct Merge<Left, Right> {
 /// The type of error returned when an expected attribute is missing from
 /// an [`Attrset`].
 #[derive(Debug)]
-pub struct MissingAttributeError<'a, Attrset> {
+pub struct MissingAttributeError<Attrset, Key> {
     /// The attribute set from which the attribute was expected.
     pub attrset: Attrset,
 
     /// The name of the missing attribute.
-    pub key: &'a CStr,
+    pub key: Key,
 }
 
 /// A newtype wrapper that implements [`Value`] for every [`Attrset`].
@@ -298,50 +367,97 @@ impl<'a> NixAttrset<'a> {
     #[inline]
     pub fn get<T: TryFromValue<NixValue<'a>>>(
         self,
-        key: &CStr,
+        key: impl Keys,
         ctx: &mut Context,
     ) -> Result<T> {
-        self.get_opt(key, ctx)?
-            .ok_or_else(|| MissingAttributeError { attrset: self, key }.into())
+        match self.get_nested(&key, ctx) {
+            Ok(value) => Ok(value),
+            Err(Ok(idx_of_missing_key)) => Err(MissingAttributeError {
+                attrset: self,
+                key: key.slice(0..=idx_of_missing_key),
+            }
+            .into()),
+            Err(Err(try_from_value_err)) => Err(try_from_value_err),
+        }
     }
 
     /// TODO: docs.
     #[inline]
     pub fn get_opt<T: TryFromValue<NixValue<'a>>>(
         self,
+        key: impl Keys,
+        ctx: &mut Context,
+    ) -> Result<Option<T>> {
+        match self.get_nested(&key, ctx) {
+            Ok(value) => Ok(Some(value)),
+            Err(Ok(_idx_of_missing_key)) => Ok(None),
+            Err(Err(try_from_value_err)) => Err(try_from_value_err),
+        }
+    }
+
+    /// TODO: docs.
+    #[inline]
+    pub fn get_single<T: TryFromValue<NixValue<'a>>>(
+        self,
         key: &CStr,
         ctx: &mut Context,
     ) -> Result<Option<T>> {
-        self.with_value_inner(
-            key,
-            |value, ctx| {
-                T::try_from_value(value, ctx).map_err(|err| {
-                    err.map_message(|msg| {
-                        let mut orig_msg =
-                            msg.into_owned().into_bytes_with_nul();
-                        let mut new_msg =
-                            format!("error getting attribute {key:?}: ")
-                                .into_bytes();
-                        new_msg.append(&mut orig_msg);
-                        // SAFETY: the new message does contain a NUL byte and
-                        // we've preserved the trailing NUL byte from the
-                        // original message.
-                        unsafe { CString::from_vec_with_nul_unchecked(new_msg) }
-                    })
-                })
-            },
-            ctx,
-        )
-        .transpose()
+        let Some(value) = self.get_value(key, ctx) else { return Ok(None) };
+
+        T::try_from_value(value, ctx).map(Some).map_err(|err| {
+            err.map_message(|msg| {
+                let mut orig_msg = msg.into_owned().into_bytes_with_nul();
+                let mut new_msg =
+                    format!("error getting attribute {key:?}: ").into_bytes();
+                new_msg.append(&mut orig_msg);
+                // SAFETY: the new message does contain a NUL byte and
+                // we've preserved the trailing NUL byte from the
+                // original message.
+                unsafe { CString::from_vec_with_nul_unchecked(new_msg) }
+            })
+        })
     }
 
     #[inline]
-    fn with_value_inner<'ctx, 'eval, T>(
+    fn get_nested<T: TryFromValue<NixValue<'a>>>(
         self,
-        key: &CStr,
-        fun: impl FnOnce(NixValue<'a>, &'ctx mut Context<'eval>) -> T,
-        ctx: &'ctx mut Context<'eval>,
-    ) -> Option<T> {
+        keys: &impl Keys,
+        ctx: &mut Context,
+    ) -> CoreResult<T, CoreResult<c_uint, Error>> {
+        #[inline(always)]
+        fn with_key<T>(
+            keys: &impl Keys,
+            idx: c_uint,
+            fun: impl FnOnce(&CStr) -> Result<Option<T>>,
+        ) -> CoreResult<T, CoreResult<c_uint, Error>> {
+            match keys.with_key(idx, fun) {
+                Ok(Some(value)) => Ok(value),
+                Ok(None) => Err(Ok(idx)),
+                Err(err) => Err(Err(err)),
+            }
+        }
+
+        let keys_len = keys.len();
+
+        let mut idx = 0;
+
+        if keys_len == 1 {
+            return with_key(keys, idx, |key| self.get_single(key, ctx));
+        }
+
+        let mut attrs: NixAttrset =
+            with_key(keys, idx, |key| self.get_single(key, ctx))?;
+
+        while idx + 1 < keys_len {
+            attrs = with_key(keys, idx, |key| attrs.get_single(key, ctx))?;
+            idx += 1;
+        }
+
+        with_key(keys, idx, |key| attrs.get_single(key, ctx))
+    }
+
+    #[inline]
+    fn get_value(self, key: &CStr, ctx: &mut Context) -> Option<NixValue<'a>> {
         let value_raw = unsafe {
             cpp::get_attr_byname_lazy(
                 self.inner.as_raw(),
@@ -350,10 +466,7 @@ impl<'a> NixAttrset<'a> {
             )
         };
 
-        let value_ptr = NonNull::new(value_raw)?;
-
-        // SAFETY: the value returned by Nix is initialized.
-        Some(fun(unsafe { NixValue::new(value_ptr) }, ctx))
+        NonNull::new(value_raw).map(|ptr| unsafe { NixValue::new(ptr) })
     }
 }
 
@@ -490,7 +603,7 @@ impl Attrset for NixAttrset<'_> {
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        self.with_value_inner(key, |value, ctx| fun.call(value, ctx), ctx)
+        self.get_value(key, ctx).map(|value| fun.call(value, ctx))
     }
 }
 
@@ -1161,20 +1274,17 @@ impl<T: Pairs> Pairs for Option<T> {
     }
 }
 
-impl<A: Attrset> fmt::Display for MissingAttributeError<'_, A> {
+impl<A: Attrset, K: Display> fmt::Display for MissingAttributeError<A, K> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "attribute '{}' missing", self.key.to_string_lossy())
+        write!(f, "attribute at '{}' missing", self.key)
     }
 }
 
-impl<A: Attrset> From<MissingAttributeError<'_, A>> for Error {
+impl<A: Attrset, K: Display> From<MissingAttributeError<A, K>> for Error {
     #[inline]
-    fn from(err: MissingAttributeError<'_, A>) -> Self {
-        // SAFETY: the Display impl doesn't contain any NUL bytes.
-        let message =
-            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
-        Self::new(ErrorKind::Nix, message)
+    fn from(err: MissingAttributeError<A, K>) -> Self {
+        Self::from_message(err)
     }
 }
 

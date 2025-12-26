@@ -4,7 +4,6 @@ use core::fmt::{self, Write};
 use core::iter;
 use core::result::Result;
 use std::borrow::Cow;
-use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 

@@ -136,7 +136,7 @@ fn try_from_attrset_impl(
                 return ::core::result::Result::Err(
                     ::nix_bindings::attrset::MissingAttributeError {
                         attrset: #attrset,
-                        key: #key_name,
+                        key: #key_name.to_string_lossy(),
                     }
                     .into()
                 )
@@ -144,7 +144,7 @@ fn try_from_attrset_impl(
         };
 
         let field_initializer = quote! {
-            let #field_name = match #attrset.get_opt(#key_name, #ctx)? {
+            let #field_name = match #attrset.get_single(#key_name, #ctx)? {
                 Some(#value_ident) => #value_expr,
                 None => #default_expr,
             };

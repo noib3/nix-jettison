@@ -1,5 +1,4 @@
 use core::result::Result;
-use std::ffi::CString;
 use std::path::Path;
 
 use compact_str::CompactString;

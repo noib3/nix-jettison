@@ -1,6 +1,5 @@
 use core::result::Result;
 use std::borrow::Cow;
-use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::{env, io};
 
