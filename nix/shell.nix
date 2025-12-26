@@ -15,7 +15,11 @@
     }:
     {
       devShells.default = pkgs.mkShell {
-        inherit (common) buildInputs env;
+        inherit (common) env;
+
+        buildInputs = common.buildInputs ++ [
+          pkgs.curl.dev
+        ];
 
         packages = common.nativeBuildInputs ++ [
           (pkgs.rustfmt.override { asNightly = true; })

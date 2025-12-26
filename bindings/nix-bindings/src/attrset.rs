@@ -5,7 +5,7 @@ use alloc::ffi::CString;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::cell::OnceCell;
+use core::cell::{OnceCell, RefCell};
 use core::ffi::{CStr, c_uint};
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -150,6 +150,21 @@ pub trait Attrset {
 }
 
 /// TODO: docs.
+pub trait Key {
+    /// TODO: docs.
+    fn with_cstr<T>(&self, fun: impl FnOnce(&CStr) -> T) -> T;
+}
+
+/// TODO: docs.
+pub trait Keys {
+    /// TODO: docs.
+    const LEN: c_uint;
+
+    /// TODO: docs.
+    fn with_key<T>(&self, key_idx: c_uint, fun: impl FnOnceKey<T>) -> T;
+}
+
+/// TODO: docs.
 pub trait Pairs {
     /// Advances the iterator to the next key-value pair.
     ///
@@ -160,11 +175,11 @@ pub trait Pairs {
     /// Returns `true` if there are no more pairs to iterate over.
     fn is_exhausted(&self) -> bool;
 
-    /// Returns the key of the current key-value pair.
+    /// Calls the given function with the key of the current key-value pair.
     ///
     /// Note that this method should only be called after
     /// [`is_exhausted()`](Pairs::is_exhausted) returns `false`.
-    fn key(&self, ctx: &mut Context) -> &CStr;
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T;
 
     /// Calls the given function with the value of the current key-value pair.
     ///
@@ -178,22 +193,19 @@ pub trait Pairs {
 }
 
 /// TODO: docs.
-pub trait Keys {
-    /// TODO: docs.
-    const LEN: c_uint;
-
-    /// TODO: docs.
-    fn with_key<'a, T: 'a>(
-        &'a self,
-        key_idx: c_uint,
-        fun: impl FnOnceKey<'a, T>,
-    ) -> T;
+pub trait FnOnceKey<T> {
+    /// Calls the function with the given key.
+    fn call(self, key: impl Key) -> T;
 }
 
-/// TODO: docs.
-pub trait FnOnceKey<'a, T: 'a> {
-    /// TODO: docs.
-    fn call(self, value: &'a impl AsRef<Utf8CStr>) -> T;
+impl<F, T> FnOnceKey<T> for F
+where
+    F: FnOnce(&CStr) -> T,
+{
+    #[inline(always)]
+    fn call(self, key: impl Key) -> T {
+        key.with_cstr(self)
+    }
 }
 
 /// TODO: docs.
@@ -278,8 +290,7 @@ struct MergePairs<'a, L, R, Lp, Rp> {
 #[cfg(feature = "std")]
 struct HashMapPairs<'a, K, V> {
     iter: std::collections::hash_map::Iter<'a, K, V>,
-    key: Vec<u8>,
-    value: Option<&'a V>,
+    current_pair: Option<(&'a K, &'a V)>,
 }
 
 impl<'a> NixAttrset<'a> {
@@ -352,17 +363,6 @@ impl<K: Keys, V: Values> LiteralAttrset<K, V> {
     pub fn new(keys: K, values: V) -> Self {
         Self { keys, values }
     }
-
-    #[inline]
-    fn get_key(&self, idx: c_uint) -> &CStr {
-        struct GetKey;
-        impl<'a> FnOnceKey<'a, &'a CStr> for GetKey {
-            fn call(self, value: &'a impl AsRef<Utf8CStr>) -> &'a CStr {
-                value.as_ref().as_c_str()
-            }
-        }
-        self.keys.with_key(idx, GetKey)
-    }
 }
 
 impl NixDerivation<'_> {
@@ -408,20 +408,22 @@ impl<L: Attrset, R: Attrset> Merge<L, R> {
             let mut left_pairs = self.left.pairs(ctx);
 
             while !left_pairs.is_exhausted() {
-                let key = left_pairs.key(ctx);
-                if self.right.contains_key(key, ctx) {
-                    insert(key.to_owned());
-                }
+                left_pairs.with_key(|key: &CStr| {
+                    if self.right.contains_key(key, ctx) {
+                        insert(key.to_owned())
+                    }
+                });
                 left_pairs.advance(ctx);
             }
         } else {
             let mut right_pairs = self.right.pairs(ctx);
 
             while !right_pairs.is_exhausted() {
-                let key = right_pairs.key(ctx);
-                if self.left.contains_key(key, ctx) {
-                    insert(key.to_owned());
-                }
+                right_pairs.with_key(|key: &CStr| {
+                    if self.left.contains_key(key, ctx) {
+                        insert(key.to_owned());
+                    }
+                });
                 right_pairs.advance(ctx);
             }
         }
@@ -442,26 +444,6 @@ impl NixDerivation<'_> {
     #[inline]
     pub fn out_path_as_string(&self, ctx: &mut Context) -> Result<String> {
         self.inner.get(c"outPath", ctx)
-    }
-}
-
-#[cfg(feature = "std")]
-impl<K, V> HashMapPairs<'_, K, V> {
-    #[inline]
-    fn store_key(&mut self, key: &str) {
-        self.key.clear();
-        for &byte in key.as_bytes() {
-            // The key will need to be turned into a CStr, so we need to
-            // replace the NUL bytes.
-            if byte == 0 {
-                // The replacement character is 3 bytes long.
-                self.key.reserve(3);
-                core::char::REPLACEMENT_CHARACTER.encode_utf8(&mut self.key);
-            } else {
-                self.key.push(byte);
-            }
-        }
-        self.key.push(0);
     }
 }
 
@@ -577,7 +559,9 @@ impl<K: Keys, V: Values> Attrset for LiteralAttrset<K, V> {
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> Option<T> {
-        let idx = (0..K::LEN).find(|&idx| self.get_key(idx) == key)?;
+        let idx = (0..K::LEN).find(|&idx| {
+            self.keys.with_key(idx, |probe: &CStr| probe == key)
+        })?;
         Some(self.values.with_value(idx, fun.map_ctx(move |()| ctx)))
     }
 }
@@ -671,7 +655,7 @@ impl<L: Attrset, R: Attrset> Attrset for Merge<L, R> {
         MergePairs {
             merge: self,
             is_current_key_conflicting: !left_pairs.is_exhausted()
-                && self.is_conflicting(left_pairs.key(ctx), ctx),
+                && left_pairs.with_key(|k: &CStr| self.is_conflicting(k, ctx)),
             left_pairs,
             right_pairs: self.right.pairs(ctx),
         }
@@ -850,19 +834,73 @@ impl<T: Attrset> Value for AttrsetValue<T> {
         let mut builder = ctx.make_attrset_builder(len as usize)?;
 
         for _ in 0..len {
-            let key = pairs.key(builder.ctx());
-            let new_namespace = namespace.push(key);
-            builder.insert(key, |dest, ctx| {
-                pairs.with_value(
-                    WriteValue { dest, namespace: new_namespace },
-                    ctx,
-                )
+            pairs.with_key(|key: &CStr| {
+                let new_namespace = namespace.push(key);
+                builder.insert(key, |dest, ctx| {
+                    pairs.with_value(
+                        WriteValue { dest, namespace: new_namespace },
+                        ctx,
+                    )
+                })?;
+                namespace = new_namespace.pop();
+                Ok::<_, Error>(())
             })?;
-            namespace = new_namespace.pop();
             pairs.advance(builder.ctx());
         }
 
         builder.build(dest)
+    }
+}
+
+impl<T: Key + ?Sized> Key for &T {
+    #[inline(always)]
+    fn with_cstr<F>(&self, fun: impl FnOnce(&CStr) -> F) -> F {
+        (*self).with_cstr(fun)
+    }
+}
+
+macro_rules! impl_key_for_as_ref_cstr {
+    ($ty:ty) => {
+        impl Key for $ty {
+            #[inline(always)]
+            fn with_cstr<T>(&self, fun: impl FnOnce(&CStr) -> T) -> T {
+                fun(self.as_ref())
+            }
+        }
+    };
+}
+
+impl_key_for_as_ref_cstr!(CStr);
+impl_key_for_as_ref_cstr!(Utf8CStr);
+
+/// # Panics
+///
+/// The [`with_cstr`](Key::with_cstr) implementation will panic if the string
+/// contains a NUL byte.
+impl Key for str {
+    #[track_caller]
+    #[inline]
+    fn with_cstr<T>(&self, fun: impl FnOnce(&CStr) -> T) -> T {
+        thread_local! {
+            static KEY_BUFFER: RefCell<Vec<u8>> = RefCell::default();
+        }
+
+        if self.as_bytes().contains(&0) {
+            panic!(
+                "string {self:?} contains a NUL byte, so it cannot be used as \
+                 an attrset key"
+            )
+        }
+
+        KEY_BUFFER.with_borrow_mut(|buf| {
+            buf.clear();
+            buf.extend_from_slice(self.as_bytes());
+            buf.push(0);
+            // SAFETY: we checked that the string doesn't contain any NUL bytes,
+            // and we just pushed a trailing NUL.
+            let cstr = unsafe { CStr::from_bytes_with_nul_unchecked(buf) };
+            fun(cstr)
+        })
     }
 }
 
@@ -880,12 +918,13 @@ impl Pairs for NixAttrsetPairs<'_, '_> {
 
     #[track_caller]
     #[inline]
-    fn key(&self, _: &mut Context) -> &CStr {
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T {
         assert!(self.num_attrs_left > 0);
         let key_ptr = unsafe { cpp::attr_iter_key(self.iterator.as_ptr()) };
         // SAFETY: Nix guarantees that the key pointer is valid as long as
         // the iterator is valid.
-        unsafe { CStr::from_ptr(key_ptr) }
+        let key = unsafe { CStr::from_ptr(key_ptr) };
+        fun.call(key)
     }
 
     #[inline]
@@ -930,8 +969,8 @@ where
     }
 
     #[inline]
-    fn key(&self, _: &mut Context) -> &CStr {
-        self.attrset.get_key(self.current_idx)
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T {
+        self.attrset.keys.with_key(self.current_idx, fun)
     }
 
     #[inline]
@@ -963,8 +1002,10 @@ where
                 if self.right_pairs.is_exhausted() {
                     return;
                 }
-                let key = self.right_pairs.key(ctx);
-                if !self.merge.is_conflicting(key, ctx) {
+                let is_conflicting = self
+                    .right_pairs
+                    .with_key(|key: &CStr| self.merge.is_conflicting(key, ctx));
+                if !is_conflicting {
                     return;
                 }
             }
@@ -976,8 +1017,9 @@ where
             return;
         }
 
-        let key = self.left_pairs.key(ctx);
-        self.is_current_key_conflicting = self.merge.is_conflicting(key, ctx);
+        self.is_current_key_conflicting = self
+            .left_pairs
+            .with_key(|key: &CStr| self.merge.is_conflicting(key, ctx));
     }
 
     #[inline]
@@ -986,11 +1028,11 @@ where
     }
 
     #[inline]
-    fn key(&self, ctx: &mut Context) -> &CStr {
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T {
         if !self.left_pairs.is_exhausted() {
-            self.left_pairs.key(ctx)
+            self.left_pairs.with_key(fun)
         } else {
-            self.right_pairs.key(ctx)
+            self.right_pairs.with_key(fun)
         }
     }
 
@@ -1000,12 +1042,14 @@ where
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        // If we're currently at a conflicting key, use the value from the
-        // right attrset.
+        // If we're currently at a conflicting key, use the value from the right
+        // attrset.
         if self.is_current_key_conflicting {
-            let key = self.left_pairs.key(ctx);
-            let out = self.merge.right.with_value(key, fun, ctx);
-            out.expect("key is conflicting, so it must exist in right attrset")
+            self.left_pairs.with_key(|key: &CStr| {
+                self.merge.right.with_value(key, fun, ctx).expect(
+                    "key is conflicting, so it must exist in right attrset",
+                )
+            })
         } else if !self.left_pairs.is_exhausted() {
             self.left_pairs.with_value(fun, ctx)
         } else {
@@ -1034,11 +1078,11 @@ where
     }
 
     #[inline]
-    fn key(&self, ctx: &mut Context) -> &CStr {
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T {
         if !self.left_pairs.is_exhausted() {
-            self.left_pairs.key(ctx)
+            self.left_pairs.with_key(fun)
         } else {
-            self.right_pairs.key(ctx)
+            self.right_pairs.with_key(fun)
         }
     }
 
@@ -1073,10 +1117,10 @@ impl<T: Pairs> Pairs for Option<T> {
     }
 
     #[inline]
-    fn key(&self, ctx: &mut Context) -> &CStr {
+    fn with_key<U>(&self, fun: impl FnOnceKey<U>) -> U {
         match self {
-            Some(pairs) => pairs.key(ctx),
-            None => panic!("attempted to get key from exhausted pairs"),
+            Some(pairs) => pairs.with_key(fun),
+            None => panic!("attempted to use key from exhausted pairs"),
         }
     }
 
@@ -1164,10 +1208,10 @@ impl<L: Pairs, R: Pairs> Pairs for either::Either<L, R> {
     }
 
     #[inline]
-    fn key(&self, ctx: &mut Context) -> &CStr {
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T {
         match self {
-            Self::Left(l) => l.key(ctx),
-            Self::Right(r) => r.key(ctx),
+            Self::Left(l) => l.with_key(fun),
+            Self::Right(r) => r.with_key(fun),
         }
     }
 
@@ -1202,19 +1246,7 @@ where
         _: &mut Context,
     ) -> impl Pairs + use<'this, K, V, S> {
         let mut iter = self.iter();
-        let (key, value) = match iter.next() {
-            Some((key, value)) => (Some(key), Some(value)),
-            None => (None, None),
-        };
-        let mut this = HashMapPairs {
-            key: Vec::with_capacity(key.map_or(0, |s| s.borrow().len() + 1)),
-            value,
-            iter,
-        };
-        if let Some(key) = key {
-            this.store_key(key.borrow());
-        }
-        this
+        HashMapPairs { current_pair: iter.next(), iter }
     }
 
     #[inline]
@@ -1237,24 +1269,20 @@ where
 {
     #[inline]
     fn advance(&mut self, _: &mut Context) {
-        self.value = None;
-        let Some((key, value)) = self.iter.next() else { return };
-        self.store_key(key.borrow());
-        self.value = Some(value);
+        self.current_pair = self.iter.next();
     }
 
     #[inline]
     fn is_exhausted(&self) -> bool {
-        self.value.is_none()
+        self.current_pair.is_none()
     }
 
     #[inline]
-    fn key(&self, _: &mut Context) -> &CStr {
-        if self.key.is_empty() {
-            panic!("attempted to get key from exhausted pairs");
-        }
-        // SAFETY: we always store a valid NUL-terminated CStr in the vector.
-        unsafe { CStr::from_bytes_with_nul_unchecked(&self.key) }
+    fn with_key<T>(&self, fun: impl FnOnceKey<T>) -> T {
+        let Some((key, _value)) = self.current_pair else {
+            panic!("attempted to use key from exhausted pairs");
+        };
+        fun.call(key.borrow())
     }
 
     #[inline]
@@ -1263,11 +1291,10 @@ where
         fun: impl FnOnceValue<T, &'ctx mut Context<'eval>>,
         ctx: &'ctx mut Context<'eval>,
     ) -> T {
-        let value = self
-            .value
-            .expect("attempted to get value from exhausted pairs")
-            .to_value(ctx);
-        fun.call(value, ctx)
+        let Some((_key, value)) = self.current_pair else {
+            panic!("attempted to use value from exhausted pairs");
+        };
+        fun.call(value.to_value(ctx), ctx)
     }
 }
 
@@ -1298,16 +1325,12 @@ where
 mod keys_impls {
     use super::*;
 
-    impl<Key: AsRef<Utf8CStr>> Keys for Key {
+    impl<K: Key> Keys for K {
         const LEN: c_uint = 1;
 
         #[track_caller]
         #[inline]
-        fn with_key<'a, T: 'a>(
-            &'a self,
-            key_idx: c_uint,
-            fun: impl FnOnceKey<'a, T>,
-        ) -> T {
+        fn with_key<T>(&self, key_idx: c_uint, fun: impl FnOnceKey<T>) -> T {
             match key_idx {
                 0 => fun.call(self),
                 other => panic_tuple_index_oob(other, <Self as Keys>::LEN),
@@ -1332,16 +1355,16 @@ mod keys_impls {
         (@pair [$(($idx:tt $K:ident))*] $_:tt []) => {
             impl<$($K),*> Keys for ($($K,)*)
             where
-                $($K: AsRef<Utf8CStr>),*
+                $($K: Key),*
             {
                 const LEN: c_uint = count!($($K)*);
 
                 #[track_caller]
                 #[inline]
-                fn with_key<'a, T: 'a>(
-                    &'a self,
+                fn with_key<T>(
+                    &self,
                     key_idx: c_uint,
-                    _fun: impl FnOnceKey<'a, T>,
+                    _fun: impl FnOnceKey<T>,
                 ) -> T {
                     match key_idx {
                         $($idx => _fun.call(&self.$idx),)*
@@ -1477,8 +1500,8 @@ pub mod derive {
         }
 
         #[inline]
-        fn key(&self, _: &mut Context) -> &CStr {
-            T::KEYS[self.field_idx as usize]
+        fn with_key<U>(&self, fun: impl FnOnceKey<U>) -> U {
+            fun.call(T::KEYS[self.field_idx as usize])
         }
 
         #[inline]

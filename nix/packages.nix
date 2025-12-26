@@ -49,7 +49,7 @@
         in
         pkgs.runCommand "${packageName}${lib.optionalString (!release) "-dev"}" { } ''
           mkdir -p $out
-          src=$(readlink -f ${jettison.lib}/lib/lib${dllName}.${dllSuffix})
+          src=$(readlink -f ${jettison}/lib${dllName}.${dllSuffix})
           cp $src $out/${dllName}.so
         '';
 
