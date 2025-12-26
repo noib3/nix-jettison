@@ -320,15 +320,15 @@ trait WriteableList {
                         .list_res
                         .get()
                         .expect(
-                            "if the iterator has been taken it means \
-                             Value::write has already been called, and its \
-                             result must've been saved",
+                            "if the iterator has been taken it means this \
+                             function has already been called, so the result \
+                             must've been set",
                         )
                         .clone()?;
                     return unsafe { list.write(dest, namespace, ctx) };
                 };
 
-                let dest = match ctx.alloc_value() {
+                let value = match ctx.alloc_value() {
                     Ok(uninit_value) => uninit_value,
                     Err(err) => {
                         self.list.set(Some(iter));
@@ -337,14 +337,14 @@ trait WriteableList {
                 };
 
                 let list_res = match unsafe {
-                    WriteableList::write_once(iter, dest, namespace, ctx)
+                    WriteableList::write_once(iter, value, namespace, ctx)
                 } {
                     Ok(()) => {
-                        Ok(NixList { inner: unsafe { NixValue::new(dest) } })
+                        Ok(NixList { inner: unsafe { NixValue::new(value) } })
                     },
                     Err(err) => {
                         unsafe {
-                            sys::value_decref(ptr::null_mut(), dest.as_ptr());
+                            sys::value_decref(ptr::null_mut(), value.as_ptr());
                         }
                         Err(err)
                     },
@@ -352,7 +352,7 @@ trait WriteableList {
 
                 self.list_res.set(list_res).expect("not been set before");
 
-                Ok(())
+                unsafe { self.write(dest, namespace, ctx) }
             }
         }
 
