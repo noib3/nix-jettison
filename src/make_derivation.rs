@@ -665,6 +665,11 @@ where
             (lib_name, lib_path)
         })
         .flat_map(|(lib_name, lib_path)| {
+            let lib_name = match lib_name.find('-') {
+                Some(_idx) => Cow::Owned(lib_name.replace('-', "_")),
+                None => Cow::Borrowed(&*lib_name),
+            };
+
             [
                 CompactString::const_new("--extern"),
                 format_compact!("{}={}", lib_name, lib_path),
