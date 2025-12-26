@@ -56,11 +56,14 @@ pub(crate) struct GlobalArgs<'args, 'lock, 'builtins> {
     /// [`BuildPackageArgs::crate_overrides`](crate::build_package::BuildPackageArgs::crate_overrides) field.
     pub(crate) crate_overrides: Option<NixAttrset<'args>>,
 
+    /// The `pkgs.lib.getLib` function.
+    pub(crate) get_lib: NixLambda<'args>,
+
     /// The
     /// [`BuildPackageArgs::global_overrides`](crate::build_package::BuildPackageArgs::global_overrides) field.
     pub(crate) global_overrides: Option<NixAttrset<'args>>,
 
-    /// The node's build attributes coming from the build graph resolution step.
+    /// The `pkgs.stdenv.mkDerivation` function.
     pub(crate) mk_derivation: NixLambda<'args>,
 
     /// The `builtins.path` function.
@@ -92,39 +95,110 @@ struct Crate<'a> {
     build_opts: &'a BuildOpts,
 }
 
+#[expect(clippy::too_many_lines)]
 pub(crate) fn make_deps<'dep>(
     package: &PackageAttrs,
     direct_deps: impl ExactSizeIterator<Item = NixDerivation<'dep>> + Clone,
-    mk_derivation: &NixLambda,
+    args: &GlobalArgs,
     ctx: &mut Context,
 ) -> Result<NixDerivation<'static>> {
-    let mut install_phase = "runHook preInstall\nmkdir -p $out\n".to_owned();
+    let mut install_phase = formatdoc!(
+        "
+            runHook preInstall
+            mkdir -p $out
+            mkdir -p $out/native
+            shopt -s nullglob
+        "
+    )
+    .to_owned();
 
-    // For every direct dependency, copy all the files in its `deps` folder,
-    // as well as its rlib and dylib files.
-    for dep_drv in direct_deps.clone() {
-        let dep_out_path = dep_drv.out_path_as_string(ctx)?;
+    // For every direct dependency, copy all its native dependencies, pure-Rust
+    // dependencies, and its output .rlib/.so/.dylib files (if any).
+    for rust_dep in direct_deps.clone() {
+        let out_path = rust_dep.out_path_as_string(ctx)?;
         writedoc!(
             &mut install_phase,
-            "
-                cp -rn {dep_out_path}/deps/. $out
-                ln -s {dep_out_path}/lib*.rlib $out || true
-                ln -s {dep_out_path}/lib*.dylib $out || true
-            ",
+            r#"
+                cp -rn {out_path}/deps/native/. $out/native
+                cp -rn {out_path}/deps/. $out
+
+                for dep in {out_path}/lib*.{{rlib,{DLL_EXTENSION}}}; do
+                  ln -sf $dep $out
+                done
+            "#,
         )
         .expect("writing to string can't fail");
     }
 
+    let build_inputs = {
+        let global_inputs = match args.global_overrides {
+            Some(attrs) => attrs.get_opt::<NixList>(c"buildInputs", ctx)?,
+            None => None,
+        }
+        .map(Either::Left)
+        .unwrap_or(Either::Right(<&[Null]>::default()));
+
+        let crate_override_fun = match args.crate_overrides {
+            Some(attrs) => attrs.get_opt::<NixLambda>(c"package_name", ctx)?,
+            None => None,
+        };
+
+        if let Some(fun) = crate_override_fun {
+            fun.call(attrset! { buildInputs: global_inputs.borrow() }, ctx)?
+                .force_into::<NixAttrset>(ctx)?
+                .get_opt::<NixList>(c"buildInputs", ctx)?
+                .map(Either::Left)
+                .unwrap_or(global_inputs)
+        } else {
+            global_inputs
+        }
+    };
+
+    // For every library in the buildInputs, symlink any .so/.dylib/.a files in
+    // it under `native`.
+    if let Either::Left(list) = &build_inputs {
+        for idx in 0..list.len() {
+            let build_input = list.get::<NixDerivation>(idx, ctx)?;
+
+            let native_dep = args
+                .get_lib
+                .call(build_input, ctx)?
+                .force_into::<NixDerivation>(ctx)?;
+
+            let out_path = native_dep.out_path_as_string(ctx)?;
+
+            writedoc!(
+                &mut install_phase,
+                r#"
+                    if [ -d "{out_path}/lib" ]; then
+                      for dep in "{out_path}/lib"/lib*.{{so,so.*,dylib,a}}; do
+                        ln -sf $dep $out/native
+                      done
+                    fi
+
+                    # Only check lib64/ if it's not a symlink. If it is it'll point
+                    # to lib/, so we can skip it.
+                    if [ -d "{out_path}/lib64" ] && [ ! -L "{out_path}/lib64" ]; then
+                      for dep in "{out_path}/lib64"/lib*.{{so,so.*,dylib,a}}; do
+                        ln -sf $dep $out/native
+                      done
+                    fi
+                "#,
+            )
+            .expect("writing to string can't fail");
+        }
+    }
+
     install_phase.push_str("runHook postInstall");
 
-    let args = attrset! {
+    let attrs = attrset! {
         name: format_compact!("{}-{}-deps", package.name, package.version),
-        buildInputs: direct_deps.into_value(),
+        buildInputs: direct_deps.concat(build_inputs.into_list()).into_value(),
         installPhase: install_phase,
         phases: [ c"installPhase" ],
     };
 
-    mk_derivation.call(args, ctx)?.force_into(ctx)
+    args.mk_derivation.call(attrs, ctx)?.force_into(ctx)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -288,7 +362,8 @@ where
             build_phase.push_str(rustc_arg.as_ref());
         }
 
-        build_phase.push_str(" -L dependency=$out/deps");
+        build_phase
+            .push_str(" -L dependency=$out/deps -L native=$out/deps/native");
 
         // Append any extra arguments coming from build scripts.
         build_phase.push_str(" ${EXTRA_RUSTC_ARGS:-}");
@@ -652,6 +727,10 @@ impl<'args, 'lock, 'builtins> GlobalArgs<'args, 'lock, 'builtins> {
         Ok(Self {
             compile_target,
             crate_overrides: args.crate_overrides,
+            get_lib: args
+                .pkgs
+                .get::<NixAttrset>(c"lib", ctx)?
+                .get(c"lib", ctx)?,
             global_overrides: args.global_overrides,
             mk_derivation: stdenv.get::<NixLambda>(c"mkDerivation", ctx)?,
             mk_path: ctx.builtins().path(ctx),
