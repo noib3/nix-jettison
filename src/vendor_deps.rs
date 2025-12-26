@@ -334,11 +334,7 @@ impl From<VendorDepsError> for NixError {
     fn from(err: VendorDepsError) -> Self {
         match err {
             VendorDepsError::Nix(nix_err) => nix_err,
-            other => {
-                let message = CString::new(other.to_string())
-                    .expect("the Display impl doesn't contain any NUL bytes");
-                Self::new(ErrorKind::Nix, message)
-            },
+            other => Self::from_message(other),
         }
     }
 }

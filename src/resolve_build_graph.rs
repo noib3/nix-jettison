@@ -264,11 +264,7 @@ impl From<ResolveBuildGraphError> for NixError {
     fn from(err: ResolveBuildGraphError) -> Self {
         match err {
             ResolveBuildGraphError::Nix(nix_err) => nix_err,
-            other => {
-                let message = CString::new(other.to_string())
-                    .expect("the Display impl doesn't contain any NUL bytes");
-                Self::new(ErrorKind::Nix, message)
-            },
+            other => Self::from_message(other),
         }
     }
 }
@@ -319,7 +315,7 @@ fn parse_compile_target(
 ) -> Result<Option<CompileTarget>, NixError> {
     value.force_inline(ctx)?;
     let str = CompactString::try_from_value(value, ctx)?;
-    CompileTarget::new(&*str)
-        .map(Some)
-        .map_err(|_| NixError::new(ErrorKind::Nix, c"invalid rustc target"))
+    CompileTarget::new(&*str).map(Some).map_err(|err| {
+        NixError::from_message(format_args!("invalid rustc target: {err}"))
+    })
 }

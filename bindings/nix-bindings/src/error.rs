@@ -84,6 +84,31 @@ pub struct TryFromI64Error<Int> {
 }
 
 impl Error {
+    /// TODO: docs.
+    #[track_caller]
+    #[inline]
+    pub fn from_message(message: impl fmt::Display) -> Self {
+        let message_str = message.to_string();
+
+        let message = match CString::new(message_str) {
+            Ok(cstring) => Cow::Owned(cstring),
+
+            Err(nul_err) => {
+                let nul_byte_idx = nul_err.nul_position();
+                // SAFETY: the bytes where created from a string, so it's safe
+                // to turn them back into one.
+                let message_str =
+                    unsafe { String::from_utf8_unchecked(nul_err.into_vec()) };
+                panic!(
+                    "error message {message_str:?} contains NUL byte at index \
+                     {nul_byte_idx}, so it can't be converted into a Nix Error"
+                )
+            },
+        };
+
+        Self { kind: ErrorKind::Nix, message }
+    }
+
     /// Returns the error's kind.
     #[inline]
     pub fn kind(&self) -> ErrorKind {
@@ -193,10 +218,7 @@ impl<Int: fmt::Debug + fmt::Display> core::error::Error
 impl<Int: fmt::Display> From<TryIntoI64Error<Int>> for Error {
     #[inline]
     fn from(err: TryIntoI64Error<Int>) -> Self {
-        // SAFETY: the Display impl doesn't contain any NUL bytes.
-        let message =
-            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
-        Self::new(ErrorKind::Nix, message)
+        Self::from_message(err)
     }
 }
 
@@ -228,10 +250,7 @@ impl<Int> core::error::Error for TryFromI64Error<Int> {}
 impl<Int> From<TryFromI64Error<Int>> for Error {
     #[inline]
     fn from(err: TryFromI64Error<Int>) -> Self {
-        // SAFETY: the Display impl doesn't contain any NUL bytes.
-        let message =
-            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
-        Self::new(ErrorKind::Nix, message)
+        Self::from_message(err)
     }
 }
 
@@ -245,20 +264,14 @@ impl From<core::convert::Infallible> for Error {
 impl From<TypeMismatchError> for Error {
     #[inline]
     fn from(err: TypeMismatchError) -> Self {
-        // SAFETY: the Display impl doesn't contain any NUL bytes.
-        let message =
-            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
-        Self::new(ErrorKind::Nix, message)
+        Self::from_message(err)
     }
 }
 
 impl From<alloc::ffi::NulError> for Error {
     #[inline]
     fn from(err: alloc::ffi::NulError) -> Self {
-        // SAFETY: NulError's Display impl doesn't contain any NUL bytes.
-        let message =
-            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
-        Self::new(ErrorKind::Nix, message)
+        Self::from_message(err)
     }
 }
 
@@ -272,9 +285,6 @@ impl From<alloc::ffi::IntoStringError> for Error {
 impl From<core::str::Utf8Error> for Error {
     #[inline]
     fn from(err: core::str::Utf8Error) -> Self {
-        // SAFETY: Utf8Error's Display impl doesn't contain any NUL bytes.
-        let message =
-            unsafe { CString::from_vec_unchecked(err.to_string().into()) };
-        Self::new(ErrorKind::Nix, message)
+        Self::from_message(err)
     }
 }
