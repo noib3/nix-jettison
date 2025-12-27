@@ -4,6 +4,7 @@ use std::ffi::CString;
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::meta::ParseNestedMeta;
+use nix_bindings_constants::MAX_PRIMOP_ARITY;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::token::Comma;
@@ -85,15 +86,12 @@ fn named_fields(
                  field",
             )),
 
-            len if len > nix_bindings_sys::MAX_PRIMOP_ARITY as usize
-                && !is_flattened =>
-            {
+            len if len > MAX_PRIMOP_ARITY as usize && !is_flattened => {
                 Err(syn::Error::new(
                     input.span(),
                     format_args!(
-                        "In Nix, functions can have at most {} arguments, but \
-                         this struct has {len} fields",
-                        nix_bindings_sys::MAX_PRIMOP_ARITY
+                        "In Nix, functions can have at most {MAX_PRIMOP_ARITY} \
+                         arguments, but this struct has {len} fields",
                     ),
                 ))
             },

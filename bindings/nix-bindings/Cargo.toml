@@ -12,6 +12,7 @@ smallvec = ["dep:smallvec"]
 std = []
 
 [dependencies]
+nix-bindings-constants = { workspace = true }
 nix-bindings-cpp = { workspace = true }
 nix-bindings-macros = { workspace = true }
 nix-bindings-sys = { workspace = true }

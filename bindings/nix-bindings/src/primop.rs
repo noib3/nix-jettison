@@ -6,7 +6,7 @@ use core::ffi::{CStr, c_char, c_void};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 
-use nix_bindings_sys as sys;
+use {nix_bindings_constants as constants, nix_bindings_sys as sys};
 
 use crate::Utf8CStr;
 use crate::context::{Context, EvalState};
@@ -153,7 +153,7 @@ pub trait Args<'a>: Sized {
     // Compile-time checks of several invariants.
     #[doc(hidden)]
     const CHECKS: () = {
-        assert!(Self::ARITY <= sys::MAX_PRIMOP_ARITY);
+        assert!(Self::ARITY <= constants::MAX_PRIMOP_ARITY);
         assert!(Self::ARITY as usize + 1 == Self::NAMES.len());
         assert!(Self::NAMES.last().unwrap().is_null());
     };

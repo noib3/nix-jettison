@@ -36,6 +36,7 @@ syn = "2"
 
 # Internal dependencies.
 nix-bindings = { path = "./bindings/nix-bindings" }
+nix-bindings-constants = { path = "./bindings/nix-bindings-constants" }
 nix-bindings-cpp = { path = "./bindings/nix-bindings-cpp" }
 nix-bindings-macros = { path = "./bindings/nix-bindings-macros" }
 nix-bindings-sys = { path = "./bindings/nix-bindings-sys" }

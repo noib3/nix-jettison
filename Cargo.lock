@@ -2483,12 +2483,17 @@ version = "0.1.0"
 dependencies = [
  "compact_str",
  "either",
+ "nix-bindings-constants",
  "nix-bindings-cpp",
  "nix-bindings-macros",
  "nix-bindings-sys",
  "rustc_version",
  "smallvec",
 ]
+
+[[package]]
+name = "nix-bindings-constants"
+version = "0.1.0"
 
 [[package]]
 name = "nix-bindings-cpp"
@@ -2503,7 +2508,7 @@ dependencies = [
 name = "nix-bindings-macros"
 version = "0.1.0"
 dependencies = [
- "nix-bindings-sys",
+ "nix-bindings-constants",
  "proc-macro2",
  "quote",
  "syn",
