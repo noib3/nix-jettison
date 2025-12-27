@@ -292,6 +292,13 @@ impl LibraryFormat {
     pub(crate) fn is_proc_macro(formats: &[Self]) -> bool {
         formats == &[Self::ProcMacro]
     }
+
+    pub(crate) fn is_usable_as_dependency(&self) -> bool {
+        match self {
+            Self::Dylib | Self::Lib | Self::ProcMacro | Self::Rlib => true,
+            Self::Cdylib | Self::Staticlib => false,
+        }
+    }
 }
 
 impl BinaryCrate {

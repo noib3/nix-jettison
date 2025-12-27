@@ -604,8 +604,10 @@ where
     .into_iter()
     .map(Into::into)
     .chain(
-        cr8.metadata(version, features)
-            .map(|metadata| {
+        cr8.r#type
+            .is_usable_as_dependency()
+            .then(|| {
+                let metadata = cr8.metadata(version, features);
                 [
                     CompactString::const_new("-C"),
                     format_compact!("metadata={metadata}"),
@@ -872,10 +874,8 @@ impl<'a> Crate<'a> {
         &self,
         version: &str,
         features: &[CompactString],
-    ) -> Option<CompactString> {
-        self.r#type.is_library().then(|| {
-            crate_metadata(self.name, version, features.iter(), self.build_opts)
-        })
+    ) -> CompactString {
+        crate_metadata(self.name, version, features.iter(), self.build_opts)
     }
 }
 
@@ -888,15 +888,20 @@ impl CrateType<'_> {
         }
     }
 
-    fn is_library(&self) -> bool {
-        matches!(self, Self::Library { .. })
-    }
-
     fn is_proc_macro(&self) -> bool {
         match self {
             Self::Binary => false,
             Self::BuildScript => false,
             Self::Library { formats } => LibraryFormat::is_proc_macro(formats),
+        }
+    }
+
+    fn is_usable_as_dependency(&self) -> bool {
+        match self {
+            Self::Binary | Self::BuildScript => false,
+            Self::Library { formats } => formats
+                .iter()
+                .any(|lib_format| lib_format.is_usable_as_dependency()),
         }
     }
 
