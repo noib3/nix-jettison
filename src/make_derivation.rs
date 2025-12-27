@@ -29,18 +29,16 @@ use crate::build_package::BuildPackageArgs;
 use crate::vendor_deps::VendoredSources;
 
 pub(crate) enum DerivationType<'graph> {
-    /// TODO: docs.
     BuildScript(&'graph BuildScript),
-
-    /// TODO: docs.
     Library {
+        /// The derivation for the package's build script, if it has one.
         build_script: Option<NixDerivation<'static>>,
         library: &'graph LibraryCrate,
     },
-
-    /// TODO: docs.
     Binaries {
+        /// The derivation for the package's build script, if it has one.
         build_script: Option<NixDerivation<'static>>,
+        /// The derivation for the package's library crate, if it has one.
         library: Option<NixDerivation<'static>>,
         binaries: &'graph [BinaryCrate],
     },
@@ -89,6 +87,7 @@ pub(crate) struct GlobalArgs<'args, 'lock, 'builtins> {
 struct Crate<'a> {
     path: &'a str,
     name: &'a str,
+    name_arg: Option<String>,
     deps_renames: &'a DependencyRenames,
     build_opts: &'a BuildOpts,
     r#type: CrateType<'a>,
@@ -347,7 +346,7 @@ where
         build_phase.push_str("\nrustc");
 
         for rustc_arg in build_rustc_args(
-            cr8,
+            &cr8,
             version,
             direct_deps.clone(),
             &node.package_attrs.features,
@@ -575,7 +574,7 @@ fn apply_overrides<'a>(
 
 #[expect(clippy::too_many_arguments)]
 fn build_rustc_args<'dep, Deps>(
-    cr8: Crate,
+    cr8: &Crate,
     version: &str,
     direct_deps: Deps,
     features: &[CompactString],
@@ -590,7 +589,7 @@ where
     [
         cr8.path,
         "--crate-name",
-        cr8.name,
+        cr8.name_arg(),
         "--out-dir",
         "$out",
         "--edition",
@@ -655,7 +654,6 @@ where
             format_compact!("feature=\\\"{}\\\"", feature),
         ]
     }))
-    // TODO: set linker.
     .chain(cr8.build_opts.extra_rustc_args.iter().cloned())
 }
 
@@ -843,9 +841,11 @@ impl<'a> Crate<'a> {
         binary: &'a BinaryCrate,
         deps_renames: &'a DependencyRenames,
     ) -> Self {
+        let name = &binary.name;
         Self {
             path: &binary.path,
-            name: &binary.name,
+            name,
+            name_arg: name.contains('-').then(|| name.replace('-', "_")),
             r#type: CrateType::Binary,
             deps_renames,
             build_opts: &binary.build_opts,
@@ -856,6 +856,7 @@ impl<'a> Crate<'a> {
         Self {
             path: &build_script.path,
             name: "build_script_build",
+            name_arg: None,
             r#type: CrateType::BuildScript,
             deps_renames: &build_script.dependency_renames,
             build_opts: &build_script.build_opts,
@@ -866,13 +867,21 @@ impl<'a> Crate<'a> {
         library: &'a LibraryCrate,
         deps_renames: &'a DependencyRenames,
     ) -> Self {
+        let name = &library.name;
         Self {
             path: &library.path,
-            name: &library.name,
+            name,
+            name_arg: name.contains('-').then(|| name.replace('-', "_")),
             r#type: CrateType::Library { formats: &library.formats },
             deps_renames,
             build_opts: &library.build_opts,
         }
+    }
+
+    /// Returns the crate name in the format expected by rustc's `--crate-name`
+    /// (i.e., with dashes replaced by underscores).
+    fn name_arg(&self) -> &str {
+        self.name_arg.as_deref().unwrap_or(self.name)
     }
 }
 
