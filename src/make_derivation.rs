@@ -607,7 +607,12 @@ where
         cr8.r#type
             .is_usable_as_dependency()
             .then(|| {
-                let metadata = cr8.metadata(version, features);
+                let metadata = crate_metadata(
+                    cr8.name,
+                    version,
+                    features.iter(),
+                    cr8.build_opts,
+                );
                 [
                     CompactString::const_new("-C"),
                     format_compact!("metadata={metadata}"),
@@ -868,14 +873,6 @@ impl<'a> Crate<'a> {
             deps_renames,
             build_opts: &library.build_opts,
         }
-    }
-
-    fn metadata(
-        &self,
-        version: &str,
-        features: &[CompactString],
-    ) -> CompactString {
-        crate_metadata(self.name, version, features.iter(), self.build_opts)
     }
 }
 
