@@ -107,8 +107,6 @@ pub(crate) struct BinaryCrate {
     pub(crate) build_opts: BuildOpts,
     pub(crate) name: CompactString,
     pub(crate) path: CompactString,
-    #[attrset(skip_if = Vec::is_empty)]
-    pub(crate) required_features: Vec<CompactString>,
 }
 
 #[derive(nix_bindings::Attrset)]
@@ -236,16 +234,19 @@ impl BuildGraph {
             }
         }
 
-        let binaries = BinaryCrate::new(package, resolve)
-            .map(Iterator::collect)
-            .unwrap_or_default();
+        let package_attrs = PackageAttrs::new(package, resolve);
+
+        let binaries =
+            BinaryCrate::new(package, &package_attrs.features, resolve)
+                .map(Iterator::collect)
+                .unwrap_or_default();
 
         let node = BuildGraphNode {
             binaries,
             build_script: BuildScript::new(package, resolve),
             dependency_renames: dependency_renames::<true>(pkg_id, resolve),
             library: LibraryCrate::new(package, resolve),
-            package_attrs: PackageAttrs::new(package, resolve),
+            package_attrs,
             package_src: PackageSource::new(package, vendor_dir),
         };
 
@@ -306,6 +307,7 @@ impl BinaryCrate {
     /// `None` if the package is not the root of the build graph.
     fn new(
         package: &Package,
+        enabled_features: &[impl PartialEq<str>],
         resolve: &WorkspaceResolve,
     ) -> Option<impl Iterator<Item = Self>> {
         let package_id = package.package_id();
@@ -314,14 +316,31 @@ impl BinaryCrate {
             return None;
         }
 
-        let bin_targets = package.targets().iter().filter_map(|target| {
-            match target.src_path() {
+        let bin_targets = package
+            .targets()
+            .iter()
+            .filter_map(|target| match target.src_path() {
                 TargetSourcePath::Path(src_path) => {
                     target.is_bin().then(|| (target, &**src_path))
                 },
                 TargetSourcePath::Metabuild => None,
-            }
-        });
+            })
+            // Filter out binary targets with at least one required feature
+            // that's not enabled.
+            .filter(|(target, _)| {
+                let required_features = target
+                    .required_features()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+
+                for feature in required_features {
+                    if !enabled_features.iter().any(|f| f == &**feature) {
+                        return false;
+                    }
+                }
+
+                true
+            });
 
         Some(bin_targets.map(move |(target, src_path)| {
             let path = src_path
@@ -330,18 +349,10 @@ impl BinaryCrate {
                 .display()
                 .to_compact_string();
 
-            let required_features = target
-                .required_features()
-                .iter()
-                .flat_map(|feats| feats.iter())
-                .map(|feat| (**feat).into())
-                .collect();
-
             Self {
                 build_opts: BuildOpts::new(package_id, false, resolve),
                 name: target.name().into(),
                 path,
-                required_features,
             }
         }))
     }
