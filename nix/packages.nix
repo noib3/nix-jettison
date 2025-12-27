@@ -15,10 +15,6 @@
       ...
     }:
     let
-      packageName = (lib.importTOML ../Cargo.toml).package.name;
-      dllName = builtins.replaceStrings [ "-" ] [ "_" ] packageName;
-      dllSuffix = if pkgs.stdenv.isDarwin then "dylib" else "so";
-
       mkPackage =
         {
           release ? true,
@@ -47,11 +43,7 @@
             };
           };
         in
-        pkgs.runCommand "${packageName}${lib.optionalString (!release) "-dev"}" { } ''
-          mkdir -p $out
-          src=$(readlink -f ${jettison}/lib${dllName}.${dllSuffix})
-          cp $src $out/${dllName}.so
-        '';
+        jettison;
 
       bootstrapped =
         let
@@ -61,7 +53,7 @@
           };
           cargoToml = lib.importTOML ../Cargo.toml;
           jettison = rustPlatform.buildRustPackage {
-            pname = packageName;
+            pname = (lib.importTOML ../Cargo.toml).package.name;
             version = cargoToml.workspace.package.version;
             src = lib.fileset.toSource {
               root = ../.;
@@ -85,11 +77,7 @@
             buildType = "release";
           };
         in
-        pkgs.runCommand "${packageName}-bootstrapped" { } ''
-          mkdir -p $out
-          src=$(readlink -f ${jettison}/lib/lib${dllName}.${dllSuffix})
-          cp $src $out/${dllName}.so
-        '';
+        jettison;
     in
     {
       packages = {

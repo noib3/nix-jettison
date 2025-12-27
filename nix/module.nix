@@ -18,10 +18,14 @@ in
   config = lib.mkIf cfg.enable {
     nix.settings.plugin-files =
       let
-        packages = self.packages.${pkgs.stdenv.hostPlatform.system};
+        inherit (pkgs.stdenv) hostPlatform;
+        packs = self.packages.${hostPlatform.system};
+        package = if builtins ? jettison then packs.default else packs.bootstrapped;
+        packageName = (lib.importTOML ../Cargo.toml).package.name;
+        libName = builtins.replaceStrings [ "-" ] [ "_" ] packageName;
       in
       [
-        (if builtins ? jettison then packages.default else packages.bootstrapped)
+        "${package}/lib${libName}${hostPlatform.extensions.sharedLibrary}"
       ];
   };
 }
