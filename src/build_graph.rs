@@ -9,7 +9,6 @@ use cargo::core::manifest::TargetSourcePath;
 use cargo::core::profiles::UnitFor;
 use cargo::core::{Edition, Package, PackageId, SourceKind, TargetKind};
 use cargo::util::OptVersionReq;
-use cargo_util_schemas::manifest::TomlPackageBuild;
 use compact_str::{CompactString, ToCompactString};
 use either::Either;
 use nix_bindings::prelude::*;
@@ -344,21 +343,18 @@ impl BinaryCrate {
 impl BuildScript {
     /// Returns the build script of the given package, if any.
     fn new(package: &Package, resolve: &WorkspaceResolve) -> Option<Self> {
-        let Some(build_script) = package
-            .manifest()
-            .original_toml()
-            .package()
-            .and_then(|pkg| pkg.build.as_ref())
-        else {
-            return None;
-        };
+        let build_script_target =
+            package.targets().iter().find(|t| t.is_custom_build())?;
 
-        let path = match build_script {
-            TomlPackageBuild::Auto(true) => "build.rs",
-            TomlPackageBuild::Auto(false) => return None,
-            TomlPackageBuild::SingleScript(path) => &**path,
-            TomlPackageBuild::MultipleScript(_) => {
-                panic!("multiple build scripts are not yet supported")
+        let path = match build_script_target.src_path() {
+            TargetSourcePath::Path(src_path) => src_path
+                .strip_prefix(package.root())
+                .expect("build script path is under package root")
+                .display()
+                .to_compact_string(),
+
+            TargetSourcePath::Metabuild => {
+                panic!("metabuild scripts are not yet supported")
             },
         };
 
@@ -369,7 +365,7 @@ impl BuildScript {
             dependency_renames: dependency_renames::<false>(
                 package_id, resolve,
             ),
-            path: path.into(),
+            path,
         })
     }
 }
